@@ -117,6 +117,13 @@ const ENGINES: Array<{
     want: "Optional. Runs on an existing Grok subscription.",
   },
   {
+    kind: "cursorCli",
+    name: "Cursor",
+    command: "curl -fsSL https://cursor.com/install | bash",
+    have: "Installed. Agents can run on Cursor too.",
+    want: "Optional. Cursor's agent CLI, on your Cursor account.",
+  },
+  {
     kind: "kimi",
     name: "Kimi",
     byKey: true,

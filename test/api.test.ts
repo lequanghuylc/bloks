@@ -244,6 +244,8 @@ describe("the engine catalog", () => {
     assert.equal(byKind.opencode.auth, "cli");
     assert.equal(byKind.pi.auth, "cli");
     assert.equal(byKind.pi.agentic, true, "Pi runs tools through pi-acp");
+    assert.equal(byKind.cursorCli.auth, "cli");
+    assert.equal(byKind.cursorCli.agentic, true);
   });
 
   test("nothing is connected in a fresh install", async () => {

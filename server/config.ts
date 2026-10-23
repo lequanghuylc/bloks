@@ -453,6 +453,7 @@ const BUILT_IN_CLI_INSTANCES: InstanceConfigMap = {
   grok_cli: { driver: "grokCli" },
   antigravity: { driver: "antigravity" },
   pi: { driver: "pi" },
+  cursor: { driver: "cursorCli" },
   computer: { driver: "boxAgent" },
 };
 

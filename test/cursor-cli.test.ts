@@ -97,3 +97,23 @@ test("Run Everything is noted only for a signed-in unrestricted CLI", () => {
   assert.equal(cursorApprovalNote(homeWith({ ...signed, approvalMode: "auto-review" })), null);
   assert.equal(cursorApprovalNote(homeWith({ approvalMode: "unrestricted" })), null);
 });
+
+import { runsAProcess } from "../server/agent-cli.ts";
+import { instanceConfigs, type AppConfig } from "../server/config.ts";
+import { ENGINE_SETUP } from "../server/engine-setup.ts";
+import { CLI_PROVIDERS } from "../server/providers.ts";
+
+test("Cursor is registered as a local CLI", () => {
+  assert.equal(runsAProcess("cursorCli"), true);
+  const row = CLI_PROVIDERS.find((p) => p.kind === "cursorCli");
+  assert.ok(row);
+  assert.equal(row.auth, "cli");
+  assert.equal(row.name, "Cursor");
+  assert.equal(row.docsUrl, "https://cursor.com/docs/cli");
+  assert.match(row.keyHint, /cursor.com\/install/);
+  assert.match(row.signInHint, /agent login/);
+  assert.equal(ENGINE_SETUP.cursorCli.signIn, "agent login");
+  assert.equal(ENGINE_SETUP.cursorCli.install, "curl -fsSL https://cursor.com/install | bash");
+  const map = instanceConfigs({ instances: { claude: { driver: "claudeAgent" } } } as AppConfig);
+  assert.equal(map.cursor.driver, "cursorCli");
+});

@@ -73,7 +73,7 @@ test("Antigravity ids the list has never seen still get a readable name", () => 
 });
 
 test("the ACP engines with a catalog of their own are asked for it", () => {
-  for (const kind of ["opencode", "grokCli", "geminiCli", "pi"]) {
+  for (const kind of ["opencode", "grokCli", "geminiCli", "pi", "cursorCli"]) {
     assert.equal(ACP_SPECS.find((s) => s.kind === kind)?.probeModels, true, kind);
   }
 });

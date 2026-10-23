@@ -194,6 +194,7 @@ const LETTERED: Record<string, { letter: string; tone: string }> = {
   groq: { letter: "G", tone: "#f55036" },
   ollama: { letter: "O", tone: "#6b7280" },
   custom: { letter: "C", tone: "#6b7280" },
+  cursorCli: { letter: "C", tone: "#000000" },
 };
 
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {

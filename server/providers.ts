@@ -355,4 +355,12 @@ export const CLI_PROVIDERS = [
     signInHint: "Run pi (or pi-acp --terminal-login) and configure providers/login",
     docsUrl: "https://pi.dev/docs/latest",
   },
+  {
+    kind: "cursorCli",
+    name: "Cursor",
+    auth: "cli" as const,
+    keyHint: "Install it with the button above, or run curl -fsSL https://cursor.com/install | bash",
+    signInHint: "Run agent login in a terminal",
+    docsUrl: "https://cursor.com/docs/cli",
+  },
 ];

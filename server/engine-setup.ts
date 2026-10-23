@@ -45,6 +45,7 @@ export const ENGINE_SETUP: Record<string, EngineSetup> = {
   pi: { install: npmUser("--ignore-scripts @earendil-works/pi-coding-agent pi-acp") },
   antigravity: { install: "curl -fsSL https://antigravity.google/cli/install.sh | bash" },
   grokCli: { install: "curl -fsSL https://x.ai/cli/install.sh | bash" },
+  cursorCli: { install: "curl -fsSL https://cursor.com/install | bash", signIn: "agent login" },
 };
 
 /** Long enough for a slow download, short enough that a hung installer
