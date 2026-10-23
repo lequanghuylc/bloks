@@ -592,6 +592,7 @@ export interface InstanceInfo {
     reason?: string;
     authenticated?: boolean;
     version?: string | null;
+    note?: string;
   };
   models: {
     default: string;

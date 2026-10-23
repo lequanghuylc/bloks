@@ -204,9 +204,13 @@ export function useEngineNotice(bot: Bot): Notice | null {
   // Signing in happens in Terminal; coming back to this window is the
   // moment to look again, so the warning goes without a click.
   const showing = missing || signedOut;
+  // A note is only for an engine that is available and signed in.
+  const runNote = !missing && !signedOut && instance?.snapshot.note ? instance.snapshot.note : "";
   // Dismissed per engine and per problem, so closing "not signed in" does
   // not also hide a later "not installed" for the same engine.
-  const dismissKey = instance ? `bloks.engineBanner.${instance.instanceId}.${missing ? "missing" : "signedOut"}` : "";
+  const dismissKey = !instance
+    ? ""
+    : `bloks.engineBanner.${instance.instanceId}.${missing ? "missing" : signedOut ? "signedOut" : "note"}`;
   const [dismissed, setDismissed] = useState(() => {
     try {
       return Boolean(dismissKey) && localStorage.getItem(dismissKey) === "1";
@@ -227,7 +231,6 @@ export function useEngineNotice(bot: Bot): Notice | null {
     return () => window.removeEventListener("focus", refresh);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showing]);
-  if (!instance || !showing || dismissed) return null;
   const dismiss = () => {
     setDismissed(true);
     try {
@@ -236,6 +239,17 @@ export function useEngineNotice(bot: Bot): Notice | null {
       /* hidden for this visit only */
     }
   };
+  if (instance && runNote && !showing && !dismissed) {
+    return {
+      id: "engine-note",
+      tone: "warn",
+      rank: RANK.engine,
+      icon: <AlertTriangle size={14} />,
+      title: runNote,
+      onDismiss: dismiss,
+    };
+  }
+  if (!instance || !showing || dismissed) return null;
   // Another engine that would answer right now, preferring one that runs
   // tools, so the quickest fix is a single click rather than a setup.
   const ready = state.instances.filter(
