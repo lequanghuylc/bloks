@@ -83,6 +83,15 @@ export const MAX_MCP_SERVERS = 16;
 /** A model id kept in the defaults for new agents. Real ids are short. */
 export const MAX_MODEL_ID_CHARS = 200;
 
+/** Characters a saved model id may contain. `=` and `,` are Cursor's
+ * bracket parameters (`composer-2.5[fast=true]`). A space, a quote, `$`,
+ * or a backtick is still rejected: an id is not a shell command. */
+export const MODEL_ID = /^[\w.:@/\[\]+,=-]+$/;
+
+export function isModelId(value: string): boolean {
+  return value.length > 0 && value.length <= MAX_MODEL_ID_CHARS && MODEL_ID.test(value);
+}
+
 /** A lane's goal (server/goals.ts): what done looks like, the one-line
  * command that has to pass for it to count, and how many turns it may
  * take. The goal is said to the agent every turn and the judge reads it,
