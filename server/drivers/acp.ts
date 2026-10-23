@@ -469,7 +469,6 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
         const turnId = newId();
 
         const argv = acpTurnArgv(spec, {
-          // a turn the owner did not vouch for asks, however the engine is set
           ...acpLaunchFlags(config, turn),
           model: turn.model,
           effort: turn.effort,
@@ -1113,6 +1112,9 @@ export const CURSOR_AUTO_MODEL = "default[]";
 export const CURSOR_RUN_EVERYTHING =
   "Cursor is set to Run Everything, so this agent will not ask before it acts. Change that in the Cursor CLI if you want Bloks to ask.";
 
+// Two rules. An untrusted turn (one the owner did not vouch for) does not
+// inherit the engine's full-auto setting, so it asks. A shared room does not
+// get full access, even when the agent is set to it.
 export function acpLaunchFlags(
   config: { fullAuto: boolean },
   // `shared` is SendTurnInput's room object; only its presence matters here

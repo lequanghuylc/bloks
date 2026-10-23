@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 
+import { runsAProcess } from "../server/agent-cli.ts";
+import { instanceConfigs, type AppConfig } from "../server/config.ts";
+import { ENGINE_SETUP } from "../server/engine-setup.ts";
+import { CLI_PROVIDERS } from "../server/providers.ts";
 import {
   ACP_SPECS,
   CURSOR_AUTO_MODEL,
@@ -71,37 +75,38 @@ test("Auto stays the picker default when the session is on another model", () =>
   assert.deepEqual(pinned.options.map((o) => o.id), ["default[]", "composer-2.5[fast=true]"]);
 });
 
-function homeWith(config: unknown): string {
+function tempHome(t: TestContext): string {
   const home = mkdtempSync(join(tmpdir(), "cursor-cli-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  return home;
+}
+
+function homeWith(t: TestContext, config: unknown): string {
+  const home = tempHome(t);
   mkdirSync(join(home, ".cursor"));
   writeFileSync(join(home, ".cursor", "cli-config.json"), JSON.stringify(config));
   return home;
 }
 
-test("signed in only when authInfo.authId is a non-empty string", () => {
-  assert.equal(cursorSignedIn(homeWith({ authInfo: { authId: "user_1" } })), true);
-  assert.equal(cursorSignedIn(homeWith({ authInfo: { authId: "" } })), false);
-  assert.equal(cursorSignedIn(homeWith({})), false);
-  assert.equal(cursorSignedIn(homeWith([])), false);
-  const broken = mkdtempSync(join(tmpdir(), "cursor-cli-"));
+test("signed in only when authInfo.authId is a non-empty string", (t) => {
+  assert.equal(cursorSignedIn(homeWith(t, { authInfo: { authId: "user_1" } })), true);
+  assert.equal(cursorSignedIn(homeWith(t, { authInfo: { authId: "" } })), false);
+  assert.equal(cursorSignedIn(homeWith(t, {})), false);
+  assert.equal(cursorSignedIn(homeWith(t, [])), false);
+  const broken = tempHome(t);
   mkdirSync(join(broken, ".cursor"));
   writeFileSync(join(broken, ".cursor", "cli-config.json"), "{");
   assert.equal(cursorSignedIn(broken), false);
-  assert.equal(cursorSignedIn(mkdtempSync(join(tmpdir(), "cursor-cli-"))), false);
+  assert.equal(cursorSignedIn(tempHome(t)), false);
 });
 
-test("Run Everything is noted only for a signed-in unrestricted CLI", () => {
+test("Run Everything is noted only for a signed-in unrestricted CLI", (t) => {
   const signed = { authInfo: { authId: "user_1" } };
-  assert.equal(cursorApprovalNote(homeWith({ ...signed, approvalMode: "unrestricted" })), CURSOR_RUN_EVERYTHING);
-  assert.equal(cursorApprovalNote(homeWith({ ...signed, approvalMode: "allowlist" })), null);
-  assert.equal(cursorApprovalNote(homeWith({ ...signed, approvalMode: "auto-review" })), null);
-  assert.equal(cursorApprovalNote(homeWith({ approvalMode: "unrestricted" })), null);
+  assert.equal(cursorApprovalNote(homeWith(t, { ...signed, approvalMode: "unrestricted" })), CURSOR_RUN_EVERYTHING);
+  assert.equal(cursorApprovalNote(homeWith(t, { ...signed, approvalMode: "allowlist" })), null);
+  assert.equal(cursorApprovalNote(homeWith(t, { ...signed, approvalMode: "auto-review" })), null);
+  assert.equal(cursorApprovalNote(homeWith(t, { approvalMode: "unrestricted" })), null);
 });
-
-import { runsAProcess } from "../server/agent-cli.ts";
-import { instanceConfigs, type AppConfig } from "../server/config.ts";
-import { ENGINE_SETUP } from "../server/engine-setup.ts";
-import { CLI_PROVIDERS } from "../server/providers.ts";
 
 test("Cursor is registered as a local CLI", () => {
   assert.equal(runsAProcess("cursorCli"), true);
