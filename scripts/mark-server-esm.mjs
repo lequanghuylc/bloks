@@ -9,9 +9,12 @@
 // common; on Windows the app is installed under the home folder) the
 // server and every helper it spawns failed to load with "Failed to load
 // the ES module". This file makes the answer the same on every machine.
-import { writeFileSync } from "node:fs";
+import { cpSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 writeFileSync(join(root, "dist-server", "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+// The phone page is static files, not compiled. The packaged server looks
+// for them beside the compiled module (server/remote-client.ts).
+cpSync(join(root, "remote"), join(root, "dist-server", "remote"), { recursive: true });

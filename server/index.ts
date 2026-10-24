@@ -129,6 +129,7 @@ import { houseStyle, HOUSE_STYLE } from "./house-style.ts";
 import { captureFrame, clickAt, PAGE_KEYS, pressKey, scrollAt, typeText } from "./browser-view.ts";
 import { boxClick, boxKey, boxScroll, boxType } from "./box-hands.ts";
 import { bearerToken, isLocalRequest, isLoopbackPeer, isSameOrigin } from "./http-guard.ts";
+import { serveRemoteClient } from "./remote-client.ts";
 import {
   DesktopTickets,
   HOP_HEADERS,
@@ -17217,10 +17218,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       (method === "GET" && path === "/api/health") ||
       (method === "POST" && path === "/api/pair/claim") ||
       (method === "POST" && path === "/api/pair/prove");
+    // The phone page itself, before a bearer exists. The API stays closed.
+    if (method === "GET" && serveRemoteClient(res, path, SECURITY_HEADERS)) return;
     if (!open && !deviceForToken(bearerToken(req))) {
       return json(res, 401, { error: "pair this device first" });
     }
   }
+  if (local && method === "GET" && serveRemoteClient(res, path, SECURITY_HEADERS)) return;
 
   // A member of a shared room: their own small surface and nothing of the
   // owner's. Decided here, before any owner route can match.
