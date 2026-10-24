@@ -211,12 +211,17 @@ export interface SendTurnInput {
   codexSpeed?: import("./codex-speed.ts").CodexSpeedChoice;
   threadId: ThreadId;
   text: string;
+  /** The pictures `text` attaches, read back as bytes, for an engine that
+   * takes pictures rather than paths (capabilities.images). The words
+   * still name each one. Set only for such an engine. */
+  images?: import("./attachments.ts").TurnImage[];
   model?: string;
   /** Run without the engine's hooks (Claude Code: plugins and settings
    * hooks). Engines without hooks ignore it. */
   noHooks?: boolean;
-  /** Reasoning effort, for engines with the dial. Others ignore it. */
-  effort?: "low" | "medium" | "high";
+  /** Reasoning effort, already one this engine and model take (dispatch
+   * sends the nearest, server/effort.ts). Engines with no dial ignore it. */
+  effort?: import("./effort.ts").Effort;
   /** The provider's own idea of where this conversation was, from the last
    * turn. A session id for the CLIs; unused by drivers that replay. */
   resumeCursor?: unknown;
@@ -295,6 +300,8 @@ export interface SendTurnInput {
   /** A let-in Telegram person. Fresh native session, owner-only approvals
    * and a turn-bound reply tool, even on a full-access agent. */
   person?: import("./person-turn.ts").PersonTurn;
+  /** A bound reply does not make an owner group turn untrusted. */
+  reply?: { reply(input: unknown): Promise<string> };
   cwd?: string;
   /** Folders the agent may edit without asking, beyond its cwd. The
    * harness grants its own workspace (memory lives there) so an agent
@@ -307,15 +314,10 @@ export interface SendTurnInput {
    * ignores it, which is the honest outcome rather than a missing
    * feature. */
   env?: Record<string, string>;
-  /** Run on the person's Bloks credits instead of the engine's own
-   * sign-in: the service's base URL and a credits token. Only Claude Code
-   * takes it (server/drivers/claude.ts); the harness never sets it for
-   * anything else. Never logged. */
-  credits?: { baseUrl: string; token: string };
   /** What this turn is, and on a shared room member's turn whose it is,
    * for a service that picks the model by it (server/bloks-ai.ts). Only
-   * sent on Bloks AI: the Bloks engine sends it as headers on each call,
-   * Claude Code on credits through its custom headers. Others ignore it. */
+   * sent on Bloks AI, whose engine sends it as headers on each call.
+   * Others ignore it. */
   tags?: import("./bloks-ai.ts").CallTags;
   /**
    * The whole message to send instead of `text` when the session behind
@@ -367,8 +369,23 @@ export interface ProviderAdapter {
      * turn (API engines); false for session-cursor engines, which need
      * the harness to replay history after an engine switch. */
     replaysNatively?: boolean;
+    /** An API engine can call the harness's bound sender-reply function. */
+    replyToSender?: boolean;
+    /** An API engine runs the harness's tool loop on its turns, so its
+     * prompt can name the tools that live there (ask_user, the memory
+     * tools, request_secret). Per instance, not per driver: a custom host
+     * has it only once its owner switched tools on. */
+    toolLoop?: boolean;
     /** Takes `compactFirst` on a turn (see SendTurnInput). */
     compactsFirst?: boolean;
+    /** Takes a turn's attached pictures as pictures (SendTurnInput.images).
+     * Absent on an engine that is sent only their paths, which one with a
+     * shell opens itself and an API model cannot see at all. */
+    images?: boolean;
+    /** The reasoning effort levels this driver passes on to its engine,
+     * least first. Absent is an engine with no dial, whose turns are sent
+     * no effort (server/effort.ts). */
+    efforts?: readonly import("./effort.ts").Effort[];
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   /**
@@ -462,8 +479,10 @@ export interface UsageNotice {
 
 export interface ModelCatalog {
   default: string;
-  /** codexFast: whether Codex offers Fast for the model, where it said. */
-  options: Array<{ id: string; label: string; codexFast?: boolean }>;
+  /** codexFast: whether Codex offers Fast for the model, where it said.
+   * efforts: the effort levels the engine listed for the model, where it
+   * said; a model without them has the engine's own (server/effort.ts). */
+  options: Array<{ id: string; label: string; codexFast?: boolean; efforts?: import("./effort.ts").Effort[] }>;
   /** When the engine last reported the list, so an old answer about Fast
    * is not taken as current. */
   checkedAt?: number;

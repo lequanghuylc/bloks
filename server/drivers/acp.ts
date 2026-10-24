@@ -37,6 +37,7 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import type { Effort } from "../effort.ts";
 import { outReason } from "../failover.ts";
 import { attachRpc } from "../harness/jsonrpc-stdio.ts";
 import { killTree, launchSpec, onPath, widenPath } from "../path.ts";
@@ -55,7 +56,10 @@ export interface AcpSpec {
   args: string[];
   /** Extra argv built per turn, for CLIs that take model or permission
    * flags on the command line rather than through the protocol. */
-  turnArgs?: (opts: { fullAuto: boolean; model?: string; effort?: string }) => string[];
+  turnArgs?: (opts: { fullAuto: boolean; model?: string; effort?: Effort }) => string[];
+  /** The effort levels turnArgs passes on. Absent for an agent that is
+   * given none, whose turns then carry none (server/effort.ts). */
+  efforts?: readonly Effort[];
   /** Inherited env vars to strip before spawning. A CLI that owns its own
    * subscription login can silently flip to pay-as-you-go billing if a
    * same-vendor API key leaks through. */
@@ -131,6 +135,30 @@ export function acpReading(update: any): { used: number | null; window: number |
 /** How long a probe session may take to report its catalog. A hung CLI
  * (pi-acp --version starts a session) will sit forever without this. */
 const PROBE_TIMEOUT_MS = 15_000;
+
+/** A turn's pictures as ACP prompt blocks, the bytes inline: an image
+ * block by its data needs no path, so nothing about where the file sits
+ * (a Windows drive, a file URL) has to survive the trip. */
+export function pictureBlocks(images: SendTurnInput["images"]): Array<{ type: "image"; mimeType: string; data: string }> {
+  return (images ?? []).map((image) => ({ type: "image", mimeType: image.mime, data: image.data }));
+}
+
+/** An outgoing frame for the native copy, each picture in a prompt
+ * written as its size. Its bytes say nothing about the wire format, and
+ * pictures written whole would fill the file in an afternoon. */
+function withoutPictures(msg: any): unknown {
+  const prompt = msg?.method === "session/prompt" ? msg.params?.prompt : null;
+  if (!Array.isArray(prompt) || !prompt.some((block: any) => block?.type === "image")) return msg;
+  return {
+    ...msg,
+    params: {
+      ...msg.params,
+      prompt: prompt.map((block: any) =>
+        block?.type === "image" && typeof block.data === "string" ? { ...block, data: `(${block.data.length} characters)` } : block,
+      ),
+    },
+  };
+}
 
 /** We do not lend the agent our filesystem or terminal; it has its own,
  * and every borrowed capability is another way in. */
@@ -530,7 +558,7 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
         const rpc = attachRpc({
           stdin: child.stdin,
           stdout: child.stdout,
-          onFrame: (msg, dir) => appendNative(threadId, { dir, source: `${spec.kind}.acp`, msg }),
+          onFrame: (msg, dir) => appendNative(threadId, { dir, source: `${spec.kind}.acp`, msg: dir === "out" ? withoutPictures(msg) : msg }),
           onRequest: (msg) => {
             if (msg.method === "session/request_permission") handlePermission(msg);
             else rpc.replyError(msg.id, -32601, "not supported by this client");
@@ -845,7 +873,11 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
 
         (async () => {
           try {
-            await within(rpc.request("initialize", CLIENT_HELLO), "starting up", spec.name);
+            const hello: any = await within(rpc.request("initialize", CLIENT_HELLO), "starting up", spec.name);
+            // An agent that says it takes pictures in a prompt is sent the
+            // turn's own (GitHub 365). One that does not still has their
+            // paths in the words, to open with its own tools.
+            const pictures = hello?.agentCapabilities?.promptCapabilities?.image === true ? pictureBlocks(turn.images) : [];
 
             const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
             const cwd = turn.cwd ?? homedir();
@@ -964,7 +996,7 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
             state.live = true;
             const result = await rpc.request("session/prompt", {
               sessionId,
-              prompt: [{ type: "text", text: turn.system ? `${turn.system}\n\n${words}` : words }],
+              prompt: [{ type: "text", text: turn.system ? `${turn.system}\n\n${words}` : words }, ...pictures],
             });
             const usage = result?.usage;
             if (usage) {
@@ -1066,7 +1098,9 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
         catalogReady,
         adapter: {
           provider: spec.kind,
-          capabilities: { sessionModelSwitch: "in-session", compactsFirst: true },
+          // images: handed the turn's pictures, which go on only to an
+          // agent whose initialize says it takes them (pictureBlocks)
+          capabilities: { sessionModelSwitch: "in-session", compactsFirst: true, images: true, ...(spec.efforts ? { efforts: spec.efforts } : {}) },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {
@@ -1131,6 +1165,9 @@ export const ACP_SPECS: readonly AcpSpec[] = [
       "agent",
       "stdio",
     ],
+    // What it has always been given. Its own models differ (some have
+    // xhigh, some stop at high) and the ACP catalog does not say which.
+    efforts: ["low", "medium", "high"],
     install: "curl -fsSL https://x.ai/cli/install.sh | bash",
     signIn: "run `grok login` in a terminal",
     // it binds the grok.com subscription; an inherited API key would move

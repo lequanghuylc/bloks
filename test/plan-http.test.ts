@@ -1,6 +1,6 @@
-// The Plan page's local routes, through the real server, against a
-// stand-in for bloks.dev (test/helpers/fake-site.ts): the owner's own
-// window reads the plan and an agent never does, the key never comes
+// The Plan page's routes, through the real server, against a stand-in
+// for bloks.dev (test/helpers/fake-site.ts): the owner's own window
+// reads the plan and an agent never does, the key never comes
 // back to the page, the last good answer is kept for when the site
 // cannot be reached, and a fresh look moves the gates with the plan.
 import { test } from "node:test";
@@ -65,6 +65,7 @@ test("the account is read with the key, and the key never comes back to the page
   assert.equal(plan.account.interval, "year");
   assert.equal(plan.account.renewsAt, Date.parse("2026-11-21T00:00:00Z"));
   assert.equal(plan.account.email, "h••••@example.com", "an address the site forgot to mask is masked here");
+  assert.equal(plan.account.price, null, "an answer that names no price shows none");
   assert.equal(plan.accountState, "live");
   assert.deepEqual(s.bearers, [SITE_LICENCE]);
   assert.deepEqual(s.offersAsked, ["cloud"], "offers are asked for the account's own plan");
@@ -78,6 +79,17 @@ test("the account is read with the key, and the key never comes back to the page
   assert.ok(!log.includes(SITE_LICENCE), "nor in anything the server printed");
 });
 
+test("the plan's own price is drawn as the site words it, and anything less is no price", async (t) => {
+  const s = await site(t);
+  s.setAccount(SITE_LICENCE, { plan: "team", price: { amount: "P2\u202e", per: "month", extra: "ignored" } });
+  const h = await withKey(t, s);
+  assert.deepEqual((await h.json("/api/plan")).account.price, { amount: "P2", per: "month" }, "direction marks go, unknown fields go");
+  s.setAccount(SITE_LICENCE, { plan: "team", price: { per: "month" } });
+  assert.equal((await h.json("/api/plan?fresh=1")).account.price, null, "no amount is no price");
+  s.setAccount(SITE_LICENCE, { plan: "team", price: "P2 a month" });
+  assert.equal((await h.json("/api/plan?fresh=1")).account.price, null, "only the shape the site agreed");
+});
+
 test("a bundle files the offers under its own name", async (t) => {
   const s = await site(t);
   s.setAccount(SITE_LICENCE, { plan: "team", bundle: "team-hosted", hosting: { tier: "standard", state: "running" } });
@@ -88,7 +100,8 @@ test("a bundle files the offers under its own name", async (t) => {
   assert.deepEqual(s.offersAsked, ["team-hosted"]);
 });
 
-test("only this computer's own window reads the plan: a website and the network are refused", async (t) => {
+// the owner's own paired devices read it too (test/plan-remote.test.ts)
+test("a website and a device nobody paired never read the plan", async (t) => {
   const s = await site(t);
   s.setAccount(SITE_LICENCE, { plan: "cloud" });
   const h = await withKey(t, s);

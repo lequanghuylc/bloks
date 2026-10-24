@@ -30,10 +30,48 @@ import { tagHeaders, type CallTags } from "../bloks-ai.ts";
 import { appendNative } from "./native.ts";
 import { BOAT_API } from "../boat.ts";
 import { callSignature } from "../repeats.ts";
+import { PERSON_REPLY_TOOL } from "../person-turn.ts";
+import type { TurnImage } from "../attachments.ts";
 
 export interface CompatConfig {
   url: string;
   apiKeyEnv: string;
+  /** The owner switched tools on for this instance. Read only for a spec
+   * that leaves them to the owner (ProviderSpec.toolsOptIn). */
+  tools?: boolean;
+  /** The person says the model behind this URL sees pictures (a custom
+   * endpoint's switch), so a turn's attached images go to it as pictures. */
+  vision?: boolean;
+}
+
+/** A turn's words with its pictures beside them, in the shape the chat
+ * API takes: a text part, then one image part each, sent inline as data
+ * URLs since the server at the other end cannot read our disk. llama.cpp
+ * takes exactly this when its model was started with a vision projector. */
+export function withImages(text: string, images: readonly TurnImage[] | undefined) {
+  if (!images?.length) return text;
+  return [
+    { type: "text", text },
+    ...images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data}` } })),
+  ];
+}
+
+/** The same messages for the native copy, each picture written as its
+ * size. Its bytes say nothing about the wire format, and pictures written
+ * whole would fill the file in an afternoon. */
+function described(messages: Array<{ role: string; content: unknown }>) {
+  return messages.map((m) =>
+    Array.isArray(m.content)
+      ? {
+          ...m,
+          content: m.content.map((part: any) =>
+            part?.type === "image_url" && typeof part.image_url?.url === "string"
+              ? { ...part, image_url: { url: `${part.image_url.url.slice(0, part.image_url.url.indexOf(",") + 1)}(${part.image_url.url.length} characters)` } }
+              : part,
+          ),
+        }
+      : m,
+  );
 }
 
 /** How long a streamed reply may go without a byte before it is treated
@@ -229,6 +267,19 @@ const MAX_TOOL_ROUNDS = 10;
 const ASK_TIMEOUT_MS = 15 * 60_000;
 const UNANSWERED =
   "Nobody answered in time. Use your best judgment and continue.";
+
+/**
+ * Whether a refused round was refused for its tools. A host whose model
+ * cannot call them says so with a 4xx that names them: Ollama's "does
+ * not support tools", vLLM's "auto" tool choice that needs a flag, a
+ * gateway that will not take a `tool` message. A bad key, an empty
+ * balance or a rate limit is another problem and keeps its own words.
+ */
+export function refusedTools(status: number, body: string): boolean {
+  if (status < 400 || status >= 500) return false;
+  if (status === 401 || status === 402 || status === 403 || status === 408 || status === 429) return false;
+  return /tool|function/i.test(body);
+}
 
 
 function toolSchemas(hasComputer: boolean, hasSandbox: boolean) {
@@ -488,6 +539,11 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
     return {
       url: typeof o.url === "string" && o.url ? o.url.replace(/\/+$/, "") : spec.url,
       apiKeyEnv: typeof o.apiKeyEnv === "string" ? o.apiKeyEnv : keyEnv,
+      // only a literal true: a flag that arrived as "yes" or 1 is a
+      // config nobody meant, and the safe reading of it is chat only
+      ...(spec.toolsOptIn && o.tools === true ? { tools: true } : {}),
+      // the same reading for pictures: only a literal true sends them
+      ...(o.vision === true ? { vision: true } : {}),
     };
   };
 
@@ -507,6 +563,29 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         (spec.kind === "grok" ? (input.environment.XAI_API_KEY ?? process.env.XAI_API_KEY) : "") ??
         "";
       const needsKey = spec.auth !== "none";
+      // A provider that reliably calls tools always runs the loop; a host
+      // whose model is somebody's choice runs it once they said it can.
+      const toolLoop = spec.tools === true || config.tools === true;
+      // Said with the name the person gave it: "Custom refused the tools"
+      // is no help to someone with three hosts added.
+      const shownName = input.displayName ?? spec.name;
+      // whether a turn's pictures are sent as pictures: the provider's
+      // own word for every model it serves, or the person's for this URL
+      const sees = spec.vision === true || config.vision === true;
+      /** What a refused call says. One that carried pictures and was
+       * refused over them says so in plain words: a model that does not
+       * see reads otherwise as a server fault, and llama.cpp started
+       * without its vision projector answers exactly that way. */
+      const refused = (status: number, body: string, messages: Array<{ content: unknown }>) => {
+        const pictured = messages.some((m) => Array.isArray(m.content) && m.content.some((part: any) => part?.type === "image_url"));
+        if (pictured && /image|vision|mmproj|multimodal/i.test(body)) {
+          return new Error(
+            `${shownName} could not take the image, because its model does not see images. ` +
+              (config.vision ? "Load one that does (llama.cpp needs its --mmproj file), or turn off Sees images for it in Settings." : "Send it again without the image."),
+          );
+        }
+        return new Error(`${spec.name} HTTP ${status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+      };
       const listeners = new Set<RuntimeEventListener>();
       const active = new Map<
         string,
@@ -629,7 +708,7 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
       };
 
       const complete = async (
-        messages: Array<{ role: string; content: string }>,
+        messages: Array<{ role: string; content: string | ReturnType<typeof withImages> }>,
         model: string,
         opts: { stream: boolean; signal?: AbortSignal; onDelta?: (d: string) => void; tags?: CallTags },
       ): Promise<{ text: string; usage: Usage | null }> => {
@@ -640,7 +719,7 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         }, opts.tags);
         if (!res.ok) {
           const body = await res.text().catch(() => "");
-          throw new Error(`${spec.name} HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+          throw refused(res.status, body, messages);
         }
         if (!opts.stream) {
           const json: any = await res.json();
@@ -707,6 +786,18 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         return { text, usage };
       };
 
+      /** The end of a turn whose host would not take the tools it was
+       * sent. Said plainly and with the way back to a working chat: the
+       * switch that turned them on is the person's, and so is turning it
+       * off. Never a quiet retry without them while it still says on. */
+      const toolsRefused = (status: string | null, said: string) => {
+        const detail = [status, said.trim().slice(0, 200)].filter(Boolean).join(": ");
+        return new Error(
+          `${shownName} refused the tools Bloks sent${detail ? ` (${detail})` : ""}. ` +
+            `The model behind this endpoint may not support tool calls. To chat with it without tools, turn off "This model can use tools" for it in Settings, Engines and keys.`,
+        );
+      };
+
       /** One non-streaming completion, returning the whole assistant
        * message so the caller can see tool_calls. */
       const completeRaw = async (
@@ -734,9 +825,20 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         }
         if (!res.ok) {
           const body = await res.text().catch(() => "");
-          throw new Error(`${spec.name} HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+          // Only an owner's opt-in is read this way. A catalog engine's
+          // tools are this build's promise, and its refusal is a fault.
+          if (config.tools && refusedTools(res.status, body)) throw toolsRefused(`HTTP ${res.status}`, body);
+          throw refused(res.status, body, messages);
         }
         const json: any = await res.json();
+        // Some gateways refuse with a 200 and an error where the choices
+        // go. Read as an answer, that was an empty reply and a turn that
+        // ended saying nothing at all.
+        if (!Array.isArray(json?.choices) && json?.error) {
+          const said = typeof json.error === "string" ? json.error : String(json.error.message ?? JSON.stringify(json.error));
+          if (config.tools && /tool|function/i.test(said)) throw toolsRefused(null, said);
+          throw new Error(`${spec.name}: ${said.slice(0, 200)}`);
+        }
         return { message: json.choices?.[0]?.message ?? {}, usage: readUsage(json.usage, priced) };
       };
 
@@ -761,6 +863,7 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         const computer = turn.integrations?.computer;
         const sandbox = turn.integrations?.sandbox;
         const tools = toolSchemas(Boolean(computer), Boolean(sandbox));
+        if (turn.reply) tools.push({ type: "function", function: { name: PERSON_REPLY_TOOL.name, description: PERSON_REPLY_TOOL.description, parameters: PERSON_REPLY_TOOL.inputSchema } });
         // The connectors, as callable tools rather than a rumor. The CLI
         // engines mount Composio's MCP server themselves; API models have
         // no MCP client, so the harness is theirs: list the meta-tools
@@ -841,7 +944,10 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
 
             let result: string;
             let ok = true;
-            if (name === "ask_user") {
+            if (name === "reply_to_sender" && turn.reply) {
+              try { result = await turn.reply.reply(args); }
+              catch (error) { result = error instanceof Error ? error.message : "Reply failed"; ok = false; }
+            } else if (name === "ask_user") {
               result = await askUser(threadId, turnId, args);
             } else if (name === "request_connection") {
               result = await requestConnection(threadId, turnId, args);
@@ -1036,12 +1142,14 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.text,
           })),
-          { role: "user", content: turn.text },
+          // only the turn's own pictures: earlier ones are not sent again
+          // each turn, which a small local window could not hold
+          { role: "user", content: sees ? withImages(turn.text, turn.images) : turn.text },
         ];
         appendNative(threadId, {
           dir: "out",
           source: `${spec.kind}.chat.completions`,
-          msg: { model, messages },
+          msg: { model, messages: described(messages) },
         });
 
         emit({ ...base(threadId, turnId), type: "turn.started" });
@@ -1064,7 +1172,7 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
             : {};
         (async () => {
           try {
-            if (spec.tools) {
+            if (toolLoop) {
               await runWithTools(threadId, turnId, messages, model, turn, abort.signal, spent);
               active.delete(threadId);
               emit({ ...base(threadId, turnId), type: "turn.completed", ok: true, stopReason: null, cost: priceOf(spent), ...unpriced() });
@@ -1152,7 +1260,7 @@ export function openAiCompatDriver(spec: ProviderSpec, access?: CompatAccess): P
         snapshot,
         adapter: {
           provider: spec.kind,
-          capabilities: { sessionModelSwitch: "in-session", replaysNatively: true },
+          capabilities: { sessionModelSwitch: "in-session", replaysNatively: true, replyToSender: toolLoop, toolLoop, ...(sees ? { images: true } : {}) },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.abort.abort(),
           respondToRequest: async (threadId, requestId, decision) => {

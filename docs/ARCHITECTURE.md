@@ -23,8 +23,10 @@ Everything below follows from that.
    `/api/bots/:id/messages`.
 3. `startTurn` in `server/index.ts` builds the persona (role, skills,
    your profile, house style, and in a room the roster plus recent
-   transcript), photographs the agent's folder (`server/checkpoints.ts`),
-   then calls the driver's `sendTurn`.
+   transcript), ends the briefing with the reply rules (`replyRules` in
+   `server/house-style.ts`, last on purpose, since agents read past the
+   same asks higher up), photographs the agent's folder
+   (`server/checkpoints.ts`), then calls the driver's `sendTurn`.
 4. The driver translates its provider's native output into the canonical
    events in `server/contracts.ts`.
 5. The bus subscriber folds those events into the transcript, persists
@@ -142,7 +144,13 @@ Workspaces), written synchronously. No database.
 Backups of all of it go beside it, never in it: `~/.bloks-backups`, one
 file each (see Backups and restore).
 
-A store writes its whole file on every change. Where losing that file
+A store writes its whole file on every change, with one exception: a
+turn's tool call rows and their results wait up to a quarter second
+(`ROW_WAIT_MS` in `server/store.ts`) and go out with whatever else
+changed, one write per transcript, because rewriting a long conversation
+twice for every call took most of the server's time. Any other write of
+that transcript takes them along at once, and the turn's end and a
+process on its way out write what is waiting. Where losing that file
 would hurt (agents, transcripts, rooms, config and the like) the write
 goes through `server/atomic-write.ts`: to a file beside it, flushed, then
 renamed over the old one, so a crash leaves the old file or the new one,
@@ -183,11 +191,15 @@ credential and the agent guard does not list it.
 
 Memory is a place on the main rail (`src/components/MemoryPlace.tsx`):
 a sidebar of its own lists Shared, About you and every agent, and the
-page beside it is the one picked. Links open it with `openMemory` and a
-target (an agent's id, `you` or `shared`), which Back and forward
-remember. About you edits the same `profile.about` Settings does. The
-place reads `GET /api/bots/:id/memory/stats` for its meter
-(lines and bytes against the budget, topics with sizes and times),
+page beside it is the one picked. The sidebar is a page column
+(`src/components/SideColumn.tsx`), as Settings', Plugins', an agent's
+settings' and Automations' lists are: sized by its edge and folded with
+Cmd+B. Folded, Settings' pages are tabs along the top, and Memory's and
+Plugins' are a small switch at the top left of the page. Links open it
+with `openMemory` and a target (an agent's id, `you` or `shared`), which
+Back and forward remember. About you edits the same `profile.about`
+Settings does. The place reads `GET /api/bots/:id/memory/stats` for its
+meter (lines and bytes against the budget, topics with sizes and times),
 searches with `GET /api/memory/search` (every listed agent's memory and
 the shared memory, from recall's own indexes), and copies with
 `POST /api/bots/:id/memory/copy` (picked topics, appended to one the
@@ -218,17 +230,30 @@ the safety floor all read it from that one place, and
 The desktop app keeps the list (`electron/workspaces.mjs`, pure and
 tested in `test/workspaces.test.ts`) in `workspaces.json` in its own user
 data folder: each workspace's id, kind (`personal`, `business`, `custom`
-or `joined`), name, whether it is a team's, mark or logo, data folder,
-mute, notification level, order, last port and accent, and the person's
-own preferences (theme, the accent shared by every workspace when that
-is on, and the name they go by). The first launch with workspaces finds
-no list and writes one with the folder Bloks always had as Personal,
-exactly where it is: nothing is moved or rewritten to get there. Other
-workspaces get `<user data>/workspaces/<id>`, so a rename never moves a
-folder. Personal cannot be deleted. Marks are a 3x3 pattern and a colour
-(`electron/workspace-marks.mjs`): Personal's and Business's are fixed,
-and a named workspace draws one that is neither of those and that no
-other workspace on the computer wears.
+or `joined`, and `hosted` for the managed hosting that is coming), name,
+whether it is a team's, mark or logo, data folder, mute, notification
+level, order, last port and accent, and the person's own preferences
+(theme, the accent shared by every workspace when that is on, and the
+name they go by). The order is the person's: holding a workspace in the
+switcher and dragging it, or Option and the arrow keys, rewrites it
+(`reorder`), and every list of workspaces follows it. The first launch
+with workspaces finds no list and writes one with the folder Bloks always
+had as Personal, exactly where it is: nothing is moved or rewritten to
+get there. Other workspaces get `<user data>/workspaces/<id>`, so a
+rename never moves a folder. Personal cannot be deleted. Marks are a 3x3
+pattern and a colour (`electron/workspace-marks.mjs`): Personal and
+Business start on their own, and a named workspace draws one that is
+neither of those and that no other workspace on the computer wears. Any
+of them can wear one the person picks from the picker's colours and
+shapes, at the Mac or from the owner's phone (`server/workspace-mark.ts`,
+which puts the phone's choice to the app), and the app keeps it only when
+no other workspace here wears it. On a joined workspace, the mark picked
+is the member's alone (`ownMark`), kept in their list and never sent to
+the owner, whose own mark stays beside it. A new workspace opens on a
+short welcome shaped by what was chosen for it
+(`src/lib/workspaceWelcome.ts`): a name and logo for a business, the
+agents for its work, inviting people for a team, and nothing about
+members for one person.
 
 `electron/main.mjs` starts one server per local workspace, a few at a
 time behind the window, each a `utilityProcess` with `BLOKS_DATA_DIR`,
@@ -268,10 +293,16 @@ children (`process.parentPort`), never the network:
   relay's words, and `DELETE /api/relay/space` frees this workspace's
   place while keeping the licence, so `POST /api/relay/activate` with
   `again: true` needs nothing typed. A workspace's own licence still wins.
-- **The plan and the name.** A server says the plan it knows
-  (`desktop.plan`), so a new workspace's Team choice can say what it
-  needs, and the owner's name (`desktop.name`), which the app keeps once
-  and hands to every workspace (`{ kind: "name" }`).
+- **The plan and the name.** One plan holds for every workspace. A
+  server says the plan it knows (`desktop.plan`), and the app takes that
+  word only when it is about the app's own licence, keeps it under the
+  licence's fingerprint (`electron/account-plan.mjs`, `account-plan.json`
+  in its user data folder) and hands it to every server with the licence
+  (`{ kind: "licence", key, plan }`, then `{ kind: "plan" }`), so a
+  workspace made today is on the plan from its first frame and a new
+  workspace's Team choice can say what it needs. The owner's name
+  (`desktop.name`) the app keeps once and hands to every workspace
+  (`{ kind: "name" }`).
 - **Stopping.** `{ kind: "stop" }` ends a server cleanly on every
   platform, engines and folder lock included.
 
@@ -292,11 +323,65 @@ key per direction from it (`server/relay-crypto.ts`), every request and
 every event frame is sealed for one device, and the relay in between
 carries ciphertext it cannot open. A browser keeps the two keys as
 non-extractable WebCrypto keys and never the token. Routes that mint new
-pairings answer only on this machine. A member's device, or a desktop
-app that joined the workspace, reaches it the same way with a member
-credential and is held to its own surface (see People in a workspace);
-one that joined on the owner's network alone calls it over plain HTTP on
-that network with its device token as the bearer.
+pairings answer only on this machine, but for the one that lets the
+owner's paired phone pair another workspace of theirs (below). A member's
+device, or a desktop app that joined the workspace, reaches it the same
+way with a member credential and is held to its own surface (see People
+in a workspace); one that joined on the owner's network alone calls it
+over plain HTTP on that network with its device token as the bearer.
+
+Pairing on the same network (`server/pairing.ts`) is off until phone
+access is switched on (`PUT /api/pair`), and the bind follows the switch
+only at the next start. Settings, Phone and devices is a short onboarding
+until a phone is paired, then the list (`src/components/DevicesSection.tsx`).
+No code exists until somebody asks: `POST /api/pair/start` mints a six
+digit code and a QR token, in memory only, one at a time, for five
+minutes; the window asks for the next just before one runs out while the
+panel is open and visible, and `POST /api/pair/cancel` closes it the
+moment the panel closes. `POST /api/pair/claim` takes either credential
+and counts every try, and five checked tries close the code.
+
+A phone whose saved address went stale finds the Mac again on its own.
+While phone access is on and the server listens on the network, a server
+the desktop app started on a Mac announces itself as `_bloks._tcp`
+through `dns-sd` (`server/announce.ts`), named for the computer alone (a
+workspace's name can be a client's, and the whole network hears it), with
+`ws=` in its TXT record: `workspaceTag()`, a
+hash of a random `announce-key` in the workspace's folder, which
+`/api/health` also says as `tag`. A small shell watches the server and
+ends the announcement with it, however it went. The phone trusts nothing
+it hears: before its token goes to a new address it sends a hint (the
+first 16 hex of a sha256 of its token's digest) and a nonce to
+`POST /api/pair/prove`, and only a Bloks holding its pairing can answer
+with the HMAC of that nonce keyed by the digest.
+
+A phone the owner paired with one workspace can learn the others on the
+computer and pair one in a tap (`server/other-workspaces.ts`):
+`GET /api/workspaces/others` and `POST /api/workspaces/others/:id/pair`,
+for the owner's own paired devices only. The question goes to the app
+over the parent port, since only the list knows the workspaces; it names
+only the person's own (`OWN_LOCAL_KINDS` in `electron/server-line.mjs`),
+starts the one asked for if it has to, and asks its server for a single
+use pairing of three minutes, through Bloks Cloud when it is online, else
+on the network when phone access listens there (`mintPairing`). A device
+gets five in ten minutes (`MintLimiter`), and the app shows a notification
+for every one made, whatever the workspace's notification settings.
+
+A person can watch an agent's browser or cloud computer from the phone and
+work it. Live frames go out on the stream only on this machine and the
+same network; a phone through Bloks Cloud asks `GET /api/bots/:id/screen`
+for the newest one, and `?watch=1` keeps the browser or box pictured for a
+minute after its last look (`watchScreen`), turn or no turn, without
+opening a browser or waking a box to do it. `POST /api/bots/:id/browser/:act`
+and `POST /api/bots/:id/computer/:act` take a click, a scroll, a key or
+typing (`handsFrom`), never from an agent's credential. While an agent's
+turn drives the Mac itself (`drivingMac`), the same screen route answers
+the person with a picture of the Mac's screen: the server asks the app
+(`desktop.screen`), which takes one only if Screen Recording is already
+granted and never asks macOS for it (`answerScreen` in
+`electron/main.mjs`), at most about once a second however many ask. It is
+never broadcast, never answered to an agent's credential, and there is no
+route that clicks on the Mac.
 
 The line to the relay (`server/relay-link.ts`) is two things. The stream
 in, which carries asks, is watched for silence and redialled. What goes
@@ -317,6 +402,27 @@ behind. `GET /api/bots/:id/messages?thread=&before=` and
 this machine or the same network are not cut. An answer that would still be
 too big is replaced with a short 413, so the phone hears why instead of
 waiting out the relay's timeout.
+
+A file is often more than one answer carries: about a megabyte when it
+does not compress. A device that says it takes parts (`parts: true` on a
+raw GET, feature `raw-parts`) is answered a part at a time
+(`servePart`): each part is 768 KB of the file, an ordinary ask and
+answer under the relay's limits, with the whole's `size`, how many
+`parts`, which `part` and a `tag` for the version of the file. The rest
+are asked for by number with that tag, and a part asked for by a tag the
+file no longer has is a 412, so two versions are never joined. The route
+is asked for each part's bytes alone with a `Range` header (the artifact
+route answers ranges and an `etag`); one that does not is read whole and
+sent whole when it fits, cut only when it does not. Past 50 MB a device
+is told so in a 413 that says the limit, before anything is read. A
+device that does not say it takes parts gets what it always did. The
+desktop app's stand-in server joins the parts (`electron/raw-parts.mjs`,
+a loop with no imports that a browser can use too), so the window opens
+and downloads a file of any size up to the limit, and
+`GET /api/attachments/where` says `openMaxBytes` to an app that comes
+through Bloks Cloud and takes parts, so a card says a file is too large
+before anybody clicks. `bloks share` still shares a file over it, and its answer carries
+a `warning` saying so while Bloks Cloud is on.
 
 A phone's Live Activities follow the turns the owner is waiting on
 (`server/live-activities.ts`): only a turn the owner's own message started
@@ -972,6 +1078,27 @@ so a restart ends it, and calling it off lets everything held go at once.
 One whose restart never comes ends itself the same way, ten minutes past
 its deadline.
 
+## When the window fails
+
+The servers and every agent keep working whatever happens to the window,
+so the window is what comes back. A page process that dies loads the app
+again (`electron/renderer-watch.mjs`); three deaths inside a minute show
+a plain page with a Reload link instead of a loop. A page that stops
+answering is waited on and written down, never killed. In the page, an
+error boundary under the whole interface (`src/components/ErrorBoundary.tsx`)
+puts a calm panel in its place when any part throws while it draws, with
+Reload and the details to copy, instead of an empty window, and says so
+to the app log.
+
+That log is the app's own (`electron/app-log.mjs`): a few lines about the
+window and its processes, a helper process that went away and why, in
+`app.log` in the app's logs folder beside `updater.log`, moved aside to
+`app.1.log` at 512 KB, never in a workspace's folder and never sent
+anywhere. What the page asks to write is budgeted (`lineBudget`). A native
+crash leaves a minidump in the computer's crash folder: the crash
+reporter starts with `uploadToServer: false`, and there is no server to
+send one to.
+
 ## Backups and restore
 
 `server/backup.ts` writes the whole data folder to one file in
@@ -1455,20 +1582,27 @@ sends the single-use pairing word to the bot in a private chat, kept by
 its user id (`ownerUserId`), since a chat id or a display name says
 where a message came from and not who wrote it. The word is made with
 the system's random source and is good once. Another person's first private
-message creates one owner-only admission card and one waiting notice. Let
+or addressed group message creates one owner-only admission card and one waiting notice. Group notices reply to the captured addressing message and topic; the first admitted message keeps that destination. A private chat is learned only from a private message. Let
 in, Not now and Take out are per person and per bot. The card names them
 beyond the first name they chose: their Telegram user id, their @username
 when they have one, what they wrote, and anyone else on the bot with the
 same name; marks that reorder or hide text are stripped from the name. The
 first message is bounded and media is not downloaded before admission.
-Declining tells the person once; later messages do not create another
-knock. Group messages are not admitted by this version. Guest mail and
+Declining tells a private sender once; a group decline causes no later group
+notice or invented DM. Later messages do not create another knock. Guest mail and
 shared rooms keep their own paths.
 
-An admitted person's message is labelled with their name and Telegram,
+An admitted person's message is labelled with their name, Telegram and its
+group when present,
 and runs in the agent's first conversation with its own requester. It waits
-behind an owner or another person's turn; only the same requester can steer
-its running turn. Each queued segment retains that requester and its grant.
+behind an owner or another person's turn; only the same requester and audience
+can steer its running turn. The audience includes the group and topic, or
+private. Each queued segment retains that requester, audience and grant.
+The owner's app words, private DM and another agent's say cannot join an
+owner group turn. Queues, fallback, retry, Continue and restart retain their
+server-created group provenance; a stale return never becomes private owner
+input. A merged segment replies to its last addressing message, and later
+steers keep that anchor.
 Taking someone out or retiring a bot transport revokes pending words,
 approvals and reply capabilities before interrupting that person's turn.
 An owner's turn is left alone. Admission is bounded to 100 waiting or let-in
@@ -1496,6 +1630,75 @@ denied, their turn stopped and its credential revoked, and nothing more of
 it reaches them; what is done stays done. The conversation and memory are
 still one, shared with the owner, which the settings say before the grant
 is given. During a drain they are asked to send again rather than held.
+
+Groups are off for each agent until the owner turns them on in its
+Telegram settings (`groups` on the bot's record, set only on the owner's
+Telegram route, and only once the owner is paired so their messages can be
+told from anyone else's). Until then every group update, the owner's
+included, only advances the polling offset: no knock, notice, download or
+transcript entry, whoever added the bot to the group. Turning groups off is
+saved first, so every group sender stops passing its check; then waiting
+group words are kept as unsent, an album still being gathered is dropped,
+and a let-in person's group turn stops as if they were taken out. The
+owner's own group turn runs on in the app, but its reply no longer reaches
+the group. Unpairing turns groups off too. Requests from let-in people
+across all of one agent's groups are bounded to 30 an hour
+(`MAX_TELEGRAM_GROUP_REQUESTS_PER_HOUR`); past it a request is dropped before
+any download, each group is told once and the owner once, and the owner's own
+requests are not counted.
+
+Groups accept only an outer mention entity whose whole UTF16 slice matches
+this bot's username (case-insensitive), a text mention of its numeric bot id,
+or a reply to an ordinary message from this bot in the same chat.
+`/cmd@this_bot`, external replies, quotes and forwarded entities do not
+address it. Bots, anonymous sender chats and automatic forwards are ignored.
+An unaddressed update advances the polling offset without a transcript entry,
+knock, file fetch or logged message text. Replied-to context is bounded and
+labelled with its actual author; media there is described, not fetched or
+transcribed. The owner's quote of an unadmitted member remains owner trust;
+that member's own addressed message only knocks.
+
+Albums are decided as a whole by sender, chat and media-group id before any
+download, so a caption addressing the bot does not lose the other photos.
+Pending group albums are bounded to 128 and 32 parts each. A let-in member
+keeps the same person guards in a group. Its unasked file reads can reach
+every member through an explicit reply, including people never let in.
+
+Full access applies only to the private delegate route. Non-owner group
+turns stay restricted even for a privately full-granted person. Their
+history matches both the sender and private/group/topic audience; stored
+explicit replies without an audience are legacy private replies.
+
+An owner group turn keeps the owner's normal context, cursor, settings and
+permissions. Its normal agent token does not gain a group reply route.
+A separate reply-only `blr_` token binds the verified owner id, bot,
+generation, lane, turn, group, topic and addressing message. Claude and Codex
+mount the native `reply_to_sender` tool, and a tool-capable API engine uses
+the same bound function. Codex keeps the owner's home and mounts only the
+new reply server in approve mode through its per-turn overrides, with a
+fresh 0700 socket folder removed on close. Its Unix path must fit the
+platform byte limit, and an actual connection verifies listener readiness
+before the tool is advertised. Unavailable endpoints fail visibly before
+engine input, including Windows where this private-filesystem endpoint is
+not supported. Other process engines can use the
+targetless `bloks reply` command with the separate reply credential. An
+engine with neither tools nor a process holds visibly in the app. A bound
+callback does not make an active owner turn a person turn. Current terminal
+sealing and owned-process cleanup still refuse new asks, replies or other
+turn effects after completion.
+
+Only an explicit reply reaches a group; chat text, cards, progress and files
+do not. Every group member sees it. The owner's context and permissions may
+therefore inform what it sends. The outgoing `reply_parameters` has only
+the anchor's `message_id`; `message_thread_id` carries its topic. A deleted
+anchor fails visibly, without retrying as a plain group post or a DM.
+
+[Telegram privacy mode](https://core.telegram.org/bots/features#privacy-mode)
+does not deliver mentions: it delivers commands meant for the bot, general
+commands when it was the last bot to post, inline messages through it and
+replies to messages meant for it. Privacy mode off, or admin status, is
+needed for mentions; Telegram then supplies every group message, which Bloks
+drops when unaddressed.
 
 A person turn uses the existing untrusted approval path, including on a
 full-access agent, and runs only on Claude Code. Claude starts a fresh
@@ -1603,7 +1806,17 @@ so the rest and anything bigger are named in one line saying they are in
 the app. A request held through a restart gets its files after its answer
 the same way (`TelegramReturns`), and only once that answer has arrived.
 Files go only with an answer that goes to the chat: a turn started in
-the app, a routine or a mail sends nothing there.
+the app, a routine or a mail sends nothing there on its own. An agent
+sends one there itself, whatever started its turn, with `bloks telegram
+send <file> [--caption "..."]` (`POST /api/bots/:me/telegram/send`,
+GitHub 367): only to the owner's chat with its own bot, only while that
+pairing holds (asked again before the upload), a file of up to 50 MB in
+its own files, its own workspace or the folder its turns work in, judged
+as the open file (`openUnder`: links followed and judged inside, nothing
+hidden on the way), with a caption of up to 1024 characters, and at most
+`MAX_TELEGRAM_SENDS_PER_HOUR` an hour. The answer says whether it went,
+and why not in the words a turn's files use. A paired agent is told the
+command alongside `bloks share`.
 
 While a Telegram turn runs the chat shows "typing" (`keepTyping`).
 Completed visible notes from its consuming turn go out as new silent messages
@@ -2495,6 +2708,30 @@ note, so the agent asks for the access instead of reading it as Bloks
 being down (GitHub 251). A workspace that is not running answers
 `nothing is answering at <address>` instead.
 
+## Reasoning effort
+
+An agent's `effort` is `low`, `medium`, `high`, `xhigh` or `max` (Low,
+Medium, High, Extra high and Max on screen), or unset for the engine's
+own. Each driver lists the levels it passes on as
+`capabilities.efforts`, and `GET /api/instances` reports them per engine
+as `efforts`: Claude Code all five, as `--effort <level>` on every turn
+(from 2.1.252, the oldest CLI checked; an older one is sent none);
+Codex all five as `turn/start.effort`, narrowed per model by the
+`supportedReasoningEfforts` in its own `model/list` (reported as each
+model option's `efforts`); Grok CLI `low`, `medium` and `high`, as
+`--reasoning-effort`. The other engines have no dial and are sent none.
+
+A level being chosen (`PATCH /api/bots/:id`, `POST /api/bots`, which is
+`bloks hire --effort <level>`, or New agents with a model picked) has to
+be one the agent's engine and model take; anything else is refused with
+the levels that engine has. A level already saved stays when the agent
+moves to an engine without it, so moving back brings it back, and an
+engine with no dial keeps whatever it is given. Dispatch sends the
+nearest level the engine running the turn has, the lower of two equally
+near, so a saved `max` on Grok CLI runs at `high`, and the pickers show
+that level with a line saying why. `null` on a patch goes back to the
+engine's own. An exported agent carries its level as it was.
+
 ## Security checkup
 
 Settings has a Security checkup page (`src/components/SecurityCheckup.tsx`)
@@ -2613,13 +2850,20 @@ Settings, Plan reads the membership on the licence this computer keeps
 (`server/plan-account.ts`). `GET /api/plan` asks bloks.dev, with the
 licence as the bearer, for the account and the offers on that plan;
 `POST /api/plan/manage` asks for the billing link only when it is
-pressed; and `DELETE /api/plan/licence` forgets the key here and takes
-the workspace offline. These answer this computer's own window only,
-never an agent or a paired device, since the answer is read with the
-licence itself. The key never comes back to the page, only masked. What
-the site sends is read as unknowns and checked one field at a time, with
-strings bounded and stripped of control and direction characters, and a
-price is shown as the site wrote it, never worked out here. The last good
+pressed; `POST /api/plan/hosting/link` asks for a pairing link to the
+hosted workspace on the licence, for the managed hosting that is coming
+(see Hosted mode); and `DELETE /api/plan/licence` forgets the key here
+and takes the workspace offline. None of them answers an agent or a
+member, a member's credential presented on this computer included. The
+plan and the billing link also answer the owner's own paired devices, so
+the owner of a workspace on a server elsewhere can see the plan and open
+billing from a device of theirs; the answer says `sameComputer: false`
+there, and the page leaves out the key, Hosting and the offers, which
+stay with this computer's own window. The key never comes back to the
+page, only masked. What the site sends is read as unknowns and checked
+one field at a time, with strings bounded and stripped of control and
+direction characters, and a price is shown as the site wrote it, never
+worked out here. The last good
 answers are kept in `plan-cache.json` under a fingerprint of the key, so
 a plan still shows, dated, when the site cannot be reached, and a fresh
 look moves the members and room sharing gates with the plan it reports.
@@ -2661,49 +2905,51 @@ or a model the service once listed), and a saved selection on it reads as
 (`CompatAccess`): a 401 is answered by one renewal and one more try, and a
 402 ends the turn with the service's own words, marked `credits: "empty"`
 on the `runtime.error`. It is offered while Cloud is active
-(`creditsOffered`) or the host came with a token. Claude Code runs on
-Bloks AI when an agent's `engineAccess` is `"credits"`: the turn carries
-`credits` and the driver starts the CLI with `ANTHROPIC_BASE_URL` at the
-service, the token as `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` empty,
-`--model bloks-ai`, and `ANTHROPIC_MODEL`, the small and fast model, each
-family's default and the subagent model all set to `bloks-ai`
-(`turnEnvironment`). A lapsed licence refuses such a turn rather than
-running it on the CLI's own sign-in.
+(`creditsOffered`) or the host came with a token, and a turn on an agent
+saved on it while it is not says Cloud is what it needs.
+
+Bloks AI is the Bloks engine and nothing else. Claude Code always runs on
+the person's own Claude plan or key: its driver is never handed a base URL
+or a token (`turnEnvironment`). An agent an earlier version had running
+Claude Code on Bloks AI (`engineAccess: "credits"` in `bots.json`) is
+moved at start, before anything listens to new messages
+(`claudeOffBloksAi`): its engine becomes the Bloks engine's one model, a
+backup on Claude Code becomes the Bloks engine too (or goes, when the agent
+is on it already), the access is dropped, and one notice in its
+conversation says so. Everything else about the agent stays. It is never
+moved onto the person's own Claude sign-in, even when there is one, and
+since the access goes with the move, nothing matches on the next start.
+An agent on any other engine is left as it is.
 
 Every call says what work it is, in `x-bloks-work`, so the service can
 choose: `automation` for a routine, a workflow step, the incident desk's
 note to a lead, words a watcher, a standing intent, a webhook or a routine
 left in the lane, a quiet compaction, and a one-shot that is Bloks' own
 bookkeeping (a summary, the memory tidy, skill suggestions); `coding` for
-a turn on Claude Code or an agent whose title, description or skills say
-engineering; `general` otherwise, the new agent draft among them
-(`workTag`, `turnOrigin`). A turn a shared room member started also
-carries `x-bloks-member`, a hash of that person's id here (`memberTag`),
-never a name or an address; the owner's turns, and anything the owner set
-up, carry none. The Bloks engine sends both as headers (`SendTurnInput.tags`,
-only on an engine with `CompatAccess`); Claude Code sends them through
-`ANTHROPIC_CUSTOM_HEADERS`, which the CLI adds to every request.
+an agent whose title, description or skills say engineering; `general`
+otherwise, the new agent draft among them (`workTag`, `turnOrigin`). A
+turn a shared room member started also carries `x-bloks-member`, a hash
+of that person's id here (`memberTag`), never a name or an address; the
+owner's turns, and anything the owner set up, carry none. The Bloks
+engine sends both as headers (`SendTurnInput.tags`, only on an engine
+with `CompatAccess`).
 
 What ran underneath, and what it was worth, stays with the service. Every
-frame from Claude Code on Bloks AI has its models said as `bloks-ai` and
-its prices taken out before anything reads it (`scrubFrame`), and every
-event from a Bloks AI lane is passed through `scrubEvent` by the bus
+event from the Bloks engine is passed through `scrubEvent` by the bus
 before it is logged or heard: its model is `bloks-ai`, its cost null, its
-raw frame left behind. Usage counts a Bloks AI turn under `bloks`,
-whatever engine ran it, the engine report records its model as
-`bloks-ai`, and a shared room's spend cap does not book it (the service
-caps a team's members instead). Every agent on Bloks AI has one more line
-in its system prompt (`IDENTITY_LINE`): it runs on Bloks AI, and says so
-rather than guess when asked what powers it.
+raw frame left behind. Usage counts a Bloks AI turn under `bloks`, the
+engine report records its model as `bloks-ai`, and a shared room's spend
+cap does not book it (the service caps a team's members instead). Every
+agent on Bloks AI has one more line in its system prompt (`IDENTITY_LINE`):
+it runs on Bloks AI, and says so rather than guess when asked what powers
+it.
 
 A used-up allowance is workspace wide: the refusal stands (`refused` on
 `GET /api/credits`, on `/api/config` and in a `credits` frame) until a read
 finds something left or a run on Bloks AI answers, and the composer of
 every agent on it says it with Top up, which opens the checkout page in
 the browser. A turn on Bloks AI never rests its engine (`recoverTurn`):
-topping up should be felt at once, and resting Claude Code would idle
-every agent on its own sign-in. A Claude Code turn refused with a 401
-renews the token and is asked again. The token and the licence are in
+topping up should be felt at once. The token and the licence are in
 `SECRET_PATHS`, so backups strip them and `redactSecrets` scrubs them by
 value.
 
@@ -2739,16 +2985,28 @@ For a phone: `GET /api/credits` (`offered`, `background`, `refused`,
 the old `balance`, `currency`, `lowAt` and `autoReload` are gone),
 `PATCH /api/credits` with `{ background }`, `{ memberCaps: { [member]:
 percent or null } }` or both, `team` in the `credits` frame and on
-`/api/config`, and `engineAccess` on each agent and on
-`PATCH /api/bots/:id` (`"credits"` or `"own"`; an agent's own credential
-may go back to its sign-in but never onto Bloks AI). Features `credits`
-and `bloks-ai`.
+`/api/config`. An agent no longer carries `engineAccess`, and
+`PATCH /api/bots/:id` takes `"own"` (or null) as said and refuses
+`"credits"` with a sentence the phone can show. Features `credits` and
+`bloks-ai`.
+
+When an API turns a Claude Code call away, the CLI says so as `API Error:`,
+the status and the body, which an older CLI prints as the JSON it was
+sent. A notice says the service's own sentence instead (`errorWords` in
+`server/failover.ts`), wherever a failed turn is said: the error itself,
+the try again and the backup taking over, and the end of the line. What
+decides whether the engine is out still reads the whole text. A 403 that
+Claude Code marks as a failed sign-in keeps its words too, rather than
+"not signed in": the service turning the person away is not something
+signing in again changes.
 
 ## Hosted mode
 
 `BLOKS_HOSTED=1` says this workspace runs on a machine somebody runs for
-the person (`server/hosted.ts`). The machine is the agents' computer, so
-the computer choices are this machine or off (`hosted.computers` on
+the person (`server/hosted.ts`). This is the server's side of managed
+hosting, a private machine that stays on, which is coming soon and not
+yet offered. The machine is the agents' computer, so the computer
+choices are this machine or off (`hosted.computers` on
 `/api/config`), a box or a VM chosen on a Mac becomes this machine, and
 the API refuses the cloud box and the Local VM routes with code `hosted`.
 What needs the person's Mac says so: working the Mac itself (the Electron

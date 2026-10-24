@@ -24,7 +24,7 @@
 //   the pairing closes behind it.
 import { IMAGE_MAX_BYTES, VOICE_MAX_BYTES } from "./attachments.ts";
 import { clamp, MAX_MESSAGE_CHARS, MAX_TELEGRAM_REPLY_CHARS } from "./limits.ts";
-import { messages } from "./telegram-format.ts";
+import { deliveries } from "./telegram-format.ts";
 import { clipTelegramText, TELEGRAM_MESSAGE_CHARS } from "./telegram-reply.ts";
 import { randomInt } from "node:crypto";
 
@@ -66,6 +66,13 @@ export interface Incoming {
   fromBot?: boolean;
   chatType?: "private" | "group" | "supergroup" | "channel";
   anonymous?: boolean;
+  automaticForward?: boolean;
+  forwarded?: boolean;
+  chatTitle?: string;
+  topicId?: number;
+  /** Only the outer text/caption entities, never a quote's entities. */
+  entities?: Array<{ type: string; offset: number; length: number; userId?: number }>;
+  replied?: { chatId: number; fromId?: number; from: string; text: string; media?: Media; service: boolean };
   /** Anything that came instead of, or as well as, text. */
   media?: Media;
   /** The supplied same-chat message being answered, without a lookup. */
@@ -201,6 +208,65 @@ function replyDisplay(value: unknown, limit: number): string | undefined {
   return value.slice(0, 4096).replace(/\s+/g, " ").trim().slice(0, limit) || undefined;
 }
 
+/** RichText wrappers contain only display text. Unknown fields, media and
+ * nested messages never become part of the excerpt. */
+const RICH_TEXT_WRAPPERS = new Set([
+  "bold", "italic", "underline", "strikethrough", "spoiler", "date_time",
+  "text_mention", "subscript", "superscript", "marked", "code", "url",
+  "email_address", "phone_number", "bank_card_number", "mention", "hashtag",
+  "cashtag", "bot_command", "anchor_link", "reference", "reference_link",
+]);
+
+/** A rich message has no text, only blocks, so a reply to a table would
+ * quote nothing. This reads the words of its tables and paragraphs, and
+ * the shape is whatever the wire held, so the nodes visited, the depth,
+ * the text looked at and the excerpt each have a limit. */
+function richReplyText(value: unknown): string | undefined {
+  const rich = value as { blocks?: unknown } | null;
+  if (!rich || !Array.isArray(rich.blocks)) return undefined;
+  let nodes = 512;
+  let input = 4096;
+  let text = "";
+  const write = (part: string) => { text += part.slice(0, 200 - text.length); };
+  const append = (value: unknown, depth = 0): void => {
+    if (--nodes < 0 || depth > 16 || text.length >= 200) return;
+    if (typeof value === "string") {
+      const part = value.slice(0, input);
+      input -= part.length;
+      write(part.replace(/\s+/g, " "));
+    } else if (Array.isArray(value)) {
+      for (let i = 0; i < value.length && nodes > 0 && text.length < 200; i++) append(value[i], depth + 1);
+    } else if (value && typeof value === "object") {
+      const part = value as Record<string, unknown>;
+      if (typeof part.type === "string" && RICH_TEXT_WRAPPERS.has(part.type)) append(part.text, depth + 1);
+      else if (part.type === "custom_emoji") append(part.alternative_text, depth + 1);
+    }
+  };
+  for (const block of rich.blocks.slice(0, 50)) {
+    if (nodes <= 0 || text.length >= 200) break;
+    nodes--;
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "table" && Array.isArray(b.cells)) {
+      let rows = 0;
+      for (const row of b.cells.slice(0, 400)) {
+        if (nodes <= 0 || text.length >= 200) break;
+        nodes--;
+        if (!Array.isArray(row)) continue;
+        if (rows++) write("; ");
+        for (let i = 0; i < Math.min(row.length, 20) && nodes > 0 && text.length < 200; i++) {
+          nodes--;
+          if (i) write(" | ");
+          const cell = row[i];
+          if (cell && typeof cell === "object" && !Array.isArray(cell)) append(cell.text);
+        }
+      }
+    } else if (typeof b.type === "string" && ["paragraph", "heading", "pre", "footer"].includes(b.type)) append(b.text);
+    write(" ");
+  }
+  return replyDisplay(text, 200);
+}
+
 /** Telegram supplies the original for same-chat replies. Never fetch its media,
  * walk nested replies or infer a target from a quote/forward/external reply. */
 function replyOf(message: Record<string, any>, chatId: number): ReplyRef | undefined {
@@ -219,6 +285,7 @@ function replyOf(message: Record<string, any>, chatId: number): ReplyRef | undef
   const filename = replyDisplay(replied.document?.file_name, 160);
   const excerpt = replyDisplay(message.quote?.text, 200)
     ?? replyDisplay(replied.text, 200) ?? replyDisplay(replied.caption, 200)
+    ?? richReplyText(replied.rich_message)
     ?? (media ? `[${media}${media === "File" && filename ? `: ${filename}` : ""}]` : "[Message content unavailable]");
   const id = Number.isSafeInteger(chatId) && chatId !== 0 && Number.isSafeInteger(replied.message_id) && replied.message_id > 0
     ? `tg:${chatId}:${replied.message_id}` : undefined;
@@ -243,7 +310,9 @@ export function parseUpdates(payload: unknown): Incoming[] {
     const message = update.message ?? update.edited_message;
     const chatId = Number(message?.chat?.id);
     const said = typeof message?.text === "string" ? message.text : message?.caption;
-    const text = typeof said === "string" ? said.trim() : "";
+    // Group entity offsets refer to the original text, including spaces.
+    const group = message?.chat?.type === "group" || message?.chat?.type === "supergroup";
+    const text = typeof said === "string" ? group ? said : said.trim() : "";
     const updateId = Number(update.update_id);
     if (!Number.isFinite(chatId) || !Number.isFinite(updateId)) continue;
     const media = mediaOf(message);
@@ -264,12 +333,46 @@ export function parseUpdates(payload: unknown): Incoming[] {
       ...(typeof message.from?.is_bot === "boolean" ? { fromBot: message.from.is_bot } : {}),
       ...(["private", "group", "supergroup", "channel"].includes(message.chat?.type) ? { chatType: message.chat.type } : {}),
       ...(message.sender_chat ? { anonymous: true } : {}),
+      ...(message.is_automatic_forward ? { automaticForward: true } : {}),
+      ...(message.forward_origin ? { forwarded: true } : {}),
+      ...(group ? {
+        chatTitle: String(message.chat.title ?? "Group").slice(0, 60),
+        ...(message.is_topic_message === true && Number.isSafeInteger(message.message_thread_id) && message.message_thread_id > 0 ? { topicId: message.message_thread_id } : {}),
+        entities: (Array.isArray(typeof message.text === "string" ? message.entities : message.caption_entities) ? (typeof message.text === "string" ? message.entities : message.caption_entities) : [])
+          .slice(0, 100).filter((entity: any) => entity && typeof entity.type === "string")
+          .map((entity: any) => ({ type: entity.type, offset: entity.offset, length: entity.length, ...(Number.isSafeInteger(entity.user?.id) && entity.user.id > 0 ? { userId: entity.user.id } : {}) })),
+        ...(message.reply_to_message ? { replied: repliedContext(message.reply_to_message) } : {}),
+      } : {}),
       ...(media ? { media } : {}),
       ...(album ? { album } : {}),
       ...(replyTo ? { replyTo } : {}),
     });
   }
   return out;
+}
+
+function repliedContext(message: any): NonNullable<Incoming["replied"]> {
+  const said = typeof message.text === "string" ? message.text : message.caption;
+  const text = typeof said === "string" ? said.slice(0, 4000) : "";
+  // Ordinary content is not a service post just because the inbox does
+  // not support it. Describe the quote without reading its payload.
+  const other = ["rich_message", "paid_media", "checklist", "invoice", "giveaway", "giveaway_winners"].find((field) => message[field] != null);
+  const media = mediaOf(message) ?? (other ? { kind: "other" as const, what: other.replaceAll("_", " ") } : undefined);
+  const service = (!text && !media) || [
+    "new_chat_members", "left_chat_member", "new_chat_title", "new_chat_photo", "delete_chat_photo", "group_chat_created",
+    "chat_owner_left", "chat_owner_changed",
+    "supergroup_chat_created", "channel_chat_created", "message_auto_delete_timer_changed", "migrate_to_chat_id", "migrate_from_chat_id",
+    "pinned_message", "successful_payment", "refunded_payment", "users_shared", "chat_shared", "write_access_allowed",
+    "passport_data", "proximity_alert_triggered", "boost_added", "chat_background_set", "forum_topic_created", "forum_topic_edited",
+    "gift", "unique_gift", "gift_upgrade_sent", "connected_website", "checklist_tasks_done", "checklist_tasks_added",
+    "community_chat_added", "community_chat_joined", "community_chat_removed", "direct_message_price_changed",
+    "forum_topic_closed", "forum_topic_reopened", "general_forum_topic_hidden", "general_forum_topic_unhidden",
+    "giveaway_created", "giveaway_completed", "video_chat_scheduled", "video_chat_started", "video_chat_ended", "video_chat_participants_invited", "web_app_data",
+    "managed_bot_created", "paid_message_price_changed", "poll_option_added", "poll_option_deleted", "suggested_post_approved",
+    "suggested_post_approval_failed", "suggested_post_declined", "suggested_post_paid", "suggested_post_refunded",
+  ].some((key) => message[key] !== undefined);
+  return { chatId: Number(message.chat?.id), from: String(message.from?.first_name ?? message.sender_chat?.title ?? "Someone").slice(0, 60), text, service,
+    ...(Number.isSafeInteger(message.from?.id) && message.from.id > 0 ? { fromId: message.from.id } : {}), ...(media ? { media } : {}) };
 }
 
 /** A button press, when that is what the update is. Every part of it is
@@ -450,10 +553,10 @@ export async function whoAmI(token: string, signal?: AbortSignal): Promise<{ id:
 
 /** One message. A long reply is several in a row, and being asked to
  * wait between them should not cost the reply its tail. */
-function sendOne(token: string, body: Record<string, unknown>, canSend?: () => boolean): Promise<unknown> {
+function sendOne(token: string, body: Record<string, unknown>, canSend?: () => boolean, method = "sendMessage"): Promise<unknown> {
   return patiently(() => {
     if (canSend && !canSend()) throw new Error("the Telegram connection changed");
-    return call(token, "sendMessage", body);
+    return call(token, method, body);
   });
 }
 
@@ -484,12 +587,12 @@ export async function post(token: string, chatId: number, text: string, keyboard
 
 /** A person's explicit plain-text reply. No formatting, buttons, truncation
  * or retry after an uncertain network result. */
-export async function replyText(token: string, chatId: number, text: string, messageId: number | undefined, canSend: () => boolean): Promise<void> {
+export async function replyText(token: string, chatId: number, text: string, messageId: number | undefined, canSend: () => boolean, threadId?: number): Promise<void> {
   if (!text.trim() || text.length > MAX_TELEGRAM_REPLY_CHARS) throw new Error("Reply text must contain 1 to 4096 characters.");
   if (!canSend()) throw new Error("the sender's permission or Telegram connection changed");
-  // Quoting their message is a courtesy. A message they deleted since
-  // must not turn the reply into a refusal.
-  const result = await call(token, "sendMessage", { chat_id: chatId, text, ...(messageId ? { reply_parameters: { message_id: messageId, allow_sending_without_reply: true } } : {}) }) as any;
+  // In private chats the quote is a courtesy. Groups must keep the
+  // original anchor, even when a deleted message makes the send fail.
+  const result = await call(token, "sendMessage", { chat_id: chatId, text, ...(messageId ? { reply_parameters: { message_id: messageId, ...(chatId > 0 ? { allow_sending_without_reply: true } : {}) } } : {}), ...(threadId ? { message_thread_id: threadId } : {}) }) as any;
   if (result?.ok !== true || !Number.isSafeInteger(result.result?.message_id) || result.result.message_id <= 0) {
     throw new Error("Telegram did not confirm the reply. Do not send it again automatically.");
   }
@@ -518,30 +621,66 @@ export async function answerPress(token: string, pressId: string, text?: string)
   await call(token, "answerCallbackQuery", { callback_query_id: pressId, ...(text ? { text: text.slice(0, 190) } : {}) }, 5_000);
 }
 
+/** A table, or the lines sent in its place, counts as sent only when
+ * Telegram says which message it became. Any other answer may still
+ * mean it arrived, so it stops the reply and is never sent again. */
+function confirmReply(value: unknown): void {
+  const body = value as { ok?: unknown; result?: { message_id?: unknown } } | null;
+  const id = body?.result?.message_id;
+  if (body?.ok !== true || typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+    throw new Error("Telegram did not confirm the reply. Do not send it again automatically.");
+  }
+}
+
 /**
  * Say something in a chat, all of it, in as many messages as it takes.
  *
  * With `markdown`, which is how agents write, it is shown formatted. If
  * Telegram will not take a message's formatting it answers 400, and that
  * message goes again as plain text with its links written out, so a
- * reply is never lost to its markup. Each message is sent only after the
- * one before it, so they arrive in order, and a failure stops the rest
- * rather than leaving a gap nobody can see.
+ * reply is never lost to its markup. A table goes as a rich message, and
+ * only if Telegram refuses that do its lines go like any others. Each
+ * message is sent only after the one before it, so they arrive in order,
+ * and a failure stops the rest rather than leaving a gap nobody can see.
  */
 export async function send(token: string, chatId: number, text: string, markdown = false, accepted?: () => void, canSend?: () => boolean): Promise<void> {
-  for (const chunk of messages(text, markdown)) {
-    if (chunk.html === undefined) {
-      await sendOne(token, { chat_id: chatId, text: chunk.plain }, canSend);
+  for (const delivery of deliveries(text, markdown)) {
+    if (delivery.richHtml !== undefined) {
+      let fallback = false;
+      let result: unknown;
+      try {
+        result = await sendOne(token, { chat_id: chatId, rich_message: { html: delivery.richHtml } }, canSend, "sendRichMessage");
+      } catch (error) {
+        // Only a no to the table itself sends its lines instead: 400 for
+        // HTML Telegram would not read, 404 from a Bot API without rich
+        // messages. Any other refusal would meet the lines too, and a
+        // timeout may have delivered the table, so those stop the reply.
+        if (!(error instanceof TelegramError) || ![400, 404].includes(error.status)) throw error;
+        fallback = true;
+      }
+      if (!fallback) {
+        confirmReply(result);
+        accepted?.();
+        continue;
+      }
+    }
+    // The words of the reply, or the lines of the one table refused just
+    // now. Never a message Telegram has already taken.
+    for (const chunk of delivery.chunks) {
+      let result: unknown;
+      if (chunk.html === undefined) {
+        result = await sendOne(token, { chat_id: chatId, text: chunk.plain }, canSend);
+      } else {
+        try {
+          result = await sendOne(token, { chat_id: chatId, text: chunk.html, parse_mode: "HTML" }, canSend);
+        } catch (error) {
+          if (!(error instanceof TelegramError) || error.status !== 400) throw error;
+          result = await sendOne(token, { chat_id: chatId, text: chunk.plain }, canSend);
+        }
+      }
+      if (delivery.richHtml !== undefined) confirmReply(result);
       accepted?.();
-      continue;
     }
-    try {
-      await sendOne(token, { chat_id: chatId, text: chunk.html, parse_mode: "HTML" }, canSend);
-    } catch (error) {
-      if (!(error instanceof TelegramError) || error.status !== 400) throw error;
-      await sendOne(token, { chat_id: chatId, text: chunk.plain }, canSend);
-    }
-    accepted?.();
   }
 }
 
@@ -557,12 +696,20 @@ const PHOTO_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
  * should not bury the chat; the rest are a tap away in the app. */
 export const FILES_PER_TURN = 5;
 
+/** The most Telegram shows under a photo or a file. */
+export const CAPTION_MAX_CHARS = 1024;
+/** Why a file over UPLOAD_MAX_BYTES did not go, in the words every
+ * answer about one uses. */
+export const TOO_BIG = "over Telegram's 50 MB";
+
 /** A file to send: what it is called, what it is, how big, and its bytes
- * when asked for, so nothing is read that is not going to be sent. */
+ * when asked for, so nothing is read that is not going to be sent. A
+ * caption, when there is one, goes under it as plain text. */
 export interface Deliverable {
   name: string;
   mime: string;
   size: number;
+  caption?: string;
   blob(): Promise<Blob>;
 }
 
@@ -573,6 +720,7 @@ async function upload(token: string, method: string, field: string, chatId: numb
     const form = new FormData();
     form.set("chat_id", String(chatId));
     form.set(field, await file.blob(), file.name);
+    if (file.caption) form.set("caption", file.caption);
     if (canSend && !canSend()) throw new Error("the Telegram connection changed");
     const response = await fetch(`${API}/bot${token}/${method}`, {
       method: "POST",
@@ -596,6 +744,18 @@ export async function sendFile(token: string, chatId: number, file: Deliverable,
   }
 }
 
+/** One file sent, or why not in a few words ("" when it went): the same
+ * reasons sendFiles names, for an answer about a single file. */
+export async function trySendFile(token: string, chatId: number, file: Deliverable, canSend?: () => boolean): Promise<string> {
+  if (file.size > UPLOAD_MAX_BYTES) return TOO_BIG;
+  try {
+    await sendFile(token, chatId, file, canSend);
+    return "";
+  } catch (error) {
+    return reason(error);
+  }
+}
+
 /**
  * What a turn produced, sent to the chat, a few at most, one after
  * another so they arrive in order. Returns a line for the person about
@@ -610,19 +770,16 @@ export async function sendFiles(token: string, chatId: number, files: Deliverabl
   for (const file of files) {
     if (canSend && !canSend()) break;
     if (file.size > UPLOAD_MAX_BYTES) {
-      missing.push(`${file.name} (over Telegram's 50 MB)`);
+      missing.push(`${file.name} (${TOO_BIG})`);
       continue;
     }
     if (sent >= max) {
       over++;
       continue;
     }
-    try {
-      await sendFile(token, chatId, file, canSend);
-      sent++;
-    } catch (error) {
-      missing.push(`${file.name} (${reason(error)})`);
-    }
+    const why = await trySendFile(token, chatId, file, canSend);
+    if (why) missing.push(`${file.name} (${why})`);
+    else sent++;
   }
   const left = missing.length + over;
   if (over) missing.push(`${over} more ${over === 1 ? "file" : "files"} (only ${max} come with an answer)`);
@@ -984,7 +1141,7 @@ function mediaName(media: Media): string {
   return ITEM_NAMES.get(media.what) ?? (media.what.endsWith(" images") ? "image" : "attachment");
 }
 
-function mediaDescription(media: Media, capital = true): string {
+export function mediaDescription(media: Media, capital = true): string {
   const name = mediaName(media);
   const article = /^[aeiou]/i.test(name) ? "an" : "a";
   const what = `${capital ? article[0]!.toUpperCase() + article.slice(1) : article} ${name}`;
@@ -1066,6 +1223,13 @@ export class Inbox {
     const waiting = hooks.waiting(chatId, message);
     if (waiting) return this.answer(chatId, waiting, decision.text);
     hooks.deliver(chatId, decision.text, replyTo, message);
+  }
+
+  /** A group album already addressed and admitted as a whole. Recheck
+   * every part before any download, without holding it a second time. */
+  async takeAlbum(parts: Incoming[]): Promise<void> {
+    if (!parts.length || parts.some((part) => part.chatId !== parts[0].chatId || part.fromId !== parts[0].fromId || decide(this.hooks.state(), part).kind !== "deliver")) return;
+    await this.attachments(parts);
   }
 
   /** Lets every album still waiting go now, and waits for them. */
@@ -1234,7 +1398,7 @@ export class Inbox {
   }
 
   private hold(message: Incoming): void {
-    const key = `${message.chatId}:${message.album}`;
+    const key = `${message.chatId}:${message.fromId ?? 0}:${message.album}`;
     const held = this.albums.get(key);
     if (held) clearTimeout(held.timer);
     this.albums.set(key, {

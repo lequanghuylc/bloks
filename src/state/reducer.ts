@@ -9,6 +9,7 @@
 import type { BlokColor, BlokExpression, BlokShape } from "@/lib/mascot";
 import type { LaneContext } from "@/lib/contextCard";
 import type { CodexSpeed, CodexSpeedStatus } from "@/lib/codexSpeed";
+import type { Effort } from "@/lib/effort";
 import { resolveSettingsPage } from "../lib/settingsPages.ts";
 
 export type { BlokColor, BlokShape } from "@/lib/mascot";
@@ -101,10 +102,11 @@ export interface Message {
   /** Said in this agent's own chat in a turn another agent's message
    * started: shown in full, with a link to the exchange. Not sent to it. */
   afterAgent?: { peerId: string; peerName: string };
-  telegramPerson?: { personId: string; name: string; requester: string };
+  telegramPerson?: { personId: string; name: string; requester: string; group?: { title: string } };
   /** Said on Telegram by someone the owner gave full access to this agent:
    * a turn with the agent's own tools, answered in their own chat. */
-  telegramDelegate?: { personId: string; name: string; requester: string };
+  telegramDelegate?: { personId: string; name: string; requester: string; group?: { title: string } };
+  telegramGroup?: { name: string; group: { title: string } };
   telegramSent?: { personId: string; name: string; state: "sending" | "sent" | "uncertain" | "failed" };
   /** The user's selection on a decision component. */
   decisionChoice?: number;
@@ -198,6 +200,9 @@ export interface Message {
   event?: boolean;
   /** Where the engine compacted its session: a line, not a warning. */
   compaction?: { before: number | null; after: number | null; idle?: boolean };
+  /** A completed fresh-session reset: persistent transcript information,
+   * not a warning, reply, or new attention. */
+  sessionReset?: boolean;
   kind:
     | "text"
     | "options"
@@ -325,8 +330,10 @@ export interface Bot {
   /** 1 to 5; the most senior member of a room has the final call, unless
    * the room crowned someone else (Blok.leadId). */
   seniority?: number;
-  /** Reasoning effort for engines that have the dial. */
-  effort?: "low" | "medium" | "high";
+  /** Reasoning effort for engines that have the dial. Absent or null is
+   * the engine's own; a level the engine lacks runs at the nearest it
+   * has (src/lib/effort.ts). */
+  effort?: Effort | null;
   /** This agent's own Codex speed; absent or null follows the workspace. */
   codexSpeed?: CodexSpeed | null;
   mascotExpression?: BlokExpression | null;
@@ -353,9 +360,6 @@ export interface Bot {
   modelSelection: ModelSelection;
   /** The engine that answers when the agent's own runs out. */
   backupSelection?: ModelSelection | null;
-  /** How its engine is paid for: unset is the engine's own sign-in,
-   * "credits" runs Claude Code on the person's Bloks AI. */
-  engineAccess?: "credits" | null;
   /** Where this agent may act. Left unset it decides for itself: its own
    * box when it has one, otherwise this Mac. */
   computer?: "cloud" | "sandbox" | "local" | "off" | null;
@@ -491,7 +495,7 @@ export interface AgentDefaults {
   /** Ask when unset. An agent hiring another passes on no more than its own. */
   approvals?: "edits" | "auto" | "full";
   modelSelection?: ModelSelection;
-  effort?: "low" | "medium" | "high";
+  effort?: Effort;
 }
 
 type Lane = { id: string; unread?: boolean; lastAt?: number; createdAt: number; state?: string };
@@ -593,10 +597,14 @@ export interface InstanceInfo {
     authenticated?: boolean;
     version?: string | null;
   };
+  /** The effort levels the engine takes, least first; empty for one with
+   * no dial. Absent from a server from before they were per engine. */
+  efforts?: Effort[];
   models: {
     default: string;
-    /** codexFast: whether Codex offers Fast for the model, where it said. */
-    options: Array<{ id: string; label: string; codexFast?: boolean }>;
+    /** codexFast: whether Codex offers Fast for the model, where it said.
+     * efforts: the levels the engine listed for the model, where it said. */
+    options: Array<{ id: string; label: string; codexFast?: boolean; efforts?: Effort[] }>;
     /** When the engine last reported the list. */
     checkedAt?: number;
     /** Where the list came from, when it is not the engine reporting it live. */
@@ -651,6 +659,18 @@ export interface Blok {
   /** Messages older than the first one here, still on the server. Only
    * set when the transcript arrived trimmed, through Bloks Cloud. */
   olderMessages?: number;
+}
+
+/** A New room dialog filled in before it opens: a room's team, ready to
+ * start again in a room of their own (src/lib/roomEdit.ts). `from` names
+ * the room it came from, which is left as it is. */
+export interface NewRoomPreset {
+  name: string;
+  memberIds: string[];
+  leadId: string | null;
+  leadOnly: boolean;
+  cwd?: string;
+  from: string;
 }
 
 /** How a shared room behaves, owner's choice. See server/bloks.ts. */
@@ -758,6 +778,9 @@ export interface AppState {
    * to one (a card about one that stopped for failing). */
   routinesFocus: AutomationsFocus | null;
   newRoomOpen: boolean;
+  /** What the New room dialog opens filled in with, when something asked
+   * for more than an empty one: a fresh start from a room (src/lib/roomEdit.ts). */
+  newRoomPreset: NewRoomPreset | null;
   /** The sheet of every keyboard shortcut (⌘/). */
   shortcutsOpen: boolean;
   /** The project the app is looking through, or null for everything.
@@ -835,7 +858,9 @@ export type Action =
   | { type: "moveSections"; order: string[] }
   /** `onFailed`: the send did not go, so the box can have it back. */
   | { type: "sendToRoom"; blokId: string; text: string; replyTo?: Message["replyTo"]; onFailed?: () => void }
-  | { type: "toggleNewRoom"; open?: boolean }
+  /** `preset` fills the dialog in as it opens; any toggle without one
+   * leaves it empty, so a preset never outlives the dialog it was for. */
+  | { type: "toggleNewRoom"; open?: boolean; preset?: NewRoomPreset }
   | { type: "openTeamLink"; slug: string | null }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "engineUpdates"; updates: Record<string, { installed: string; latest: string }> }
@@ -1069,8 +1094,10 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "openTeamLink":
       return { ...state, teamLink: action.slug, newRoomOpen: action.slug ? true : state.newRoomOpen };
-    case "toggleNewRoom":
-      return { ...state, newRoomOpen: action.open ?? !state.newRoomOpen };
+    case "toggleNewRoom": {
+      const open = action.open ?? !state.newRoomOpen;
+      return { ...state, newRoomOpen: open, newRoomPreset: open ? (action.preset ?? null) : null };
+    }
     case "rehearsalsChanged":
       return { ...state, rehearsalsTick: state.rehearsalsTick + 1 };
     case "openMeeting":
@@ -1535,6 +1562,7 @@ export const initialState: AppState = {
   routinesTab: null,
   routinesFocus: null,
   newRoomOpen: false,
+  newRoomPreset: null,
   shortcutsOpen: false,
   projectId: (() => {
     try {

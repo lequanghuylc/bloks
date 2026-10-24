@@ -140,6 +140,8 @@ export interface Account {
   plan: PaidPlan;
   bundle: string | null;
   interval: "month" | "year" | null;
+  /** What the plan costs, as the site words it; null when it says nothing. */
+  price: { amount: string; per: string } | null;
   status: string;
   renewsAt: number | null;
   cancelsAt: number | null;
@@ -175,11 +177,13 @@ export function readAccount(text: string): Account | null {
   const hosting = isRecord(raw.hosting)
     ? { tier: words(raw.hosting.tier, 32) || null, state: words(raw.hosting.state, 32) || null }
     : null;
+  const price = isRecord(raw.price) && words(raw.price.amount, 24) ? { amount: words(raw.price.amount, 24), per: words(raw.price.per, 24) } : null;
   const topUps = typeof raw.topUps === "number" && Number.isInteger(raw.topUps) && raw.topUps >= 0 ? Math.min(raw.topUps, 9999) : null;
   return {
     plan,
     bundle,
     interval: interval(raw.interval),
+    price,
     status,
     renewsAt: readTime(raw.renewsAt),
     cancelsAt: readTime(raw.cancelsAt),
@@ -456,10 +460,12 @@ const ENDED = new Set(["canceled", "cancelled", "incomplete_expired", "unpaid"])
 
 /**
  * GET /api/plan, POST /api/plan/manage, POST /api/plan/hosting/link and
- * DELETE /api/plan/licence. The caller has already made sure it is this
- * computer's own window asking, never an agent's credential and never a
- * paired device: the plan, the way to billing and the way into a hosted
- * workspace are the owner's.
+ * DELETE /api/plan/licence. The caller has already made sure it is the
+ * owner asking, never an agent's credential or a member's: the plan, the
+ * way to billing and the way into a hosted workspace are the owner's. The
+ * first two answer the owner's own paired devices as well; the way into a
+ * hosted workspace and forgetting the key answer this computer's own
+ * window only.
  */
 export async function planRoute(
   method: string,

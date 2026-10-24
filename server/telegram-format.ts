@@ -12,6 +12,12 @@
 // with the same look. Every message closes what it opens, and a link
 // cut in half is two links to the same place, never a label in one
 // message and its target in the next.
+//
+// A table is the one thing that HTML cannot carry: it arrived as rows
+// of pipes. Telegram's rich messages can show one, so a table goes as a
+// rich message of its own, between the messages that carry the words
+// around it, with its lines kept as ordinary messages to send instead
+// when Telegram will not take it.
 
 /** Under Telegram's 4096, which it counts after the markup is read. Every
  * size here is measured on the plain text with links written out, which
@@ -533,4 +539,145 @@ export function messages(text: string, markdown: boolean, limit = MESSAGE_CHARS)
       ...(markdown ? { html: items.map(htmlItem).join("\n") } : {}),
     }))
     .filter((chunk) => chunk.plain.trim());
+}
+
+/** One step of a reply, in order. Words are `chunks`, sent as they
+ * always were. A table is `richHtml` too, and its `chunks` are its own
+ * lines, sent the ordinary way only when Telegram refuses the table. */
+export interface Delivery {
+  chunks: Chunk[];
+  richHtml?: string;
+}
+
+// A rich message holds at most 32768 characters of text, and the HTML
+// that writes them is never fewer bytes. It holds at most 500 blocks,
+// the table and each of its rows being one, and 20 columns.
+const RICH_TABLE_BYTES = 30_000;
+const RICH_TABLE_ROWS = 400;
+const TABLE_COLUMNS = 20;
+// A list marker is a block boundary, not a short table row or heading.
+const ORDERED_LIST = /^ {0,3}[0-9]{1,9}[.)](?:[ \t]+|$)/;
+const QUOTE = /^ {0,3}>/;
+const RULE = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$/;
+const INDENTED = /^(?: {4}| *\t)/;
+
+/** A line that begins a heading, a list item or a quotation, which no
+ * table row can be. */
+function startsBlock(line: string): boolean {
+  return HEADING.test(line) || BULLET.test(line) || ORDERED_LIST.test(line) || QUOTE.test(line);
+}
+
+/** Split only unescaped pipes, including inside code spans as GFM does.
+ * Keep empty cells: dropping one would shift every later cell left. */
+function tableCells(line: string): string[] | null {
+  if (INDENTED.test(line)) return null;
+  const source = line.trim();
+  const cells = [""];
+  let pipes = 0;
+  let lastPipe = -1;
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]!;
+    if (char === "\\" && i + 1 < source.length) {
+      cells[cells.length - 1] += source.slice(i, i + 2);
+      i++;
+    } else if (char === "|") {
+      pipes++;
+      lastPipe = i;
+      cells.push("");
+    } else cells[cells.length - 1] += char;
+  }
+  if (!pipes) return null;
+  if (source.startsWith("|")) cells.shift();
+  if (lastPipe === source.length - 1) cells.pop();
+  return cells.map((cell) => cell.trim());
+}
+
+/** A cell is read as the same inline Markdown as any other line and
+ * escaped the same way, so HTML an agent writes in one, an image or a
+ * block of Telegram's own, shows as the text it is and nothing more. */
+function tableRow(cells: string[], columns: number, aligns: string[], heading: boolean): string {
+  const tag = heading ? "th" : "td";
+  return "<tr>" + Array.from({ length: columns }, (_, i) => {
+    const text = (cells[i] ?? "").replaceAll("\\|", "|");
+    return `<${tag} align="${aligns[i]}">${inline(text).map(htmlRun).join("")}</${tag}>`;
+  }).join("") + "</tr>";
+}
+
+/** A table as rich messages, cut between rows with its heading on each.
+ * One Telegram could not show, too wide, with a row longer than its
+ * heading or a row too big for a message, goes the way tables always
+ * went, whole, rather than losing a cell. */
+function tableDeliveries(lines: string[], cells: string[][], aligns: string[]): Delivery[] {
+  const legacy = () => [{ chunks: messages(lines.join("\n"), true) }];
+  const columns = aligns.length;
+  if (columns > TABLE_COLUMNS || cells.some((row) => row.length > columns)) return legacy();
+  const header = tableRow(cells[0]!, columns, aligns, true);
+  const rows = cells.slice(1).map((row) => tableRow(row, columns, aligns, false));
+  const baseBytes = Buffer.byteLength(`<table>${header}</table>`, "utf8");
+  if (baseBytes > RICH_TABLE_BYTES || rows.some((row) => baseBytes + Buffer.byteLength(row, "utf8") > RICH_TABLE_BYTES)) return legacy();
+  const out: Delivery[] = [];
+  let batch: string[] = [];
+  let raw = lines.slice(0, 2);
+  let bytes = baseBytes;
+  const flush = () => {
+    out.push({ richHtml: `<table>${header}${batch.join("")}</table>`, chunks: messages(raw.join("\n"), true) });
+    batch = [];
+    raw = lines.slice(0, 2);
+    bytes = baseBytes;
+  };
+  rows.forEach((row, i) => {
+    const size = Buffer.byteLength(row, "utf8");
+    if (batch.length && (bytes + size > RICH_TABLE_BYTES || batch.length + 1 >= RICH_TABLE_ROWS)) flush();
+    batch.push(row);
+    raw.push(lines[i + 2]!);
+    bytes += size;
+  });
+  flush();
+  return out;
+}
+
+/** A reply as the steps that carry it, in order. Only a table at the top
+ * level becomes a rich message. One in a list, a quotation or a code
+ * block, and every other line, is sent exactly as it was before. */
+export function deliveries(text: string, markdown: boolean): Delivery[] {
+  if (!markdown) return [{ chunks: messages(text, false) }];
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const out: Delivery[] = [];
+  let from = 0;
+  let fence: string | undefined;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const source = lines[i]!;
+    if (fence) {
+      const close = source.trim();
+      if (close.startsWith(fence) && runOf(close, 0, fence[0]!) === close.length) fence = undefined;
+      continue;
+    }
+    const opened = FENCE.exec(source);
+    if (opened) { fence = opened[1]!; continue; }
+    if (/^\s/.test(source) || /^\s/.test(lines[i + 1]!) || startsBlock(source)) continue;
+    const pipeHeader = tableCells(source);
+    const pipeDelimiter = tableCells(lines[i + 1]!);
+    // At least one structural pipe distinguishes a one-column table
+    // from a setext heading. Body rows may have just one short cell.
+    if (!pipeHeader && !pipeDelimiter) continue;
+    const header = pipeHeader ?? [source.trim()];
+    const delimiter = pipeDelimiter ?? [lines[i + 1]!.trim()];
+    if (!header.length || delimiter.length !== header.length || !delimiter.every((cell) => /^:?-+:?$/.test(cell))) continue;
+    const aligns = delimiter.map((cell) => cell.endsWith(":") ? cell.startsWith(":") ? "center" : "right" : "left");
+    let end = i + 2;
+    const cells = [header];
+    while (end < lines.length) {
+      const row = lines[end]!;
+      if (!row.trim() || INDENTED.test(row) || FENCE.test(row) || startsBlock(row) || RULE.test(row)) break;
+      const next = tableCells(row) ?? [row.trim()];
+      cells.push(next);
+      end++;
+    }
+    if (i > from) out.push({ chunks: messages(lines.slice(from, i).join("\n"), true) });
+    out.push(...tableDeliveries(lines.slice(i, end), cells, aligns));
+    from = end;
+    i = end - 1;
+  }
+  if (from < lines.length) out.push({ chunks: messages(lines.slice(from).join("\n"), true) });
+  return out;
 }

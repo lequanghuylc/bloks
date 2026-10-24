@@ -139,7 +139,8 @@ function tucks(m: Message): boolean {
 }
 
 function askerOf(m: Message): Asker | null {
-  if (m.telegramPerson) return { by: "telegram", name: m.telegramPerson.name };
+  const telegram = m.telegramPerson ?? m.telegramGroup;
+  if (telegram) return { by: "telegram", name: telegram.name + (telegram.group ? " in " + telegram.group.title : "") };
   if (m.telegramDelegate) return { by: "telegram", name: m.telegramDelegate.name };
   if (m.agent?.dir === "in") return { by: "agent", peerId: m.agent.peerId, peerName: m.agent.peerName, message: m };
   if (m.via === "routine") return { by: "routine", ...(m.routine?.name ? { name: m.routine.name } : {}) };
@@ -267,7 +268,7 @@ export function foldTurns(messages: readonly Message[], running: boolean, histor
     while (h < b && startsTurn(messages[h])) h++;
     const head = messages.slice(a, h);
     // with the person among them, it is theirs and the line names nobody
-    const first = head.some((m) => personsWords(m) && !m.telegramPerson && !m.telegramDelegate) ? undefined : head.find((m) => !m.deleted);
+    const first = head.some((m) => personsWords(m) && !m.telegramPerson && !m.telegramDelegate && !m.telegramGroup) ? undefined : head.find((m) => !m.deleted);
     const asker = first ? askerOf(first) : null;
     // the result: the last thing the agent said in it
     let reply = -1;
@@ -441,13 +442,13 @@ export function workedFor(ms: number): string {
  * What the line counts: "worked 8 min", "27 commands", "4 files". Time,
  * counts and nothing else, in lower case for whoever joins them. Tool
  * calls are commands when every one of them was (`kindOf` is
- * tool-summary's), and steps when the turn also read, searched or
- * edited, since calling a file it read a command would be wrong.
+ * tool-summary's), and tool actions when the turn also read,
+ * searched or edited. Goal steps count whole turns, not these tool rows.
  */
 export function foldWords(fold: TurnFold, kindOf: (name: string) => string): string[] {
   const words = [`worked ${workedFor(fold.ms)}`];
   if (fold.tools.length) {
-    words.push(count(fold.tools.length, fold.tools.every((name) => kindOf(name) === "command") ? "command" : "step"));
+    words.push(count(fold.tools.length, fold.tools.every((name) => kindOf(name) === "command") ? "command" : "tool action"));
   }
   if (fold.files) words.push(count(fold.files, "file"));
   return words;

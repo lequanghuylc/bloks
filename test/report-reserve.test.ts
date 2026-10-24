@@ -15,7 +15,9 @@ test('twelve general mutations leave one ordinary CLI report and bound every sub
  assert.equal((await f.messages()).filter(m=>m.text==='FINAL').length,1);
  assert.equal((await f.messages(f.sender)).filter(m=>m.agent?.dir==='out'&&m.text==='FINAL').length,1);
  assert.equal((await f.control('token',{token:f.token})).spent,13);
- assert.equal((await f.say({text:'different'})).status,429);
+ const later=await f.say({text:'different'});assert.equal(later.status,429);
+ // delivered already, so it says so: not a send still in flight (GitHub 369)
+ assert.match(later.body.error,/kept-back message was already delivered, so this message was not sent/);assert.doesNotMatch(later.body.error,/occupied/);
  assert.equal((await f.say({text:'self'},f.sender.id)).status,429);
 });
 
@@ -70,7 +72,11 @@ test('eleven-spent general/direct race and delayed body parsing never debit twel
 
 test('lost actual HTTP output returns retained receipt without readiness, activity or recipient replay',async t=>{
  const f=await reporting(t);await f.use();await f.control('fault',{mode:'output'});
- await assert.rejects(f.say());const recovered=await f.accepted();const calls=f.calls().length;
+ await assert.rejects(f.say());const recovered=await f.accepted();
+ // the turn the receipt started records its engine call a moment after the
+ // answer, later still on a slow machine: count once that has settled, so
+ // the only thing that could add one is a replay
+ let calls=0;await until(async()=>{const before=f.calls().length;await new Promise(r=>setTimeout(r,400));calls=f.calls().length;return calls===before&&calls>0},'engine calls never settled');
  assert.deepEqual(await f.say(),recovered);assert.equal(f.calls().length,calls);
  assert.equal((await f.messages()).filter(m=>m.text==='FINAL').length,1);
  assert.equal((await f.messages(f.sender)).filter(m=>m.agent?.dir==='out').length,1);
@@ -85,7 +91,7 @@ for(const phase of ['before-persist','before-persist-status','after-persist','af
   assert.equal(result.status,phase==='before-persist'?500:409);assert.equal((await f.control('token',{token:f.token})).report,undefined);
   await f.control('fault',{mode:''});assert.equal((await f.accepted()).body.ok,true);
  }else if(phase==='after-persist'){
-  assert.equal(result.body.uncertain,true);assert.deepEqual(await f.say(),result);assert.equal((await f.say({text:'OTHER'})).status,429);
+  assert.equal(result.body.uncertain,true);assert.deepEqual(await f.say(),result);const other=await f.say({text:'OTHER'});assert.equal(other.status,429);assert.match(other.body.error,/may already have been delivered/);
   assert.equal((await f.messages()).filter(m=>m.text==='FINAL').length,1);
   assert.equal((await f.messages(f.sender)).find(m=>m.agent?.dir==='out')?.agent.status,'uncertain');
  }else {assert.equal(result.body.ok,true);assert.deepEqual(await f.say(),result);if(phase==='after-queue')assert.equal(result.body.queued,true)}
@@ -159,10 +165,15 @@ test('busy chain refusal and later queue take-back preserve the original reserve
  await f.control('depth',{task:f.sender.threadId,depth:100});assert.equal((await f.say()).status,429);
  assert.equal((await f.control('token',{token:f.token})).report,undefined);await f.control('depth',{task:f.sender.threadId,depth:0});
  const receipt=await f.accepted();assert.equal(receipt.body.queued,true);
+ // The reserved say's own row follows its words as any say's does (GitHub 337).
+ // The last one: the chain refusal above wrote a failed row of its own.
+ const row=async()=>(await f.control('messages',{task:f.sender.threadId})).filter((m:any)=>m.agent?.dir==='out'&&m.text==='FINAL').at(-1);
+ assert.equal((await row()).agent.status,'queued');
  // Owner take-back cannot speak as a sender. Use the caller's fresh general
  // credential for the existing take-back route, not its occupied final slot.
  const next=await f.control('mint',{bot:f.sender.id,task:f.sender.threadId});
  const taken=await f.request('POST',`/api/bots/${f.target.id}/take-back`,{},next.token);assert.equal(taken.status,200);
+ assert.equal((await row()).agent.status,'failed');
  assert.deepEqual(await f.say(),receipt);
  assert.equal((await f.messages()).filter(m=>m.text==='FINAL').length,0);
  const removed=taken.body.takenBack.find((m:any)=>m.text==='FINAL');assert.ok(removed);

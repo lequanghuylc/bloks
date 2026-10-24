@@ -34,7 +34,7 @@ export interface AgentToken {
   /** Changes made so far on this credential. */
   spent: number;
   /** This credential can only reply to its turn's Telegram sender. */
-  reply?: { sender: import("./telegram-people.ts").TelegramSender; turn: number; attempted?: Set<string> };
+  reply?: { sender: import("./telegram-people.ts").TelegramReplySender; turn: number; attempted?: Set<string> };
   /** Only the final direct submission, retained through normal renewal. */
   report?: ReservedReport;
   /** This credential can only message one person on somebody's behalf
@@ -60,6 +60,22 @@ export const REPORT_UNCERTAIN: ReportResponse = {
   status: 202,
   body: { ok: false, uncertain: true, note: "This direct message may have been accepted. Retry only the same submission to check its receipt; do not send it again elsewhere." },
 };
+
+/** Why a different direct message is refused once the kept-back one is
+ * taken. "Occupied by another submission" read as a send still in flight,
+ * worth waiting on or retrying, when the first had long been delivered
+ * and the turn had nothing left to spend (GitHub 369). So it says which:
+ * delivered, maybe delivered, or still on its way, and that nothing from
+ * this request went anywhere. */
+export function keptBackRefusal(report: ReservedReport): string {
+  if (report.accepted) {
+    return "this turn has made its twelve changes and its one kept-back message was already delivered, so this message was not sent. Put what it says in your reply; a message to another agent can go in a later turn.";
+  }
+  if (report.dispatched) {
+    return "this turn's one kept-back message may already have been delivered, so this message was not sent. Retry that first message with the same words and destination to check its receipt; do not send a replacement.";
+  }
+  return "this turn's one kept-back message is still being sent, so this message was not sent. Retry that first message with the same words and destination to check on it; do not send a replacement.";
+}
 
 /** How long a credential lasts without its turn vouching for it. A turn
  * that is still running renews it (see `alive` below): long turns are
@@ -215,6 +231,12 @@ export const RULES: Rule[] = [
   // app on any device. The command reads the file, as the agent, and
   // sends its bytes; the route never reads a path it is given.
   { method: "POST", path: "/api/bots/:me/artifacts", why: "share one file into the conversation as a card the person can open, and get a link to it" },
+  // One file to the person's Telegram chat with this agent's own bot,
+  // whatever started the turn. Its own bot and its own paired chat only,
+  // and a file from its own folders only: the route judges the path it
+  // is given and the pairing as it stands. Its Telegram settings stay the
+  // person's (/api/bots/:id/telegram is not on this list).
+  { method: "POST", path: "/api/bots/:me/telegram/send", why: "send one file from its working folder or its own files to the person's Telegram chat with its own bot, while that bot is paired with them" },
 
   // Skills it can consult, and its own settings.
   { method: "GET", path: "/api/skills", why: "see the skill library" },
@@ -259,6 +281,9 @@ export const NEVER = [
   "/api/calls",
   "/api/terminal",
   "/api/usage",
+  // the person's plan and the way to their billing, which their own
+  // devices reach too: never a turn's (GitHub 357)
+  "/api/plan",
   "/api/profile",
   // a backup is the whole workspace, and a restore replaces it
   "/api/backups",
@@ -359,6 +384,9 @@ export function allows(botId: string, method: string, path: string, inRoom: InRo
   if (/^\/api\/bots\/[\w-]+\/(memory(\/topics\/[^/]+)?|artifacts)$/.test(clean)) {
     return { ok: false, reason: "an agent can only read and write its own memory and files" };
   }
+  if (/^\/api\/bots\/[\w-]+\/telegram\/send$/.test(clean)) {
+    return { ok: false, reason: "an agent can only send files to its own Telegram chat" };
+  }
   return { ok: false, reason: `${verb} ${clean} is not on the list of things an agent can do` };
 }
 
@@ -401,7 +429,7 @@ export class AgentTokens {
     return minted;
   }
 
-  mintReply(botId: string, taskId: string, now: number, sender: import("./telegram-people.ts").TelegramSender, turn: number): AgentToken {
+  mintReply(botId: string, taskId: string, now: number, sender: import("./telegram-people.ts").TelegramReplySender, turn: number): AgentToken {
     const minted: AgentToken = { token: `blr_${randomBytes(24).toString("base64url")}`, botId, taskId, expiresAt: now + TOKEN_TTL_MS, spent: 0, reply: { sender, turn } };
     this.byToken.set(minted.token, minted);
     return minted;
@@ -486,12 +514,26 @@ export class AgentTokens {
   }
 }
 
+/**
+ * How an agent with a POSIX shell runs the CLI: through BLOKS_CLI, which
+ * every turn sets (server/index.ts says why not a path). Spelled so that
+ * a shell without it stops with a sentence saying so. `node ""` runs
+ * nothing and exits 0, so a shell whose engine had kept the variable from
+ * it answered every command with a silence that read as success
+ * (GitHub 336).
+ */
+export const CLI_FROM_ENV = 'node "${BLOKS_CLI:?not set in this shell}"';
+
 /** What the agent is told, once, when it has a credential. Short on
  * purpose: a paragraph of instructions in every prompt is a paragraph
  * competing with the actual request. */
 /** The opening of a turn whose session last ran the CLI some other way.
  * `before` is the command it was told then, when that was recorded. */
 export function cliMovedNote(command: string, before?: string): string {
+  // the same variable, spelled to stop loudly: nothing has moved
+  if (before?.includes("BLOKS_CLI")) {
+    return `(Run the bloks command as \`${command}\` from now on. When this shell does not have BLOKS_CLI it stops with an error saying so, where \`${before}\` quietly did nothing.)`;
+  }
   return before
     ? `(Bloks has moved since your earlier turns. Run its command as \`${command}\` from now on. Earlier commands in this conversation that run \`${before}\` reach the copy that used to be there, so do not reuse them.)`
     : `(Run the bloks command as \`${command}\` from now on. Earlier commands in this conversation that run bloks.mjs from a written-out path may reach an older copy of Bloks that has since moved, so do not reuse them.)`;

@@ -98,8 +98,15 @@ export interface AgentNote {
   dir: "in" | "out" | "reply";
   peerId: string;
   peerName: string;
-  /** "out" only: whether it was taken, queued behind a running turn, or refused. */
+  /** "out" only: whether it was taken, queued behind a running turn, or
+   * refused. A queued one moves on to "sent" when its turn takes it, or
+   * to "failed" when it is taken back or never sent (AgentNote.record). */
   status?: "sent" | "queued" | "failed" | "uncertain";
+  /** "in" only, on words that waited behind a turn: where the sender's
+   * own record of sending them is, so that record can follow them when
+   * they go, are taken back, or are never sent (GitHub 337). Absent on
+   * words that never waited, and on any that waited before it was kept. */
+  record?: { laneId: string; id: string };
 }
 
 /** One note recall added to a turn (Message.recalled). */
@@ -190,6 +197,9 @@ export interface Message {
    * how much. A line in the conversation, not a warning, and never news:
    * it marks nothing unread and is not carried into a linked channel. */
   compaction?: { before: number | null; after: number | null; idle?: boolean };
+  /** A completed fresh-session reset: persistent transcript information,
+   * not a warning, reply, or new attention. */
+  sessionReset?: boolean;
   /** Which person wrote a user message in a shared room: a person id from
    * server/people.ts. Absent means the owner, which is every message
    * written before rooms could be shared. */
@@ -282,8 +292,10 @@ export interface Message {
    * access (GitHub 320): their turn runs as the agent's own, and its
    * answer goes to their chat. Never read from a client body. */
   telegramDelegate?: import("./telegram-people.ts").TelegramSender;
+  /** A verified owner's group destination, independent of owner trust. */
+  telegramGroup?: import("./telegram-people.ts").TelegramOwnerGroup;
   /** Explicit reply, kept in the owner's transcript with its send result. */
-  telegramSent?: { personId: string; name: string; state: "sending" | "sent" | "uncertain" | "failed" };
+  telegramSent?: { personId: string; name: string; audience?: string; state: "sending" | "sent" | "uncertain" | "failed" };
   /** Server-only: the Claude instance that accepted this queued text.
    * Null means it was accepted on another engine; absent is a legacy queue.
    * Derive command dispatch from the current text, including after edits. */
@@ -517,8 +529,9 @@ export interface BotRecord {
    * not in this list still meets the agent in a room they are in. */
   access?: AgentAccess;
   /** How hard the engine should think, where the engine has the dial.
-   * Unset means the engine's own default. */
-  effort?: "low" | "medium" | "high";
+   * Unset means the engine's own default. Kept as chosen on an engine
+   * without that level; its turns are sent the nearest it has. */
+  effort?: import("./effort.ts").Effort;
   codexSpeed?: import("./codex-speed.ts").CodexSpeed | null;
   mascotExpression?: BlokExpression | null;
   /** Set when the user uploaded their own picture for this agent. The
@@ -532,9 +545,11 @@ export interface BotRecord {
    * rate limit, no credit, an outage (server/failover.ts). Unset means
    * a turn that hits one of those just fails, as it always did. */
   backupSelection?: ModelSelection | null;
-  /** How its engine is paid for. Unset is the engine's own sign-in;
-   * "credits" runs Claude Code on the person's Bloks credits instead
-   * (server/credits.ts). Engines other than Claude Code ignore it. */
+  /** Read once at start and never written: "credits" is how an earlier
+   * version saved Claude Code running on Bloks AI, and such an agent is
+   * moved onto the Bloks engine, losing this (claudeOffBloksAi in
+   * server/bloks-ai.ts). Claude Code runs on the person's own plan or
+   * key; nothing reads this for a turn. */
   engineAccess?: "credits" | null;
   /** Where each engine thinks this conversation got to. Opaque to us;
    * handed straight back on the next turn. */
@@ -678,6 +693,19 @@ const SHAPES: BlokShape[] = [
   "invader",
 ];
 
+/** The shape an agent is drawn with. One made before shapes existed has
+ * none saved, and every client hashes its id to the same one
+ * (shapeForBot in src/lib/mascot.ts); a phone's Live Activity started
+ * from here has to name that one too, or it draws a shape the agent
+ * never had (GitHub 362). */
+export function shapeOf(bot: { id: string; name: string; shape?: string }): BlokShape {
+  if (bot.shape && (SHAPES as string[]).includes(bot.shape)) return bot.shape as BlokShape;
+  const key = bot.id ?? bot.name;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
+  return SHAPES[Math.abs(hash) % SHAPES.length];
+}
+
 /** Seed content for a new agent. The client sends role-specific copy from
  * its template library; these are the fallbacks for a blank agent. */
 export interface NewBotProfile {
@@ -706,7 +734,8 @@ export class Store {
   /** Told when messages already written change or move (`changed`, as
    * they are now), or a whole transcript goes (null), so anything built
    * from the transcripts (the recall index in server/index.ts) can check
-   * what it holds rather than be rebuilt on every write. */
+   * what it holds rather than be rebuilt on every write, and a sender's
+   * record of words that waited can follow what became of them. */
   onRewrite?: (threadId: string, changed: readonly Message[] | null) => void;
   /** Told whenever a lane is marked busy or free. A turn ends through a
    * dozen doors (an answer, Stop, an error, a turn never sent), and the
@@ -1064,11 +1093,17 @@ export class Store {
   }
 
   /** Cursors are per-lane: the thread that produced the session owns it. */
-  setResumeCursor(threadId: string, instanceId: string, cursor: unknown) {
+  setResumeCursor(threadId: string, instanceId: string, cursor: unknown, options: { invalidateReading?: boolean } = {}): boolean {
     const found = this.taskByThread(threadId);
-    if (!found) return;
+    if (!found) return false;
+    // Only an engine that binds its session before publishing readings
+    // can invalidate at this boundary. Other engines may report on open.
+    const invalidated = options.invalidateReading === true && typeof cursor === "string"
+      && cursor !== found.task.resumeCursors[instanceId] && found.task.reading?.instanceId === instanceId;
+    if (invalidated) delete found.task.reading;
     found.task.resumeCursors[instanceId] = cursor;
     this.saveBots();
+    return invalidated;
   }
 
   setTelegramExchangePending(threadId: string, pending: boolean) {

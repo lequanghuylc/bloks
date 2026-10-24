@@ -23,6 +23,17 @@ export const MAX_PENDING_TELEGRAM_PEOPLE = 20;
 export const MAX_CLOSED_TELEGRAM_PEOPLE = 100;
 export const MAX_TELEGRAM_REPLY_CHARS = 4096;
 
+/** Requests from let-in people across all of one agent's Telegram groups
+ * in an hour. Each can be a turn on the owner's engine; past this a busy
+ * group is told once and the rest is dropped before any download. */
+export const MAX_TELEGRAM_GROUP_REQUESTS_PER_HOUR = 30;
+
+/** Files one agent sends to its own Telegram chat in an hour with
+ * `bloks telegram send`, whatever started its turns. A turn's twelve
+ * changes already bound one turn; this bounds a routine or a watcher that
+ * runs every few minutes, so the person's chat does not fill with them. */
+export const MAX_TELEGRAM_SENDS_PER_HOUR = 20;
+
 /** Project instruction text in an isolated person's Claude session. */
 export const MAX_PERSON_PROJECT_BYTES = 100_000;
 

@@ -50,6 +50,16 @@ export interface ProviderSpec {
    * the engine as agentic and turns the tool loop on for its turns. Off
    * for providers where support depends on which model is loaded. */
   tools?: boolean;
+  /** Tools are the owner's call, one instance at a time: the loop runs
+   * only for an instance whose config says `tools: true`. For a host
+   * whose model is whatever someone loaded there, where only the person
+   * who set it up knows whether it calls tools. */
+  toolsOptIn?: boolean;
+  /** Whether every model this provider serves takes pictures, so a turn's
+   * attached images are sent to it as pictures. Off where it depends on
+   * the model; a custom endpoint is switched on by the person instead
+   * (CustomEndpoint.vision). */
+  vision?: boolean;
 }
 
 const OPENROUTER: ProviderSpec = {
@@ -89,6 +99,9 @@ const OPENROUTER: ProviderSpec = {
 const GEMINI: ProviderSpec = {
   kind: "gemini",
   tools: true,
+  // every Gemini model reads pictures, and its OpenAI-shaped door takes
+  // them inline as image_url data URLs
+  vision: true,
   name: "Gemini",
   url: "https://generativelanguage.googleapis.com/v1beta/openai",
   auth: "key",
@@ -254,10 +267,12 @@ export const PROVIDER_SPECS: readonly ProviderSpec[] = [
 
 /** A user-added OpenAI-compatible host. The URL and keys live in
  * config.json, not here: this is only the driver shape, so one generic
- * instance can point at any /v1 that speaks chat completions. Tools stay
- * off because support depends on whatever is loaded behind that URL. */
+ * instance can point at any /v1 that speaks chat completions. Tools are
+ * off until the person says the model behind that URL can use them,
+ * because support depends on whatever is loaded there. */
 export const CUSTOM_SPEC: ProviderSpec = {
   kind: "custom",
+  toolsOptIn: true,
   name: "Custom",
   url: "",
   auth: "key",

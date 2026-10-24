@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 
 import { DATA_DIR } from "../config.ts";
 import { lineSplitter } from "../ndjson.ts";
-import { isRefusal, outReason } from "../failover.ts";
+import { apiRefusal, isRefusal, outReason } from "../failover.ts";
 import { claudePlanUsage } from "../plan-usage.ts";
 import { callSignature } from "../repeats.ts";
 import { SessionCosts } from "./session-costs.ts";
@@ -71,8 +71,8 @@ import type {
   SendTurnInput,
 } from "../contracts.ts";
 import { newEventId, newId } from "../contracts.ts";
+import type { Effort } from "../effort.ts";
 import { appendNative } from "./native.ts";
-import { BLOKS_AI_MODEL, CLAUDE_MODEL_ENV, customHeaders, scrubFrame } from "../bloks-ai.ts";
 import { describeEarlyExit, describeSpawnError } from "./spawn-error.ts";
 import { DEFAULT_STALL_MINUTES, STOP_GRACE_MS, describeStall, isStalled, type OpenCall } from "./stall.ts";
 import { OWN_GROUP } from "../no-console.ts";
@@ -112,6 +112,9 @@ const MODELS: ModelCatalog = {
   note: "Built into this version of Bloks, not fetched: Claude Code cannot list models. The Latest entries always mean the newest model in that family, and you can type any other model id above.",
   acceptsAnyId: true,
 };
+
+/** What `--effort <level>` takes, as `claude --help` lists it. */
+const CLAUDE_EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
 
 /** Model used for the cheap one-shot calls (naming an agent, and similar).
  * Always the smallest one: nobody is reading it, they are reading its
@@ -273,22 +276,14 @@ export function isLimitNotice(text: unknown): text is string {
  * The environment a turn's CLI starts in. Exported so the rules below are
  * held by a test rather than by reading a spawn.
  *
- * On credits (SendTurnInput.credits) the CLI is pointed at the Bloks
- * credits service, which answers the Anthropic Messages API, with the
- * credits token as its bearer. The API key is set empty rather than
- * removed: Claude Code prefers a key to a token when it finds one, and an
- * empty one is how it is told there is none, so a key in this server's
- * own environment can never be what a credits turn spends.
- *
- * The service is Bloks AI, which picks the model itself, so every model
- * the CLI could name (its main one, its small one, each family's and a
- * subagent's) is the alias, and the CLI never asks for a real one or
- * prints one back. The turn's tags (what the work is, and whose) ride in
- * ANTHROPIC_CUSTOM_HEADERS, which the CLI sends on every request.
+ * Claude Code always runs on the person's own Claude plan or key: the
+ * sign-in the CLI has on this computer, or whatever its own settings and
+ * this machine's environment point it at. Nothing here gives it another
+ * base or another token.
  */
 export function turnEnvironment(
   base: NodeJS.ProcessEnv,
-  turn: Pick<SendTurnInput, "env" | "shared" | "person" | "credits" | "tags">,
+  turn: Pick<SendTurnInput, "env" | "shared" | "person">,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...base,
@@ -312,14 +307,6 @@ export function turnEnvironment(
   // that waits on its background work knows the agent has finished
   // answering what that work found (server/background-work.ts).
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1";
-  if (turn.credits) {
-    env.ANTHROPIC_BASE_URL = turn.credits.baseUrl;
-    env.ANTHROPIC_AUTH_TOKEN = turn.credits.token;
-    env.ANTHROPIC_API_KEY = "";
-    Object.assign(env, CLAUDE_MODEL_ENV);
-    const headers = customHeaders(turn.tags ?? { work: "coding" }, env.ANTHROPIC_CUSTOM_HEADERS);
-    if (headers) env.ANTHROPIC_CUSTOM_HEADERS = headers;
-  }
   return env;
 }
 
@@ -343,6 +330,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
     // resumed in place, which would write to the person's own file.
     let forkSupported = false;
     let attributedCompletionSupported = false;
+    // --effort takes all five levels from 2.1.252 on, the oldest CLI its
+    // --help was read from; where it began is not known. An older or
+    // unrecognised CLI is sent no effort, as before, rather than a flag
+    // it would refuse along with the turn.
+    let effortSupported = false;
     const readVersion = () => new Promise<string | null>((resolve) => {
       execFile(config.cli, ["--version"], { timeout: 8_000, windowsHide: true }, (error, stdout) => {
         const version = error ? null : stdout.trim();
@@ -351,6 +343,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         snapshotOffSupported = major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 257)));
         forkSupported = major >= 2;
         attributedCompletionSupported = major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 300)));
+        effortSupported = major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 252)));
         resolve(version);
       });
     });
@@ -484,9 +477,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         // rather than the system prompt the session started with.
         if (snapshotOffSupported) argv.push("--system-prompt-snapshot", "off");
       } else argv.push("--session-id", newId());
-      // on Bloks AI the model is the service's, and is asked for by alias
-      if (turn.credits) argv.push("--model", BLOKS_AI_MODEL);
-      else if (turn.model) argv.push("--model", turn.model);
+      if (turn.model) argv.push("--model", turn.model);
+      // every turn is a new process, so the effort is said on every one;
+      // left out, the CLI thinks at its own default, whatever was chosen
+      if (turn.effort && effortSupported) argv.push("--effort", turn.effort);
       // this agent's owner switched hooks off: a plugin's session-start
       // text would otherwise land in its context as if it were an order
       if (turn.noHooks || turn.person) argv.push("--settings", JSON.stringify({ disableAllHooks: true }));
@@ -620,10 +614,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       let personReady = !turn.person;
       const broker = createAskBroker({
         socketPath,
-        ...(turn.person ? { onReply: async (input: unknown) => {
+        ...(turn.person || turn.reply ? { onReply: async (input: unknown) => {
           if (sealed) throw new Error("This turn has ended.");
           if (!personReady) throw personTurnHold("Claude's startup permissions have not been verified.");
-          const response = await turn.person!.reply(input);
+          const response = await (turn.person ?? turn.reply)!.reply(input);
           if (sealed) throw new Error("This turn has ended.");
           return response;
         } } : {}),
@@ -677,7 +671,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       mcpServers.bloks = {
         command: process.execPath,
         args: [PERMISSION_HELPER, socketPath],
-        env: { ...RUN_AS_NODE, ...(turn.person ? { BLOKS_PUBLISH: personTools.join(",") } : messageTools ? { BLOKS_PUBLISH: messageTools.join(",") } : bypass ? { BLOKS_PUBLISH: askingTools.join(",") } : {}) },
+        env: { ...RUN_AS_NODE, ...(turn.person ? { BLOKS_PUBLISH: personTools.join(",") } : turn.reply ? { BLOKS_PUBLISH: [...(messageTools ?? (bypass ? askingTools : ["approve", "request_connection", "request_secret", "ask_user"])), "reply_to_sender"].join(",") } : messageTools ? { BLOKS_PUBLISH: messageTools.join(",") } : bypass ? { BLOKS_PUBLISH: askingTools.join(",") } : {}) },
       };
       allowed.push("mcp__bloks");
 
@@ -989,9 +983,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         } catch {
           return; // a log line, not protocol
         }
-        // On Bloks AI a frame never says what model ran it or what it
-        // cost, in the log or anywhere after (server/bloks-ai.ts).
-        if (turn.credits) frame = scrubFrame(frame);
         // Partial frames are deliberately unused, even for activity clocks.
         if (frame.type === "stream_event") return;
         // Anything else is the process at work, a subagent's frames too: a
@@ -1092,9 +1083,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
             // /login means nothing outside the CLI's own terminal, so it
             // becomes an error that says what to do. The wording keeps
             // "not signed in", which is what a backup engine listens for.
+            // Not a 403, though: that is the service turning this person
+            // away in a sentence of its own, which signing in again does
+            // not change, so the CLI's words stand and the notice says the
+            // service's (failover.ts errorWords).
             if (typeof frame.error === "string" && frame.error) {
               const said =
-                frame.error === "authentication_failed"
+                frame.error === "authentication_failed" && apiRefusal(text)?.status !== 403
                   ? "Claude Code is not signed in on this computer. Open Terminal, run claude and sign in, then send this again. Or pick another engine for this agent."
                   : text.trim() || `Claude Code could not run this turn (${frame.error}).`;
               // a safety refusal fails the turn too, so it is asked again
@@ -1517,7 +1512,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
 
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session" },
+        capabilities: { sessionModelSwitch: "in-session", efforts: CLAUDE_EFFORTS },
         sendTurn,
 
         steerTurn: async (threadId, text, options) => running.get(threadId)?.steer(text, options?.onDispatch) ?? false,

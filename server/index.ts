@@ -10,14 +10,14 @@ import { CLOUD_KEY, licenceFrom, licenceToUse } from "./licence.ts";
 import "./pending-restore.ts";
 import { codexTextFor, itemProgress, isProgressText, type CodexText } from "./codex-text.ts";
 import { SaidOnce, desktopNotice, noticeKey, unreadCount as desktopUnreadCount } from "./desktop-notice.ts";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, unlinkSync, watch, writeFileSync, renameSync } from "node:fs";
+import { closeSync, createWriteStream, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, unlinkSync, watch, writeFileSync, renameSync } from "node:fs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect as netConnect } from "node:net";
 import { pipeline, type Duplex } from "node:stream";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import * as attachments from "./attachments.ts";
 import { agentTurnLimit, validTurnLimit, pastAgentLimit, chainName, chainExcerpt, chainLimitText, chainAgentRefusal, MIN_AGENT_CHAIN_LIMIT, MAX_AGENT_CHAIN_LIMIT, agentTaskBudget, validTaskBudget, chainPast, taskFor, taskName, chainHoldText, MIN_TASK_BUDGET, MAX_TASK_BUDGET, type ChainBound, type ChainTask } from "./agent-chain.ts";
@@ -31,8 +31,9 @@ import { inspectionRedactor } from "./settings-redaction.ts";
 import { telegramReply, type TelegramText } from "./telegram-reply.ts";
 import { TurnProgress } from "./telegram-progress.ts";
 import { inboxState, legacyBinding, migrateTelegram, ownerPairing, pairedChats, replaceTelegramToken, telegramBotName, telegramStatus, type AgentTelegram, type TelegramConfig } from "./telegram-bots.ts";
-import { isPrivateTelegramHuman, knockTelegram, migrateTelegramPeople, sameTelegramDelegate, telegramDelegateCurrent, telegramNamesakes, telegramPersonHandle, telegramSender, telegramSenderCurrent, TELEGRAM_PEOPLE_UPGRADE, type TelegramPerson, type TelegramSender } from "./telegram-people.ts";
+import { isPrivateTelegramHuman, knockTelegram, migrateTelegramPeople, sameTelegramDelegate, telegramDelegateCurrent, telegramNamesakes, telegramPersonHandle, telegramSender, telegramSenderCurrent, telegramOwnerGroupCurrent, telegramReplySenderCurrent, telegramAudience, telegramSenderLabel, TELEGRAM_PEOPLE_UPGRADE, type TelegramPerson, type TelegramSender, type TelegramOwnerGroup, type TelegramDestination, type TelegramReplySender } from "./telegram-people.ts";
 import { CODEX_PERSON_HOLD, CODEX_PERSON_NEXT, personReplyText, personTurnHold } from "./person-turn.ts";
+import { TelegramGroupMessages, telegramQuotedContext } from "./telegram-groups.ts";
 import { isRecord, readSaved, writeFileAtomic } from "./atomic-write.ts";
 import { legacyToolTitle } from "./tool-command.ts";
 import * as box from "./box.ts";
@@ -76,15 +77,17 @@ import {
   CreditsAccount,
   EMPTY_WORDS,
   creditsAccess,
-  creditsBase,
   creditsCheckoutUrl,
   creditsEnvToken,
   serviceWords,
 } from "./credits.ts";
 import {
   BLOKS_AI_MODEL,
+  BLOKS_AI_NAME,
+  CLAUDE_ACCESS_REFUSED,
   IDENTITY_LINE,
   capValue,
+  claudeOffBloksAi,
   memberTag,
   onPersonalSignIn,
   originOf,
@@ -95,7 +98,7 @@ import {
   type CallTags,
   type WorkOrigin,
 } from "./bloks-ai.ts";
-import { type WakePreview, RelayLink, relayDeviceFor, relayInviteFor, type Wake } from "./relay-link.ts";
+import { type WakePreview, RAW_PARTS_MAX_BYTES, RelayLink, relayDeviceFor, relayInviteFor, relayTakesParts, type Wake } from "./relay-link.ts";
 import * as people from "./people.ts";
 import { mayApprove, memberCan, memberFrame, memberMessage, type MemberAction, type MemberView, type Standing as PersonStanding } from "./member-access.ts";
 import * as access from "./access.ts";
@@ -103,7 +106,7 @@ import { asWho, createMembers, savedMarkDefault, setIdentityMark, workspaceIdent
 import { instanceName, mayAnnounce, stopAnnouncing, syncAnnouncement, workspaceTag } from "./announce.ts";
 import { PLAN_LIMITS, ROOM_SHARING_WORDS, membersActive, pausedWords, roomSharingAllowed, workspaceMemberLimit } from "./plan-limits.ts";
 import { OwnerPlan } from "./owner-plan.ts";
-import { PlanAccount, planRoute, type PlanRouteDeps } from "./plan-account.ts";
+import { PlanAccount, planRoute, type Account, type PlanRouteDeps } from "./plan-account.ts";
 import { DesktopLine } from "./desktop-line.ts";
 import { MintLimiter, mintPairing, othersRoute, pairCheck } from "./other-workspaces.ts";
 import { choosableMark, defaultForKind, markRoute, markView, type MarkRouteDeps } from "./workspace-mark.ts";
@@ -121,11 +124,11 @@ import { forgetNative, slimNativeLogs, tidyNativeLogs } from "./drivers/native.t
 import { DEFAULT_STALL_MINUTES, STALL_CHOICES, stallPreface } from "./drivers/stall.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
-import { MAX_TASKS, ownerLanes, Store, type AgentNote, type BotRecord, type Message, type NewBotProfile, type RecalledNote, type TaskRecord } from "./store.ts";
+import { MAX_TASKS, ownerLanes, shapeOf, Store, type AgentNote, type BotRecord, type Message, type NewBotProfile, type RecalledNote, type TaskRecord } from "./store.ts";
 import { addressees, audienceOf, BlokStore, currentSpend, DEFAULT_SHARING, leadOf, MAX_MEMBERS, ranksForExport, type BlokRecord, type RoomSharing } from "./bloks.ts";
 import { cleanSectionOrder, placeAt, SidebarStore, sidebarView, upgradePlaces, type Placed } from "./sidebar.ts";
 import { extractTeamPlan, MAX_HIRES, normalizePlan, TEAM_PROTOCOL, type TeamPlan } from "./teams.ts";
-import { houseStyle, HOUSE_STYLE } from "./house-style.ts";
+import { houseStyle, HOUSE_STYLE, replyRules } from "./house-style.ts";
 import { captureFrame, clickAt, PAGE_KEYS, pressKey, scrollAt, typeText } from "./browser-view.ts";
 import { boxClick, boxKey, boxScroll, boxType } from "./box-hands.ts";
 import { bearerToken, isLocalRequest, isLoopbackPeer, isSameOrigin } from "./http-guard.ts";
@@ -185,6 +188,8 @@ import {
   MAX_SKILL_CHARS,
   MAX_SKILLS,
   MAX_SSE_CLIENTS,
+  MAX_TELEGRAM_GROUP_REQUESTS_PER_HOUR,
+  MAX_TELEGRAM_SENDS_PER_HOUR,
   MAX_TITLE_CHARS,
   MAX_URL_CHARS,
 } from "./limits.ts";
@@ -207,7 +212,7 @@ import {
   updateCount,
   type RegistryEntry,
 } from "./skill-registry.ts";
-import { REPORT_UNCERTAIN, type ReservedReport, type ReportResponse, AgentTokens, allows, capabilities, cliBriefing, cliMovedNote, messageHint, runsAProcess, secretHint, type AgentToken } from "./agent-cli.ts";
+import { REPORT_UNCERTAIN, type ReservedReport, type ReportResponse, AgentTokens, allows, capabilities, keptBackRefusal, CLI_FROM_ENV, cliBriefing, cliMovedNote, messageHint, runsAProcess, secretHint, type AgentToken } from "./agent-cli.ts";
 import {
   CACHE_LIFETIME_MS,
   COMPACT_AT,
@@ -271,6 +276,7 @@ import {
   type Verdict,
 } from "./goals.ts";
 import { resolveCodexSpeed, isCodexSpeed, codexSpeedRoute, REMOTE_FAST_REASON, CodexSpeedUnavailable, type CodexSpeedRefusal } from "./codex-speed.ts";
+import { clampEffort, effortLevels, effortRefusal, isEffort, type Effort } from "./effort.ts";
 import { codexSkillNames } from "./codex-skills.ts";
 import { reservedEnvName, usableSecrets } from "./env-names.ts";
 import * as discord from "./discord.ts";
@@ -394,6 +400,7 @@ import {
   vmScreenshot,
   vmStatus,
   vmStop,
+  VIEWER_ORIGIN,
 } from "./local-vm.ts";
 import { widenPath } from "./path.ts";
 import { claimDataFolder, inUseMessage } from "./data-lock.ts";
@@ -402,7 +409,7 @@ import { catchUpText, engineIsFresh, freshTurnText } from "./turn-context.ts";
 import { standingFor, type Standing, type StandingRecord } from "./standing-prompt.ts";
 import { Checkpoints, diffLines, trackable, type CheckpointRecord } from "./checkpoints.ts";
 import { redoCounts, redoPlan, takenBack, type RedoRefusal } from "./redo.ts";
-import { clockTime, Cooldowns, describeRest, failureOf, outReason, REASON_WORDS, restIsNews, RETRY_WAIT_MS, RETRY_INTERVAL_MS, STAY_MS, toldOf, type Rest, type Told } from "./failover.ts";
+import { clockTime, Cooldowns, describeRest, errorWords, failureOf, outReason, REASON_WORDS, restIsNews, RETRY_WAIT_MS, RETRY_INTERVAL_MS, STAY_MS, toldOf, type Rest, type Told } from "./failover.ts";
 import { agentReadiness, engineReadiness, readinessWarning, type Readiness } from "./engine-readiness.ts";
 import { indexMemory, indexMessages, mostOf, recallBlock, recallFrom, recallText, searchableText, termsOf, type IndexedSource, type RecallHit, type RecallMessage, type Speaker } from "./recall.ts";
 import { excerpt, IndexCache, rank, type TermIndex } from "./recall-index.ts";
@@ -541,12 +548,14 @@ import {
   revealBackup,
   shownPath,
   stageRestore,
+  stripSecrets,
   verifyBackup,
   type BackupInfo,
   type CreateOptions,
 } from "./backup.ts";
-import { emptyEnoughForMove } from "./workspace-move.ts";
-import { MoveUploads, PART_BYTES, UploadError } from "./move-upload.ts";
+import { countsDiffer, emptyEnoughForMove, heldKeyPaths, keysLeftBehind, readCounts, stillToEnter, type KeyToEnter, type MoveCounts } from "./workspace-move.ts";
+import { MoveUploads, PART_BYTES, UploadError, cleanDigest, readPartAt, sha256OfFile } from "./move-upload.ts";
+import { cleanMovedMark, clearMovedMark, readMovedMark, writeMovedMark, type MovedMark } from "./moved-mark.ts";
 import { nextDueAt } from "./next-due.ts";
 import { rangeDays, summarize, usageReport, UsageStore, USAGE_RANGES, type UsageRange } from "./usage.ts";
 import { monthBounds, monthKey, monthSpend, providerCreditNotice, readLimit, spendNotices, spendRefusal, spendStatus, MAX_LIMIT_USD, type SpendStatus } from "./spend-limits.ts";
@@ -554,7 +563,7 @@ import { PriceBook, PRICES_URL, readOwnPrice, type OwnPrice } from "./model-pric
 import { TeamLibrary } from "./team-library.ts";
 import { GALLERY_MAX_BYTES, GALLERY_URL, parseGallery, parseTeamFile, TeamFileError, teamFromManifest, writeTeamFile, type GalleryTeam } from "./team-file.ts";
 import * as artifacts from "./artifacts.ts";
-import { closeHeld, openInside, readHeld, streamHeld } from "./open-inside.ts";
+import { closeHeld, openInside, openUnder, readHeld, streamHeld } from "./open-inside.ts";
 import * as workspace from "./workspace.ts";
 import * as speech from "./speech.ts";
 import { speakable } from "./speech-text.ts";
@@ -600,6 +609,9 @@ const SECURITY_HEADERS = {
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self'",
+    // the Local VM's desktop viewer, published on loopback only; without
+    // it the viewer opens as a blank page
+    `frame-src 'self' ${VIEWER_ORIGIN}`,
     "object-src 'none'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
@@ -635,6 +647,11 @@ creditsAccess.use(credits);
 const HOSTED = isHosted();
 const VNC = HOSTED ? vncTarget(process.env.BLOKS_HOSTED_VNC) : null;
 const DOOR = HOSTED ? publicDoor(process.env.BLOKS_PUBLIC_URL) : null;
+/** This copy's work moved to another machine (server/moved-mark.ts): its
+ * routines, watchers, workflows and chat bots sit out, so nothing runs in
+ * two places. Up here, before anything that would start one is made. */
+let movedMark: MovedMark | null = readMovedMark(DATA_DIR);
+const movedAway = () => movedMark !== null;
 /** A next-due time about to be worked out again (nextDueChanged). Up here,
  * before anything can broadcast, since a broadcast is what sets it. */
 let nextDueSoon: ReturnType<typeof setTimeout> | null = null;
@@ -656,33 +673,30 @@ const CREDITS_BALANCE_TTL_MS = 30_000;
  * nothing again, or by a credits run that answers. */
 let creditsRefused: { at: number; message: string } | null = null;
 
-/** Lanes whose turn is running on credits, with the token it was given:
- * a Claude Code turn refused with a 401 renews that token for the next
- * try, and a credits turn never rests the engine it ran on. */
-const creditsLanes = new Map<string, { token: string | null; empty?: boolean; renewed?: boolean }>();
+/** Lanes whose turn is running on the Bloks engine: a turn on Bloks AI
+ * never rests the engine it ran on, and one the allowance refused says
+ * so in the service's words. */
+const creditsLanes = new Map<string, { empty?: boolean }>();
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS);
 await registry.load(instanceConfigs(cfg));
 
 const bus = new EventBus(redactSecrets, (event) =>
-  bloksAiLane(event.threadId, event.providerInstanceId, event.provider) ? scrubEvent(event) : event,
+  onBloksAi(event.providerInstanceId, event.provider) ? scrubEvent(event) : event,
 );
 
-/** Whether what runs in this lane runs on Bloks AI: the Bloks engine, or
- * Claude Code on credits (a turn started that way, or an agent set so,
- * whose quiet compactions spend it too). Its events then never say what
- * model ran or what it cost (server/bloks-ai.ts). */
-function bloksAiLane(laneId: string, instanceId?: string, provider?: string): boolean {
-  const kind = (instanceId ? registry.get(instanceId)?.driverKind : undefined) ?? provider;
-  if (kind === CREDITS_KIND) return true;
-  if (kind !== "claudeAgent") return false;
-  return creditsLanes.has(laneId) || store.botByThread(laneId)?.engineAccess === "credits";
+/** Whether what ran runs on Bloks AI, which is the Bloks engine and
+ * nothing else: Claude Code runs on the person's own plan or key. Its
+ * events then never say what model ran or what it cost
+ * (server/bloks-ai.ts). */
+function onBloksAi(instanceId?: string, provider?: string): boolean {
+  return ((instanceId ? registry.get(instanceId)?.driverKind : undefined) ?? provider) === CREDITS_KIND;
 }
 
 /** Where a Bloks AI turn is counted: under the Bloks engine, whatever ran
  * it, so the Usage view keeps it apart from an engine's own sign-in and
  * never adds it to anything priced. */
 function usageProvider(event: RuntimeEvent): string {
-  return bloksAiLane(event.threadId, event.providerInstanceId, event.provider) ? CREDITS_KIND : (event.providerInstanceId ?? event.provider);
+  return onBloksAi(event.providerInstanceId, event.provider) ? CREDITS_KIND : (event.providerInstanceId ?? event.provider);
 }
 bus.attach(registry.instances());
 
@@ -929,9 +943,10 @@ const AGENT_CLI = fileURLToPath(new URL("../bin/bloks.mjs", import.meta.url));
  * has already run, so a written-out path goes on reaching the old copy
  * long after the instructions say otherwise (GitHub 150). BLOKS_CLI is set
  * fresh on every turn, so a command that names it stays right wherever
- * Bloks goes. Not on Windows, where an engine's shell may be PowerShell,
- * which reads "$BLOKS_CLI" as a variable of its own. */
-const CLI_COMMAND = process.platform === "win32" ? `node "${AGENT_CLI}"` : `node "$BLOKS_CLI"`;
+ * Bloks goes, and one that finds it missing says so (CLI_FROM_ENV). Not
+ * on Windows, where an engine's shell may be PowerShell, which reads
+ * "$BLOKS_CLI" as a variable of its own. */
+const CLI_COMMAND = process.platform === "win32" ? `node "${AGENT_CLI}"` : CLI_FROM_ENV;
 /** Bloks as an MCP server for other AI apps (bin/bloks-mcp.mjs). */
 const MCP_CLI = fileURLToPath(new URL("../bin/bloks-mcp.mjs", import.meta.url));
 
@@ -1617,6 +1632,10 @@ function unavailableEngineMessage(instanceId: string, instance?: ProviderInstanc
   if (instance?.enabled === false) {
     return `${instance.displayName ?? instanceId} is switched off in Settings, so it starts no turns. Switch it back on, or pick another model in settings`;
   }
+  // only there while Cloud is active, which is the thing to say
+  if (!instance && instanceId === CREDITS_KIND) {
+    return `${BLOKS_AI_NAME} needs Bloks Cloud to be active here. Turn Cloud on in Settings, or pick another engine for this agent`;
+  }
   return `provider instance "${instanceId}" is unavailable, pick another model in settings`;
 }
 
@@ -1965,6 +1984,31 @@ const teamLibrary = new TeamLibrary();
 bootSelection = await defaultSelection();
 store.seedIfEmpty();
 
+// Claude Code runs on the person's own Claude plan or key. An agent an
+// earlier version had running it on Bloks AI moves onto the Bloks engine
+// now, keeping everything else, and its conversation says so once:
+// quietly, before anybody can be connected, and before anything that
+// listens to new messages (intents, the conversation moving up) is
+// attached. Never onto the person's own sign-in, even when there is one
+// (claudeOffBloksAi).
+{
+  const kindOf = (id: string) => {
+    const entry = registry.entries().find((e) => e.instanceId === id);
+    return entry?.live?.driverKind ?? entry?.shadow?.driverKind ?? null;
+  };
+  const moves = store.bots.flatMap((bot) => {
+    const move = claudeOffBloksAi(bot, kindOf, CREDITS_KIND);
+    return move ? [{ bot, move }] : [];
+  });
+  if (moves.length) {
+    store.patchBots(moves.map(({ bot, move }) => ({ id: bot.id, patch: move.patch })));
+    // written after the move, so a start cut short between the two says
+    // nothing rather than saying it twice
+    for (const { bot, move } of moves) store.appendMessage(bot.threadId, { role: "bot", kind: "notice", text: move.notice });
+    console.log(`[bloks] moved ${moves.length} agent(s) off Claude Code on Bloks AI onto the Bloks engine`);
+  }
+}
+
 /** An agent record as clients are allowed to see it. The resume cursors
  * are provider session identifiers: the server needs them to continue a
  * conversation, and nothing that renders a chat has any business holding
@@ -2226,7 +2270,8 @@ function oneModel(selection: ModelSelection): ModelSelection {
 
 function clientBot(bot: BotRecord | null) {
   if (!bot) return bot;
-  const { resumeCursors: _cursors, tasks, ...visible } = bot;
+  // the old access is read once at start and means nothing to a screen
+  const { resumeCursors: _cursors, tasks, engineAccess: _access, ...visible } = bot;
   return {
     ...visible,
     // an agent saved on the Bloks engine before it had one model shows
@@ -2270,14 +2315,17 @@ function clientBot(bot: BotRecord | null) {
       // only a reading from its current engine counts. See context.ts.
       const fill = laneContext(bot, task);
       const said = store.messagesFor(task.id);
-      // a compaction marker is not something happening in the lane, and
-      // nor is a quiet check-in
+      // Maintenance markers and quiet check-ins do not advance the lane
+      // past the last thing said to the person.
       let last = said.length - 1;
-      while (last >= 0 && (said[last].compaction || said[last].quiet)) last--;
+      while (last >= 0 && (said[last].compaction || said[last].sessionReset || said[last].quiet)) last--;
       return {
         id: task.id,
         title: task.title,
         state,
+        // The turn has ended but its changes card is still being made, so
+        // words said now wait and go right after the card (GitHub 207).
+        ...(cardsPending.has(task.id) ? { settling: true } : {}),
         ...(task.busy && codexDispatches.has(task.id) ? { codexDispatch: codexDispatches.get(task.id) } : {}),
         unread: Boolean(task.unread),
         // when this lane last had anything in it, for the sidebar's times
@@ -2633,14 +2681,11 @@ function recoverTurn(
   // belongs to the account and not to one agent. A room's turn rests it
   // too: the agent's next turn there goes to its backup.
   let out = speedRefusal ? null : outReason(evidence);
-  // Never a turn on Bloks credits. A balance belongs to the licence, so
-  // adding to it should be felt at once rather than after a rest, and
-  // resting Claude Code would idle every agent on its own sign-in for
-  // what one agent's credits said. An empty balance is not asked again;
-  // a refused token, renewed since, is.
+  // Never a turn on Bloks AI. A balance belongs to the licence, so
+  // adding to it should be felt at once rather than after a rest. An
+  // empty balance is not asked again.
   if (creditsRun) {
     if (creditsRun.empty) kind = "out";
-    else if (creditsRun.renewed && out === "signedOut") kind = "other";
     out = null;
   }
   const rest: Rest | null = out ? cooldowns.rest(used.instanceId, out, evidence) : null;
@@ -2802,7 +2847,7 @@ function whyNotBackup(backup: ModelSelection, used: ModelSelection, out: boolean
  * the reason it gave, without the full stop a sentence goes on after. */
 function lastWords(errors: string[], stopReason: string | null): string {
   const said = errors.filter((e) => e.trim()).at(-1) ?? failedTurnNotice(stopReason);
-  return redactSecrets(said).trim().slice(0, 300).replace(/[.\s]+$/, "");
+  return redactSecrets(errorWords(said)).trim().slice(0, 300).replace(/[.\s]+$/, "");
 }
 
 /** Errors held back for a turn that did not go on after all, shown
@@ -2811,8 +2856,9 @@ function lastWords(errors: string[], stopReason: string | null): string {
  * the lane says so with its dot instead of waiting to be found (the app
  * also raises a banner). */
 function showHeldErrors(bot: BotRecord, laneId: string, held: string[], why?: string) {
-  held.forEach((text, i) => {
+  held.forEach((raw, i) => {
     const last = why && i === held.length - 1;
+    const text = errorWords(raw);
     const shown = store.appendMessage(laneId, { role: "bot", kind: "notice", text: last ? sentences(text, why) : text, ...(last ? { phoneText: text } : {}) });
     broadcast({ kind: "message", threadId: laneId, message: shown });
   });
@@ -2896,7 +2942,7 @@ function cancelRecovery(bot: BotRecord, laneId: string, why: string): boolean {
  * put in one. */
 function failedTurnNotice(stopReason: string | null | undefined): string {
   const reason = (stopReason ?? "").trim();
-  if (/\s/.test(reason)) return reason.slice(0, 600);
+  if (/\s/.test(reason)) return errorWords(reason).slice(0, 600);
   return reason ? `The turn did not finish (${reason.slice(0, 80)}).` : "The turn did not finish.";
 }
 
@@ -3697,7 +3743,9 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     case "session.started":
       if (event.sessionId && event.providerInstanceId) {
-        if (!laneTelegramPerson.has(event.threadId)) store.setResumeCursor(event.threadId, event.providerInstanceId, event.sessionId);
+        if (!laneTelegramPerson.has(event.threadId) && store.setResumeCursor(event.threadId, event.providerInstanceId, event.sessionId, {
+          invalidateReading: registry.get(event.providerInstanceId)?.driverKind === "codex",
+        })) broadcast({ kind: "bot", bot: clientBot(bot) });
         cutOff.session(event.threadId, event.providerInstanceId, event.sessionId);
         noteOwnSession(event.sessionId);
       }
@@ -3715,12 +3763,20 @@ bus.subscribe((event: RuntimeEvent) => {
         // so an API model can answer with a chart like anybody else.
         const { components, text } = extractComponents(afterPlan);
         const answering = inRoom ? undefined : replyingTo.get(event.threadId);
-        if ((answering || inRoom) && text && !isProgressText(event.codexText)) spokeInTurn.add(event.threadId);
+        // Nobody is waiting on what this turn says (unaskedTurn), so the
+        // bare quiet word from it is silence: never written, never news,
+        // and the turn ends as one that said nothing (GitHub 363). A
+        // check-in's QUIET is its own, below.
+        const unasked = !inRoom && !checkInTurns.has(event.threadId) && unaskedTurn(event.threadId);
+        const silent = unasked && isQuietReply(text);
+        if ((answering || inRoom || unasked) && text && !silent && !isProgressText(event.codexText)) spokeInTurn.add(event.threadId);
+        if (silent) quietEnds.set(event.threadId, text);
+        else if (text) quietEnds.delete(event.threadId);
         // A check-in's QUIET is marked the moment it is said, so the frame
         // that carries it already says it is not news, to every client
         // that reads it, before the turn has even ended.
         const quiet = !inRoom && checkInTurns.has(event.threadId) && isQuietReply(text);
-        if (text) {
+        if (text && !silent) {
           const said = houseStyle(text);
           // The reply's interface, settled and checked, for a client
           // that draws it without parsing it (server/genui.ts).
@@ -3974,7 +4030,8 @@ bus.subscribe((event: RuntimeEvent) => {
       // a person with full access is named too, so the owner reading the
       // card in the app knows whose request it is
       const delegateAsking = laneTelegramDelegate.get(event.threadId);
-      const askedBy = telegramPerson?.name ?? delegateAsking?.name ?? (byMail ? `an email from ${mailFrom || "someone not on your list"}` : byMember ? people.person(requester!)?.name : undefined);
+      const telegramGroup = laneTelegramGroup.get(event.threadId);
+      const askedBy = (telegramPerson ? telegramSenderLabel(telegramPerson) : undefined) ?? delegateAsking?.name ?? (telegramGroup ? telegramSenderLabel(telegramGroup) : undefined) ?? (byMail ? `an email from ${mailFrom || "someone not on your list"}` : byMember ? people.person(requester!)?.name : undefined);
 
       // A decision made here (the wheel, a rule, a mode) that could not
       // reach the agent allowed nothing: the ask it answered is gone. Say
@@ -4104,6 +4161,7 @@ bus.subscribe((event: RuntimeEvent) => {
       const message = pushMessage({
         role: "bot",
         kind: "options",
+        ...(telegramGroup ? { telegramGroup } : {}),
         card: {
           // An engine's own question tool arrives labelled a permission,
           // because what it literally asks is whether it may ask. Read
@@ -4112,7 +4170,7 @@ bus.subscribe((event: RuntimeEvent) => {
           title: asking ? "Your agent has a question" : "Approval needed",
           // a question for a stranger's mail says so too: its answer is
           // emailed to them
-          subtitle: askedBy && (telegramPerson || delegateAsking || !asking || byMail) ? `${event.summary ?? ""} (${asking ? "for" : "asked for by"} ${askedBy})`.trim() : event.summary,
+          subtitle: askedBy && (telegramPerson || telegramGroup || delegateAsking || !asking || byMail) ? `${event.summary ?? ""} (${asking ? "for" : "asked for by"} ${askedBy})`.trim() : event.summary,
           options: event.choices?.length ? event.choices : asking ? [] : ["Allow", "Deny"],
           requestId: event.requestId,
           // a person, who may not then approve what they asked for
@@ -4156,7 +4214,7 @@ bus.subscribe((event: RuntimeEvent) => {
         // and can answer each one in the app.
         const delegate = laneTelegramDelegate.get(event.threadId);
         const delegateChat = delegate && !byMail && !telegramPerson && telegramDelegateCurrent(telegramBinding(bot.id), delegate) ? delegate.chatId : undefined;
-        const chatId = !runtime ? undefined : delegate ? delegateChat : ownerChat === undefined ? undefined : telegramPerson ? ownerChat : byMail || address?.generation !== runtime.generation || address.chatId !== ownerChat ? undefined : ownerChat;
+        const chatId = !runtime ? undefined : delegate ? delegateChat : ownerChat === undefined ? undefined : (telegramPerson || telegramGroup) ? ownerChat : byMail || address?.generation !== runtime.generation || address.chatId !== ownerChat ? undefined : ownerChat;
         if (chatId !== undefined && runtime) {
           const requestId = event.requestId;
           // Allow or Deny only for what is really an approval. A question
@@ -4165,14 +4223,14 @@ bus.subscribe((event: RuntimeEvent) => {
           // the rest.
           const yesOrNo = !asking;
           const waitingAsk = { requestId, botId: bot.id, options: message.card?.options ?? [], permission: yesOrNo };
-          if (telegramPerson) runtime.personAsks.set(requestId, { ...waitingAsk, chatId });
+          if (telegramPerson || telegramGroup) runtime.personAsks.set(requestId, { ...waitingAsk, chatId });
           else runtime.asks.set(chatId, waitingAsk);
           const { title, subtitle, options } = message.card ?? {};
           const forwarded = telegramCards.forward({ title, subtitle, options, requestId, botId: bot.id, generation: runtime.generation, chatId, permission: yesOrNo });
           void telegram
-            .post(runtime.token, chatId, telegramPerson ? forwarded.text.replace("Reply with your answer.", "Reply to this card with your answer, or answer it in the app.") + (options?.length ? "\n\nTap a button, or reply to this card. Ordinary messages stay in your conversation." : "") : forwarded.text, forwarded.keyboard, false, () => Boolean(currentTelegram(runtime)))
+            .post(runtime.token, chatId, (telegramPerson || telegramGroup) ? forwarded.text.replace("Reply with your answer.", "Reply to this card with your answer, or answer it in the app.") + (options?.length ? "\n\nTap a button, or reply to this card. Ordinary messages stay in your conversation." : "") : forwarded.text, forwarded.keyboard, false, () => Boolean(currentTelegram(runtime)))
             .then((messageId) => {
-              const waiting = telegramPerson ? runtime.personAsks.get(requestId) : runtime.asks.get(chatId);
+              const waiting = telegramPerson || telegramGroup ? runtime.personAsks.get(requestId) : runtime.asks.get(chatId);
               if (waiting?.requestId === requestId) waiting.messageId = messageId;
               // answered before Telegram said which message it is
               const late = messageId === undefined ? undefined : telegramCards.sent(requestId, messageId);
@@ -4277,10 +4335,9 @@ bus.subscribe((event: RuntimeEvent) => {
       break;
     }
     case "runtime.error": {
-      // A turn on Bloks credits: an empty balance is said in the service's
-      // own words and offered more of, and a Claude Code turn whose token
-      // was refused renews it now, so the try after the wait has the new
-      // one (the Bloks engine renews its own, inside the call).
+      // A turn on Bloks AI: an empty balance is said in the service's own
+      // words and offered more of (the engine renews a refused token
+      // itself, inside the call).
       const creditsRun = creditsLanes.get(event.threadId);
       if (creditsRun) {
         const reason = event.credits === "empty" ? "credit" : outReason(event.message);
@@ -4291,13 +4348,10 @@ bus.subscribe((event: RuntimeEvent) => {
           // turn's end alike
           Object.assign(event, { message: words, credits: "empty" });
           noteCreditsRefused(words);
-        } else if (reason === "signedOut" && creditsRun.token && !creditsRun.renewed) {
-          creditsRun.renewed = true;
-          void credits.refresh(creditsRun.token).catch(() => null);
         }
       }
       const person = laneTelegramPerson.get(event.threadId);
-      if (person) tellTelegramPersonHeld(person, event.message);
+      if (person) tellTelegramPersonHeld(person, errorWords(event.message));
       // kept for the end of the turn, which decides whether the engine
       // ran out (server/failover.ts)
       const said = turnErrors.get(event.threadId) ?? [];
@@ -4359,8 +4413,9 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       // Not a failed tool call: the turn itself could not run. It gets a
       // readable notice rather than a truncated mono chip, because the
-      // message is usually instructions for the user.
-      pushMessage({ role: "bot", kind: "notice", text: event.message.slice(0, 600) });
+      // message is usually instructions for the user, and an API's
+      // refusal is said in the service's own sentence, not its JSON.
+      pushMessage({ role: "bot", kind: "notice", text: errorWords(event.message).slice(0, 600) });
       // Out of credit, over a limit, signed out: nothing in this lane moves
       // until the person does something, so the lane says so with its dot
       // instead of waiting to be found (the app also raises a banner).
@@ -4374,6 +4429,10 @@ bus.subscribe((event: RuntimeEvent) => {
       // Capture before owner settlement or queue dispatch can replace this lane.
       const endingReply = replyNotifications.take(event.threadId, event.turnId);
       const endingCheckIn = checkInTurns.has(event.threadId);
+      // The bare quiet word this turn ended on, kept out of the chat. What
+      // reads a turn's last words (settleOwners) still reads it.
+      const quietWord = quietEnds.get(event.threadId);
+      quietEnds.delete(event.threadId);
       codexDispatches.delete(event.threadId);
       const command = commandTurns.has(event.threadId);
       // a turn that failed on its length is asked again once it is folded
@@ -4390,7 +4449,7 @@ bus.subscribe((event: RuntimeEvent) => {
       usage.recordTurn(bot.id, usageProvider(event), priced.cost, undefined, event.ok !== false, priced.estimated, bookedTo);
       const spent = turnTokens.get(event.threadId);
       turnTokens.delete(event.threadId);
-      if (bookedTo && !bloksAiLane(event.threadId, event.providerInstanceId, event.provider)) {
+      if (bookedTo && !onBloksAi(event.providerInstanceId, event.provider)) {
         workspacePeople.limits.recordSpend(bookedTo, turnCost(event.cost, spent));
       }
       // only solo lanes tally; a room's spend belongs to no one lane.
@@ -4403,7 +4462,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // cap, booked against whoever asked for it
       // Not a Bloks AI turn, which has no price here to book: a team's
       // Bloks AI is capped per member by the service instead.
-      if (spoke && spoke !== event.threadId && bloks.get(spoke)?.sharing && !bloksAiLane(event.threadId, event.providerInstanceId, event.provider)) {
+      if (spoke && spoke !== event.threadId && bloks.get(spoke)?.sharing && !onBloksAi(event.providerInstanceId, event.provider)) {
         chargeRoom(spoke, laneRequester.get(event.threadId) ?? "owner", turnCost(event.cost, spent));
       }
       // A turn an engine rebuild cut off is picked up on the new engine.
@@ -4457,7 +4516,7 @@ bus.subscribe((event: RuntimeEvent) => {
         botId: bot.id,
         laneId: event.threadId,
         instanceId: ranOn.instanceId,
-        model: bloksAiLane(event.threadId, event.providerInstanceId, event.provider) ? BLOKS_AI_MODEL : ranOn.model,
+        model: onBloksAi(event.providerInstanceId, event.provider) ? BLOKS_AI_MODEL : ranOn.model,
         ok: event.ok !== false,
         ...(event.ok === false && outReason([...(turnErrors.get(event.threadId) ?? []), event.stopReason ?? ""].join("\n"))
           ? { out: true }
@@ -4573,7 +4632,7 @@ bus.subscribe((event: RuntimeEvent) => {
       // the failure in its own words, for a routine's or a workflow's
       // incident, where the run itself keeps only the stop reason
       if (!handedOver && event.ok === false) failedWords.set(event.threadId, lastWords(endedErrors, event.stopReason ?? null));
-      if (!handedOver) settleOwners(bot, event.threadId, { ok: event.ok !== false, why: event.preInputRefusal?.reason ?? event.stopReason ?? null, quiet: quietRun, ...(event.preInputRefusal ? { unsent: true } : {}) });
+      if (!handedOver) settleOwners(bot, event.threadId, { ok: event.ok !== false, why: event.preInputRefusal?.reason ?? event.stopReason ?? null, quiet: quietRun, ...(event.preInputRefusal ? { unsent: true } : {}), ...(quietWord !== undefined ? { said: quietWord } : {}) });
       failedWords.delete(event.threadId);
       if (mailQueue.length) setTimeout(() => void drainMail(), 0);
       // whatever the agent was given to act with is spent
@@ -4583,9 +4642,12 @@ bus.subscribe((event: RuntimeEvent) => {
       const codexAgentTurn = event.provider === "codex" && Boolean(origin && origin.turnId === event.turnId && origin.origin === "agent");
       const quietAgentTurn =
         (replyingTo.has(event.threadId) || codexAgentTurn) && (event.ok !== false || (codexAgentTurn && event.stopReason === "interrupted")) && !spokeInTurn.has(event.threadId);
+      // So does one nobody asked for that ended on the bare quiet word
+      // with nothing else said, unless the person has joined it since.
+      const quietEnd = quietWord !== undefined && event.ok !== false && !spokeInTurn.has(event.threadId) && !turnsForYou.has(event.threadId);
       spokeInTurn.delete(event.threadId);
       if (origin?.turnId === event.turnId) codexOrigins.delete(event.threadId);
-      if (quietAgentTurn || quietRun) {
+      if (quietAgentTurn || quietRun || quietEnd) {
         // nothing new here
       } else if (bot.tasks.some((t) => t.id === event.threadId)) store.markLane(bot.id, event.threadId, true);
       else store.patchBot(bot.id, { unread: true });
@@ -4909,7 +4971,12 @@ store.onAppend = (threadId, message) => {
 // A message changed after it was written: the same words (a reaction, a
 // tool's result, a queued message going) keep the index, new words join
 // it, and an edit or a deletion drops it to be built again next search.
+// Words one agent left waiting for another leave the queue through a
+// dozen doors (delivered, taken back, deleted, not sent after a restart),
+// so the sender's record of them follows them from here (settleRecord)
+// rather than from each door.
 store.onRewrite = (threadId, changed) => {
+  for (const message of changed ?? []) settleRecord(message);
   const index = recallIndexes.peek(threadId);
   if (!index) return;
   if (!changed || changed.some((m) => !index.update(m.id, m.at, searchableText(m)))) recallIndexes.drop(threadId);
@@ -5515,19 +5582,24 @@ function commandFor(text: string, instanceId: string): string | null {
 }
 function queuedCommand(laneId: string, item: { messageId?: string }): string | undefined {
   const m = item.messageId ? store.messagesFor(laneId).find((m) => m.id === item.messageId) : undefined;
-  if (!m?.text || m.deleted || m.agent || (m.via && m.via !== "routine") || m.commandInstance === null) return undefined;
+  if (!m?.text || m.deleted || m.agent || m.telegramGroup || m.telegramPerson || (m.via && m.via !== "routine") || m.commandInstance === null) return undefined;
   const accepted = m.commandInstance ?? (store.botByThread(laneId) ? acceptingNative(store.botByThread(laneId)!, laneId) : undefined);
   return accepted && commandFor(m.text, accepted) ? accepted : undefined;
 }
 /** One ordinary prefix or one command. The remaining words stay in FIFO order. */
-function queuedSegment<T extends { messageId?: string; text?: string; requester?: string; telegramPerson?: TelegramSender }>(laneId: string, items: T[], continuation = false, requester?: string) {
+function queuedSegment<T extends { messageId?: string; text?: string; requester?: string; telegramPerson?: TelegramSender; telegramGroup?: TelegramOwnerGroup }>(laneId: string, items: T[], continuation = false, requester?: string) {
   const alive = items.filter((item) => steerWords(laneId, item) !== null);
   // A person with full access runs as the owner but is a sender of their
   // own: their words and anyone else's are never one burst.
   const said = (item: T) => item.messageId ? store.messagesFor(laneId).find((m) => m.id === item.messageId) : undefined;
   const trust = (item: T) => item.telegramPerson?.requester ?? item.requester ?? said(item)?.telegramPerson?.requester ?? delegateTrust(said(item)?.telegramDelegate) ?? "owner";
   const wanted = continuation ? requester ?? "owner" : alive[0] ? trust(alive[0]) : "owner";
-  const split = alive.findIndex((item) => trust(item) !== wanted);
+  const audience = (item: T) => {
+    const message = item.messageId ? store.messagesFor(laneId).find((m) => m.id === item.messageId) : undefined;
+    return telegramAudience(item.telegramPerson ?? message?.telegramPerson ?? item.telegramGroup ?? message?.telegramGroup);
+  };
+  const wantedAudience = continuation ? laneAudience.get(laneId) ?? "private" : alive[0] ? audience(alive[0]) : "private";
+  const split = alive.findIndex((item) => trust(item) !== wanted || audience(item) !== wantedAudience);
   const prefix = split < 0 ? alive : alive.slice(0, split);
   const first = prefix.findIndex((item) => queuedCommand(laneId, item));
   const size = first < 0 ? prefix.length : first === 0 && !continuation ? 1 : first;
@@ -5650,6 +5722,9 @@ async function startClaimedTurn(
      * wants the cloud computer regardless of the agent's own setting. */
     computerOverride?: "cloud" | "local" | "off";
     admission?: DirectAdmission;
+    /** Told the words a drain or a pause writes down to wait instead of
+     * starting this turn, as sendUserMessage is told (tieRecord). */
+    onQueued?: (laneId: string, waiting: Message) => void;
     /** The user message is already in the transcript (a drained queue);
      * do not append it again. */
     presetMessage?: boolean;
@@ -5690,6 +5765,7 @@ async function startClaimedTurn(
      * Telegram (laneTelegramDelegate). A turn going on with another reads
      * it from the conversation instead. */
     telegramDelegate?: TelegramSender;
+    telegramGroup?: TelegramOwnerGroup;
     /** This turn picks up one that was cut off (server/cut-off.ts). */
     carriedOn?: boolean;
     /** This turn asks again what the lane's last turn was asked, after
@@ -5728,9 +5804,12 @@ async function startClaimedTurn(
   if (opts.telegramBinding && !telegramConnectionCurrent(opts.telegramBinding)) throw new Error("This agent's Telegram connection changed before the message could start.");
   const personRequester = opts.requester ?? (opts.fallback || opts.retry || opts.carriedOn ? askedLast.get(opts.taskId ?? bot.threadId) : undefined);
   const personSource = opts.telegramPerson ?? (personRequester?.startsWith("telegram:") ? senderForRequester(personRequester, opts.taskId ?? bot.threadId) : undefined);
-  if (opts.carriedOn && !personSource) {
+  const groupSource = opts.telegramGroup ?? (opts.fallback || opts.retry || opts.carriedOn ? groupForLane(opts.taskId ?? bot.threadId) : undefined);
+  if (groupSource && (groupSource.botId !== botId || !telegramOwnerGroupCurrent(telegramBinding(botId), groupSource))) throw new Error("The owner group destination is no longer valid. It was not recovered as private owner input.");
+  if (groupSource) opts = { ...opts, telegramGroup: groupSource };
+  if (opts.carriedOn && !personSource && !groupSource) {
     const last = [...store.messagesFor(opts.taskId ?? bot.threadId)].reverse().find((m) => m.role === "user" && !m.deleted && !m.queued);
-    if (last?.telegramPerson || (last?.fromTelegram && (!last.telegramBinding || !telegramConnectionCurrent(last.telegramBinding)))) throw new Error("The old Telegram turn has no current verified sender. It was not recovered as the owner.");
+    if (last?.telegramPerson || last?.telegramGroup || (last?.fromTelegram && (!last.telegramBinding || !telegramConnectionCurrent(last.telegramBinding)))) throw new Error("The old Telegram turn has no current verified sender. It was not recovered as the owner.");
   }
   if (personRequester?.startsWith("telegram:") && !personSource) throw new Error("The Telegram person's identity could not be recovered. This turn was not run as the owner.");
   if (personSource && (!store.bot(personSource.botId) || personSource.botId !== botId || !telegramSenderCurrent(telegramBinding(botId), personSource))) throw new Error("This Telegram person was removed or their connection changed before the message could start.");
@@ -5824,10 +5903,10 @@ async function startClaimedTurn(
       // already in the conversation, or a note from Bloks itself, so it
       // waits as a note: in memory, like every note in the queue
       const entry = steerQueues.get(task.id) ?? { botId: bot.id, items: [] };
-      entry.items.push({ text, ...(opts.chain ? { chain: opts.chain } : {}), ...(opts.chainTask ? { chainTask: opts.chainTask } : {}) });
+      entry.items.push({ text, ...(opts.chain ? { chain: opts.chain } : {}), ...(opts.chainTask ? { chainTask: opts.chainTask } : {}), ...(personSource ? { telegramPerson: personSource, requester: personSource.requester } : {}), ...(groupSource ? { telegramGroup: groupSource } : {}) });
       steerQueues.set(task.id, entry);
     } else {
-      queueOnLane(bot.id, task.id, text, { replyTo: opts.replyTo, from: opts.from, routine: opts.routine, personal: opts.byYou === true && opts.personal !== false, chain: opts.chain, chainTask: opts.chainTask, admission: opts.admission });
+      queueOnLane(bot.id, task.id, text, { replyTo: opts.replyTo, from: opts.from, routine: opts.routine, personal: opts.byYou === true && opts.personal !== false, chain: opts.chain, chainTask: opts.chainTask, admission: opts.admission, onQueued: opts.onQueued, ...(opts.fromTelegram ? { fromTelegram: true } : {}), ...(opts.telegramBinding ? { telegramBinding: opts.telegramBinding } : {}), ...(personSource ? { telegramPerson: personSource } : {}), ...(groupSource ? { telegramGroup: groupSource } : {}) });
     }
     return;
   }
@@ -5846,6 +5925,7 @@ async function startClaimedTurn(
       queueOnLane(bot.id, task.id, text, {
         replyTo: opts.replyTo, from: opts.from, routine: opts.routine, personal: opts.byYou === true && opts.personal !== false,
         chain: opts.chain, chainTask: opts.chainTask, fromTelegram: opts.fromTelegram, telegramBinding: opts.telegramBinding, waitsFor: "pause", waitsUntil: pause.until,
+        onQueued: opts.onQueued,
       });
       sayPaused(task.id, pause.id, `${pausedWhy(bot, pause)} What is said to it here waits, and goes on its own then.`);
       return;
@@ -5882,7 +5962,7 @@ async function startClaimedTurn(
 
   const own = bot.modelSelection;
   const ownRest = cooldowns.of(own.instanceId);
-  const directCommandInstance = !personSource && !opts.from && !opts.presetMessage ? acceptingNative(bot, task.id) : undefined;
+  const directCommandInstance = !personSource && !groupSource && !opts.from && !opts.presetMessage ? acceptingNative(bot, task.id) : undefined;
   // Keep Claude's existing room/direct-command behavior. Codex's new
   // command path is for the person's own input in an agent lane.
   const directCommandAllowed = registry.get(directCommandInstance ?? "")?.driverKind === "claudeAgent" || (opts.byYou && opts.personal !== false && !opts.roomId);
@@ -5913,6 +5993,7 @@ async function startClaimedTurn(
   if (bot.solo && bot.solo.by !== "owner" && !workspacePeople.limits.engineAllowed(bot.solo.by, selection.instanceId)) {
     throw Object.assign(new Error(`${bot.name} is set to an engine you may not use in this workspace. Pick another in its settings, or ask the owner or an admin.`), { status: 403 });
   }
+  if (groupSource && !runsAProcess(instance.driverKind) && !instance.adapter.capabilities.replyToSender) throw new Error("This engine cannot reply in Telegram groups. Choose an engine with reply tools or a process in the agent settings.");
   // The pause door above, asked of the engine actually chosen: no try of
   // a resting engine and no queued command reaches one that is paused.
   const pausedHere = pausedOn(bot, selection);
@@ -6009,6 +6090,8 @@ async function startClaimedTurn(
   const checkIn = (Boolean(opts.routine?.quiet) || Boolean(opts.incidentQuiet)) && !blok && !command;
   if (checkIn) checkInTurns.add(task.id);
   else checkInTurns.delete(task.id);
+  // a quiet word from a turn that never ended is not this one's
+  quietEnds.delete(task.id);
   if (opts.incidentNotes?.length) deskTurns.set(task.id, opts.incidentNotes);
   // what it was asked, rooms included, for an incident's one retry
   lastAsked.set(task.id, {
@@ -6080,6 +6163,7 @@ async function startClaimedTurn(
       ...(opts.fromTelegram ? { fromTelegram: true } : {}),
       ...(opts.telegramBinding ? { telegramBinding: opts.telegramBinding } : {}),
       ...(personSource ? { telegramPerson: personSource } : {}),
+      ...(groupSource ? { telegramGroup: groupSource } : {}),
     });
     opts.admission?.accepted("sent");
     if (opts.telegramBinding) telegramInputIds.push(userMessage.id);
@@ -6144,7 +6228,7 @@ async function startClaimedTurn(
       // what they said and what was sent to them. The owner's words, the
       // agent's answers to the owner and the lane's summary of both stay
       // the owner's. The owner's next turn still hears the person's.
-      .filter((m) => !personSource || personsOwn(m, personSource.personId))
+      .filter((m) => !personSource || personsOwn(m, personSource))
       .map((m) => ({
         role: m.role === "user" ? ("user" as const) : ("assistant" as const),
         // in a team conversation several people write: each line says whose
@@ -6183,11 +6267,15 @@ async function startClaimedTurn(
     !opts.rehearsal &&
     (Boolean(task.team) || roomId !== task.id) &&
     (messageAsker === "owner" || people.person(messageAsker)?.role === "admin");
+  // An API engine that runs Bloks' tool loop on this instance: a catalog
+  // engine that always does, or a custom host its owner switched tools
+  // on for. The driver knows which, so it is asked rather than the spec.
+  const apiTools = instance.adapter.capabilities.toolLoop === true;
   // and how it does that on this engine: a tool where the engine has
   // tools of Bloks', the command line where it has a shell, else not at all
   const messageRoute: "tool" | "cli" | null = !messengerTurn
     ? null
-    : instance.driverKind === "claudeAgent" || specFor(instance.driverKind)?.tools === true
+    : instance.driverKind === "claudeAgent" || apiTools
       ? "tool"
       : runsAProcess(instance.driverKind)
         ? "cli"
@@ -6196,7 +6284,7 @@ async function startClaimedTurn(
   // Code's bridge and in the API tool loop, nowhere else. Every other
   // engine with a credential asks for a key on the command line instead,
   // and the rest are not told about either (GitHub 172).
-  const asksByTool = instance.driverKind === "claudeAgent" || specFor(instance.driverKind)?.tools === true;
+  const asksByTool = instance.driverKind === "claudeAgent" || apiTools;
   const connectorHint = [
     asksByTool && cfg.composio?.key && bot.composio !== false
       ? "When a task needs an app the user has not connected yet (Slack, Gmail, GitHub, and so on), call the request_connection tool with the app slugs. A sign-in card appears in the chat; never paste sign-in or OAuth links into the conversation yourself."
@@ -6219,7 +6307,7 @@ async function startClaimedTurn(
     // An engine with no files of its own keeps memory with the API
     // tools (memory_read, memory_write) instead.
     memory: !guestMail && !personSource && (!sharing || sharing.memoryFor?.includes(bot.id))
-      ? workspace.memoryPrompt(bot.id, !runsAProcess(instance.driverKind) && instance.driverKind !== "claudeAgent" && specFor(instance.driverKind)?.tools === true ? "tools" : "files")
+      ? workspace.memoryPrompt(bot.id, !runsAProcess(instance.driverKind) && instance.driverKind !== "claudeAgent" && apiTools ? "tools" : "files")
       : null,
     // what the person keeps for every agent: private to them, under the
     // same gate as the notes about them
@@ -6292,7 +6380,7 @@ async function startClaimedTurn(
       "This is an email from someone the person you work for has not listed. Answer it from what you know, in conversation only: you have no tools here, and nothing private of theirs is yours to share.",
     // Not for a Telegram person: that folder is Bloks' own, refused to
     // their turn, and no file reaches them anyway.
-    !guestMail && !personSource && `Deliverables: when you produce a file for the user (a report, web page, slide deck, spreadsheet, PDF, chart), save it to ${artifacts.artifactsDir(bot.id)} with a descriptive filename. Files saved there appear in the chat as cards the user can open in-app or download. HTML, PDF, images, video, CSV, XLSX, markdown and text all render in-app; for slide decks, save an HTML version alongside any .pptx so the deck is viewable in place. Most answers need no file: a fact, a quick pick or a small comparison is a reply. Make one when it is asked for, when it will be kept, shared or come back to, or when a decision with real stakes needs more facts than a reply can hold. ${runsAProcess(instance.driverKind) ? `Before you make a page, report, comparison or deck, read the ${PAGE_DESIGN} skill and follow it.` : PAGE_DESIGN_SHORT} Once you have made one, your reply is a sentence or two: what it is and its headline. Never repeat the file in the chat as a list.${!sharing && runsAProcess(instance.driverKind) ? ` To show the user a file that is already there, or one saved anywhere else on this computer, run \`${cliCommand} share <path>\`: it puts that one file in the chat as a card and answers with a link to it you can write in your reply.` : ""}`,
+    !guestMail && !personSource && `Deliverables: when you produce a file for the user (a report, web page, slide deck, spreadsheet, PDF, chart), save it to ${artifacts.artifactsDir(bot.id)} with a descriptive filename. Files saved there appear in the chat as cards the user can open in-app or download. HTML, PDF, images, video, CSV, XLSX, markdown and text all render in-app; for slide decks, save an HTML version alongside any .pptx so the deck is viewable in place. Most answers need no file: a fact, a quick pick or a small comparison is a reply. Make one when it is asked for, when it will be kept, shared or come back to, or when a decision with real stakes needs more facts than a reply can hold. ${runsAProcess(instance.driverKind) ? `Before you make a page, report, comparison or deck, read the ${PAGE_DESIGN} skill and follow it. In short: ${PAGE_DESIGN_SHORT}` : PAGE_DESIGN_SHORT} Once you have made one, your reply is a sentence or two: what it is and its headline. Never repeat the file in the chat as a list.${!sharing && runsAProcess(instance.driverKind) ? ` To show the user a file that is already there, or one saved anywhere else on this computer, run \`${cliCommand} share <path>\`: it puts that one file in the chat as a card and answers with a link to it you can write in your reply.` : ""}${!sharing && runsAProcess(instance.driverKind) && telegramBinding(bot.id)?.enabled && telegramBinding(bot.id)?.ownerChatId !== undefined ? ` Your Telegram bot is paired with the person. To send them a file there too, run \`${cliCommand} telegram send <path> [--caption "<words>"]\`; a turn they started on Telegram already sends what you saved back to them.` : ""}`,
     HOUSE_STYLE,
     // In a room, who else is here and who decides. Solo chats stay silent
     // about all of it.
@@ -6323,7 +6411,7 @@ async function startClaimedTurn(
     deskTurns.delete(task.id);
   };
   const stillHeld = wheel.heldBy(bot.id);
-  if (personSource && !telegramSenderCurrent(telegramBinding(botId), personSource)) {
+  if ((personSource && !telegramSenderCurrent(telegramBinding(botId), personSource)) || (groupSource && !telegramOwnerGroupCurrent(telegramBinding(botId), groupSource))) {
     unmark();
     throw new Error("This Telegram person was removed while the turn was being prepared.");
   }
@@ -6348,6 +6436,9 @@ async function startClaimedTurn(
   // record of the turn it picks up).
   const requester = opts.requester ?? (opts.fallback || opts.retry || opts.carriedOn ? askedLast.get(task.id) : undefined) ?? turnPerson ?? "owner";
   laneRequester.set(task.id, requester);
+  laneAudience.set(task.id, telegramAudience(personSource ?? groupSource));
+  if (groupSource) laneTelegramGroup.set(task.id, groupSource);
+  else laneTelegramGroup.delete(task.id);
   // somebody else's turn in a mail's lane: what it says is not emailed
   if (!opts.answersMail && !opts.carriedOn && !opts.fallback && !opts.retry) mailAnswering.delete(task.id);
   askedLast.set(task.id, requester);
@@ -6594,38 +6685,26 @@ async function startClaimedTurn(
         integrations.browser = { profileDir };
       }
 
-      // Bloks AI (server/credits.ts). The Bloks engine asks for its token
-      // itself; Claude Code is handed one when the agent's access says
-      // credits. A licence that lapsed is said here rather than quietly
-      // running the agent on its own sign-in instead, which is not what
-      // the person chose.
-      const claudeOnCredits = instance.driverKind === "claudeAgent" && bot.engineAccess === "credits";
-      const onBloksAi = claudeOnCredits || instance.driverKind === CREDITS_KIND;
-      let creditsToken: string | null = null;
-      if (claudeOnCredits) {
-        if (!creditsOffered(cfg)) {
-          throw new Error(`${bot.name} runs on Bloks AI, which needs Bloks Cloud to be active here. Turn Cloud on in Settings, or switch ${bot.name} to its own sign-in.`);
-        }
-        creditsToken = await credits.token();
-        if (!creditsToken) throw new Error(credits.problem ?? "Bloks AI is not connected yet.");
-      }
+      // Bloks AI (server/credits.ts) is the Bloks engine, which asks for
+      // its token itself. Claude Code runs on the person's own plan or
+      // key, and is never handed one.
+      const bloksAiTurn = instance.driverKind === CREDITS_KIND;
       // What the service is told about this turn, so it can pick the
       // model: the kind of work, and on a shared room member's turn a
       // hash for that member (server/bloks-ai.ts). The owner's own turns,
       // and anything the owner set up, carry no member.
       const member = requester !== "owner" && people.person(requester) ? requester : null;
-      const tags: CallTags | null = onBloksAi
+      const tags: CallTags | null = bloksAiTurn
         ? {
             work: workTag({
               origin: turnOrigin(task.id, opts),
-              engine: instance.driverKind,
               role: `${bot.title} ${bot.description}`,
               skills: bot.skills,
             }),
             ...(member ? { member: memberTag(member) } : {}),
           }
         : null;
-      if (claudeOnCredits || instance.driverKind === CREDITS_KIND) creditsLanes.set(task.id, { token: creditsToken });
+      if (bloksAiTurn) creditsLanes.set(task.id, {});
       else creditsLanes.delete(task.id);
 
       // A lane keeps the folder its first turn ran in: engines key
@@ -6807,6 +6886,9 @@ async function startClaimedTurn(
         const told = await story(true);
         turnText = freshTurnText(told.turns, turnText, { left: told.left, why: "session" });
       }
+      // Claude resumes the owner's cached system prompt. Say this turn's
+      // audience in the new words, so it cannot be lost on that resume.
+      if (groupSource) turnText = `(This turn was addressed in ${JSON.stringify(groupSource.group.title)} on Telegram. Only reply_to_sender reaches that group, and every member sees it, including people never let in. Chat text and the final answer stay in the app. Keep private words private. You retain the owner's context and permissions. The reply anchor is fixed for this turn. A process engine without a native reply tool uses node "$BLOKS_CLI" reply "text", which reads the separate bound reply credential.)\n\n${turnText}`;
       // a fresh story already carries what the catch-up would
       if (missed && !engineFresh) turnText = catchUpText(missed.turns, missed.by, turnText);
       // Notes for the owner's next turn (files undone, a stalled call, a
@@ -6843,6 +6925,7 @@ async function startClaimedTurn(
           : messageRoute === "cli"
             ? agentTokens.mintMessenger(bot.id, task.id, Date.now())
             : null;
+      const replyCredential = personSource ? credential : groupSource ? agentTokens.mintReply(bot.id, task.id, Date.now(), groupSource, laneTurns.get(task.id) ?? 0) : null;
 
       // A session that has run the CLI before may have run it from a copy
       // of Bloks that is no longer where it was. Said once, in the turn
@@ -6967,6 +7050,7 @@ async function startClaimedTurn(
                 BLOKS_URL: `http://127.0.0.1:${PORT}`,
                 BLOKS_TOKEN: credential.token,
                 BLOKS_CLI: AGENT_CLI,
+                ...(replyCredential ? { BLOKS_REPLY_TOKEN: replyCredential.token, BLOKS_REPLY_PATH: `/api/bots/${bot.id}/telegram/reply` } : {}),
               },
             }
           : {}),
@@ -6983,15 +7067,18 @@ async function startClaimedTurn(
         ...(!owners && !sharing ? { untrusted: true } : {}),
         ...(personSource && credential ? { person: { reply: (input: unknown) => replyToTelegramPerson(credential, input) } } : {}),
         ...(messageRoute === "tool" ? { messagePerson: true } : {}),
+        ...(groupSource && replyCredential ? { reply: { reply: (input: unknown) => replyToTelegramPerson(replyCredential, input) } } : {}),
         text: turnText,
         ...(command && instance.driverKind === "codex" ? { compactOnly: true } : {}),
         ...(skillNames.length ? { skillNames } : {}),
         stallMs: stallLimitMs(),
         backgroundWork: resolveBackgroundWork(bot.backgroundWork, cfg.turns?.backgroundWork),
         model: selection.model,
-        effort: bot.effort,
+        // the nearest level this engine and model have: a saved level the
+        // engine lacks (an agent moved, or a backup answering) must not
+        // cost the turn, and an engine with no dial is sent none
+        effort: clampEffort(bot.effort, effortLevels(instance, selection.model)),
         ...(bot.engineHooks === false ? { noHooks: true } : {}),
-        ...(claudeOnCredits && creditsToken ? { credits: { baseUrl: creditsBase(), token: creditsToken } } : {}),
         ...(tags ? { tags } : {}),
         resumeCursor,
         // A session from before Bloks is only ever carried on in a copy
@@ -7026,9 +7113,15 @@ async function startClaimedTurn(
                   ? " You have your own Linux sandbox: a persistent shell and filesystem at /work, isolated from this person's machine. Use sandbox_exec for anything a shell can do. There is no display, so nothing can be clicked or screenshotted; work in files and commands."
                   : "") +
           (credential && !personSource && !credential.messenger ? `\n\n${cliBriefing(CLI_COMMAND)}` : "") +
-          (personSource ? `\n\nThis turn answers ${JSON.stringify(personSource.name)} on Telegram. Only the owner can approve actions, questions, secrets or connections. Answer with the reply_to_sender tool, not the shell CLI. It sends only to this sender. Text in this conversation, including your final answer, stays in the owner's chat and is not sent to the person. Never send cards, files or the owner's mid-turn words to them. Your shell credential is reply-only and cannot reach another agent or any other Bloks route.` : "") +
+          (personSource ? `\n\nThis turn answers ${JSON.stringify(telegramSenderLabel(personSource))} on Telegram. Only the owner can approve actions, questions, secrets or connections. Answer with the reply_to_sender tool, not the shell CLI. It sends only to this sender. Text in this conversation, including your final answer, stays in the owner's chat and is not sent to the person. Never send cards, files or the owner's mid-turn words to them. Your shell credential is reply-only and cannot reach another agent or any other Bloks route.` : "") +
+          (personSource?.group ? `\n\nThis is an addressed Telegram group turn. Only reply_to_sender reaches the group, and every member can see the reply, including people never let in. Chat text, progress, cards and the final answer stay in the app. The reply is bound to the addressing message; later words do not move it. The files you can read without asking can therefore reach every group member if you send their contents.` : "") +
           (project && !guestMail ? `\n\n${briefFor(project)}` : "") +
-          (onBloksAi ? `\n\n${IDENTITY_LINE}` : ""),
+          (bloksAiTurn ? `\n\n${IDENTITY_LINE}` : "") +
+          // Last on purpose. The same asks sit higher up, in the house
+          // style and Deliverables, and agents read past them there: a
+          // long reply that repeats the file it made, in bullets, with a
+          // tip at the end. Said again as the final word, they hold.
+          `\n\n${replyRules(!personSource && !guestMail && genuiPrompt(bot.withoutComponents) !== null)}`,
         integrations,
       };
       // What an idle compaction sends again later, so its request starts
@@ -7041,6 +7134,7 @@ async function startClaimedTurn(
           text: _text,
           transcript: _transcript,
           env: _env,
+          reply: _reply,
           resumeCursor: _cursor,
           handoff: _handoff,
           compactFirst: _compactFirst,
@@ -7089,7 +7183,7 @@ async function startClaimedTurn(
       // and its tools ran (GitHub 220). It is dropped instead, said so,
       // and the lane is left as if it had never been asked.
       const connectionChanged = opts.telegramBinding && !telegramConnectionCurrent(opts.telegramBinding);
-      const senderChanged = personSource && !telegramSenderCurrent(telegramBinding(bot.id), personSource);
+      const senderChanged = personSource ? !telegramSenderCurrent(telegramBinding(bot.id), personSource) : groupSource && !telegramOwnerGroupCurrent(telegramBinding(bot.id), groupSource);
       // A stop pressed while this was getting ready is the same kind of
       // thing: there was nothing to interrupt then, so it ends here.
       const stopped = stoppedGettingReady.delete(task.id);
@@ -7156,6 +7250,28 @@ async function startClaimedTurn(
         if (sending.handoff) sending.handoff = `${note}\n\n${sending.handoff}`;
       }
       sending.codexSpeed = codexSpeed;
+      // The pictures this turn's own words attach go as pictures to an
+      // engine that takes them (GitHub 365). An API model that is not
+      // set to see them gets only their paths, which it cannot open, so
+      // the chat says so rather than leave the agent to explain it has
+      // no eyes. Once per message: a retry of it is the same message.
+      if (!command && attachments.hasAttachedImage(text)) {
+        if (engine.adapter.capabilities.images) {
+          const images = attachments.attachedImages(text);
+          if (images.length) sending.images = images;
+        } else if (specFor(engine.driverKind) && !opts.retry && !opts.carriedOn) {
+          const name = engine.displayName ?? specFor(engine.driverKind)!.name;
+          const notice = store.appendMessage(roomId, {
+            role: "bot",
+            ...(blok ? { from: bot.id } : {}),
+            kind: "notice",
+            text: engine.driverKind === CUSTOM_SPEC.kind
+              ? `${name} is not set to see images, so the image was not sent to it. If its model can see them, turn on Sees images for it under Your endpoints in Settings.`
+              : `${name} is not set to see images, so the image was not sent to it.`,
+          });
+          broadcast({ kind: "message", threadId: roomId, message: notice });
+        }
+      }
       const textOrigin: { origin: CodexText["origin"]; turnId?: string } = { origin: opts.byYou ? "person" : !opts.recovery && !opts.routine && (opts.from || opts.answering || opts.roomAgentStarted) ? "agent" : opts.recovery ? "unknown" : "other" };
       if (engine.driverKind === "codex") codexOrigins.set(task.id, textOrigin);
       try {
@@ -7205,7 +7321,7 @@ async function startClaimedTurn(
         broadcast({ kind: "message", threadId: roomId, message });
         return message;
       });
-      if (personSource) tellTelegramPersonHeld(personSource, message);
+      if (personSource || groupSource) tellTelegramPersonHeld((personSource ?? groupSource)!, message);
       settleUnsent(`Could not answer: ${message}`);
     } finally {
       if (!tryAccepted) claim.cancelPrimaryTry?.();
@@ -7244,11 +7360,13 @@ function unsendable(botId: string): string | null {
  * or `unsent` from a start that failed before reaching its engine, which
  * otherwise left each of them waiting on an end that never came.
  */
-function settleOwners(bot: BotRecord, laneId: string, outcome: { ok: boolean; why: string | null; unsent?: boolean; quiet?: boolean }) {
+function settleOwners(bot: BotRecord, laneId: string, outcome: { ok: boolean; why: string | null; unsent?: boolean; quiet?: boolean; said?: string }) {
   const { ok, why, unsent, quiet } = outcome;
   // what the agent actually said; a turn that never ran said nothing,
-  // and the last reply in its lane belongs to an earlier one
-  const said = unsent ? "" : lastSaid(laneId);
+  // and the last reply in its lane belongs to an earlier one. A turn
+  // that ended on the bare quiet word said that, though the chat never
+  // showed it (quietEnds).
+  const said = unsent ? "" : (outcome.said ?? lastSaid(laneId));
   // A failed turn may still be answered by a backup engine, so its mail
   // waits a little for that (replyByMail). Nothing picks up a turn that
   // never ran, and a sender left waiting would be emailed whatever the
@@ -7338,6 +7456,8 @@ function delegateWords(sender: TelegramSender, text: string): string {
 }
 
 const DELEGATE_GONE = "This person's full access on Telegram was taken back, or their connection changed, before the message could start.";
+const laneTelegramGroup = new Map<string, TelegramOwnerGroup>();
+const laneAudience = new Map<string, string>();
 
 /** Who asked for each lane's latest turn, kept after it ends: a backup
  * engine picking the turn up, or the same words asked again after a
@@ -7671,7 +7791,7 @@ function disarmWatcher(id: string) {
  * the minute tick is only a fallback for events the filesystem drops. */
 function armWatcher(w: Watcher) {
   disarmWatcher(w.id);
-  if (w.kind !== "folder" || !w.enabled || suspendedFor(w.botId)) return;
+  if (w.kind !== "folder" || !w.enabled || suspendedFor(w.botId) || movedAway()) return;
   try {
     const fw = watch(w.target, { recursive: true }, () => {
       clearTimeout(settleTimers.get(w.id));
@@ -7816,6 +7936,8 @@ async function checkWatcher(id: string, manual = false): Promise<{ fired: boolea
   // Stopped for failing (countLook): only a look by hand, or the person
   // changing it, starts it again.
   if (w.failing && !manual) return { fired: false, note: "It stopped looking after failing again and again. Change it, or look by hand, to start it again." };
+  // the live copy of this workspace is on another machine, which looks
+  if (movedAway()) return { fired: false, note: "This workspace moved, so its watchers look where it runs now, not here." };
   if (checking.has(id)) return { fired: false, note: "already looking" };
   checking.add(id);
   try {
@@ -8028,6 +8150,7 @@ setInterval(sweepRehearsals, 60 * 60_000).unref?.();
 // have no schedule: each is asked as a reading arrives, and here only
 // while a crossing still waits to be acted on, or its time has run out.
 setInterval(() => {
+  if (movedAway()) return;
   const now = Date.now();
   for (const w of watchers) {
     if (!w.enabled || w.failing || suspendedFor(w.botId) || w.kind === "place") continue;
@@ -9225,6 +9348,26 @@ const replyingTo = new Map<string, { peerId: string; peerName: string }>();
  * finished without a word has nothing for the person to read, so it does
  * not mark the conversation unread. */
 const spokeInTurn = new Set<string>();
+/** Lanes whose running turn, one nobody asked for (unaskedTurn), last
+ * said the bare quiet word, which was never written: QUIET in any case,
+ * as isQuietReply reads it. The word itself, for what reads the turn's
+ * last words when it ends. Any later word in the turn takes its place. */
+const quietEnds = new Map<string, string>();
+
+/** Whether nobody is waiting on what a lane's running turn says: another
+ * agent, a job, a watcher, a webhook or a workflow started it, and no
+ * person started it, joined it since, or asked for it from Telegram, a
+ * shared room or an email. A routine is the person's own standing ask,
+ * with its own quiet switch, and a goal's or a rehearsal's turns are the
+ * person's too. Such a turn may end on the bare quiet word, which then
+ * says nothing at all (GitHub 363). */
+function unaskedTurn(laneId: string): boolean {
+  return !turnsForYou.has(laneId) &&
+    (laneRequester.get(laneId) ?? "owner") === "owner" &&
+    !laneTelegramPerson.has(laneId) && !laneTelegramDelegate.has(laneId) && !laneTelegramGroup.has(laneId) &&
+    !mailAnswering.has(laneId) && !openRuns.has(laneId) && !lastAsked.get(laneId)?.routine && !rehearsals.byTask(laneId) &&
+    store.taskByThread(laneId)?.task.goal?.status !== "active";
+}
 
 /** How many turns in a row agents may start in one another, or in
  * themselves, with `bloks say` before the person has a say. Each one is
@@ -9384,7 +9527,7 @@ const closeAfterTurn = new Set<string>();
  * ends, so the reset waits for that (GitHub 139). */
 const freshAfterTurn = new Set<string>();
 
-/** Starts the fresh session an agent asked for, and says so in the chat. */
+/** Completes a requested fresh session, leaving its neutral marker in the chat. */
 function freshIfAsked(laneId: string) {
   if (!freshAfterTurn.delete(laneId)) return;
   startFresh(laneId);
@@ -9399,7 +9542,8 @@ function startFresh(laneId: string) {
   const notice = store.appendMessage(laneId, {
     role: "bot",
     kind: "notice",
-    text: `${found.bot.name} starts its next turn here in a fresh session, without the earlier context. Everything above stays in the conversation.`,
+    sessionReset: true,
+    text: "Session reset. You can keep chatting.\nChat history and saved memory are kept. The new session may not include earlier messages.",
   });
   broadcast({ kind: "message", threadId: laneId, message: notice });
 }
@@ -9998,6 +10142,53 @@ async function takeOffline(): Promise<string | null> {
 
 const planAccount = new PlanAccount({ file: join(DATA_DIR, "plan-cache.json") });
 
+/** What the app needs of the account to move a workspace to Hosting on
+ * its own (electron/hosting-move.mjs): whether the machine is running,
+ * and whether the plan includes Bloks AI. Words the site said, never the
+ * key, and only for the licence the app handed over. */
+function accountForDesktop(account: Account | null, state: string) {
+  return {
+    state,
+    shared: licenceKey() === sharedLicence,
+    plan: account?.plan ?? null,
+    // `status` on this line is an answer's HTTP status, so this is named apart
+    accountStatus: account?.status ?? null,
+    hosting: account?.hosting ?? null,
+    bloksAi: Boolean(account?.bloksAi?.active),
+  };
+}
+
+/** The account as a live Plan page answer had it, told to the app. */
+function tellDesktopAccount(body: unknown) {
+  const said = body as { account?: Account | null; accountState?: string } | null;
+  if (!said || said.accountState !== "live") return;
+  try {
+    (process as NodeJS.Process & { parentPort?: { postMessage(message: unknown): void } }).parentPort?.postMessage({
+      kind: "desktop.account",
+      ...accountForDesktop(said.account ?? null, "live"),
+    });
+  } catch {
+    /* no app to tell */
+  }
+}
+
+// The app asking for the same, on its own schedule (after checkout, and
+// as it starts while a move to Hosting is still to come), and for a
+// pairing link to the hosted workspace, which is what Open asks for too.
+desktopLine.answer("plan.account", async (asked) => {
+  const licence = licenceKey();
+  if (!licence) return { ok: true, ...accountForDesktop(null, "none") };
+  const answer = await planAccount.account(licence, asked.fresh === true);
+  return { ok: true, ...accountForDesktop(answer.account, answer.state) };
+});
+desktopLine.answer("plan.hostedLink", async () => {
+  const licence = licenceKey();
+  if (!licence) return { ok: false, status: 409, error: "There is no Bloks key on this computer." };
+  const said = await planAccount.hostedLink(licence);
+  if ("error" in said) return { ok: false, status: said.status, error: said.error, ...(said.waking ? { waking: true } : {}) };
+  return { ok: true, link: said.link, expiresAt: said.expiresAt };
+});
+
 /**
  * What the Plan page reads: the licence this workspace uses, the plan the
  * gates go by, and how many people are in. A fresh look from the page
@@ -10099,7 +10290,7 @@ function creditsSummary() {
 /** Agents running on somebody's personal Claude or ChatGPT sign-in. */
 function personalSignInAgents(): BotRecord[] {
   return store.bots.filter(
-    (b) => !b.archivedAt && !b.hidden && onPersonalSignIn(registry.get(b.modelSelection?.instanceId ?? "")?.driverKind, b.engineAccess),
+    (b) => !b.archivedAt && !b.hidden && onPersonalSignIn(registry.get(b.modelSelection?.instanceId ?? "")?.driverKind),
   );
 }
 
@@ -10189,7 +10380,7 @@ async function usageNotices(threadId: string | null): Promise<UsageNotice[]> {
   const bot = store.bots.find((b) => b.threadId === threadId) ?? store.botByThread(threadId);
   if (!bot) return [];
   const instance = laneInstance(bot, threadId);
-  if (bloksAiLane(threadId, instance?.instanceId ?? bot.modelSelection.instanceId)) return bloksAi();
+  if (onBloksAi(instance?.instanceId ?? bot.modelSelection.instanceId)) return bloksAi();
   return engine(instance);
 }
 
@@ -10250,7 +10441,7 @@ const liveActivities = new LiveActivities({
       words: {
         name: found.bot.name.slice(0, 60),
         color: found.bot.color,
-        shape: found.bot.shape ?? "",
+        shape: shapeOf(found.bot),
         task: (room?.name ?? found.task.title).slice(0, 80),
       },
     };
@@ -10575,8 +10766,8 @@ function sweepIdleLanes(now = Date.now()) {
       const sent = lastSent.get(task.id);
       if (!seen || !sent) continue;
       // a quiet compaction is work nobody asked for this minute, so it
-      // spends Bloks credits only when the person said background may
-      if (sent.input.credits && cfg.credits?.background !== true) continue;
+      // spends Bloks AI only when the person said background may
+      if (onBloksAi(sent.instanceId) && cfg.credits?.background !== true) continue;
       // the session it would compact is the one the next message resumes
       const engine = selectEngine(bot).instanceId;
       if (sent.instanceId !== engine || task.lastInstanceId !== engine || typeof task.resumeCursors[engine] !== "string") continue;
@@ -10704,7 +10895,9 @@ function onIdleCompaction(event: RuntimeEvent) {
       break;
     case "session.started":
       if (event.sessionId && event.providerInstanceId) {
-        store.setResumeCursor(event.threadId, event.providerInstanceId, event.sessionId);
+        if (store.setResumeCursor(event.threadId, event.providerInstanceId, event.sessionId, {
+          invalidateReading: registry.get(event.providerInstanceId)?.driverKind === "codex",
+        })) broadcast({ kind: "bot", bot: clientBot(bot) });
         noteOwnSession(event.sessionId);
       }
       break;
@@ -10830,7 +11023,7 @@ async function foldAfterTurn(botId: string, threadId: string): Promise<void> {
  * would come back as the owner's, ahead of turns that may run in full
  * access. */
 function summarisedText(m: Message): string {
-  return m.telegramPerson || m.telegramDelegate || m.telegramSent ? storedPrompt(m) : m.text!;
+  return m.telegramPerson || m.telegramDelegate || m.telegramGroup || m.telegramSent ? storedPrompt(m) : m.text!;
 }
 
 /**
@@ -11322,7 +11515,7 @@ function failureNoticeIn(threadId: string, at: number): Message | null {
     const m = said[i];
     if (m.role === "user" && !m.queued && !m.unsent) return null;
     if (m.role !== "bot" || m.kind !== "notice" || m.deleted) continue;
-    if (m.incident || m.failing || m.compaction || m.event || m.goal || m.chainHeld) continue;
+    if (m.incident || m.failing || m.compaction || m.sessionReset || m.event || m.goal || m.chainHeld) continue;
     if (Math.abs((m.at ?? 0) - at) > 10 * 60_000) return null;
     return m;
   }
@@ -11971,6 +12164,7 @@ function answerGate(runId: string, approved: boolean, answer: string) {
  * it was written rather than when the clock ran out.
  */
 function settleTimeouts() {
+  if (movedAway()) return;
   for (const run of timedOut(workflows.waiting(), Date.now())) {
     const waiting = run.waiting!;
     endStep(run.id, waiting.stepId, "timed-out", { error: "nobody answered in time" });
@@ -12037,6 +12231,8 @@ function stopRunsOnEdit(workflowId: string) {
 
 /** Start a workflow, if it is one that may start. */
 function fireWorkflow(workflowId: string, trigger: Record<string, string>): WorkflowRun | null {
+  // moved: its workflows run where the workspace runs now
+  if (movedAway()) return null;
   const workflow = workflows.get(workflowId);
   if (!workflow) return null;
   const run = workflows.begin(workflowId, trigger, Date.now());
@@ -12080,6 +12276,7 @@ function triggersFired(event: {
  * run stuck at "running" forever looks exactly like a run still working.
  */
 function resumeStalled() {
+  if (movedAway()) return;
   const inFlight = new Set([...workflowTurns.values()].map((held) => held.runId));
   for (const workflow of workflows.workflows) {
     for (const run of workflow.runs ?? []) {
@@ -12115,7 +12312,8 @@ async function runDueRoutines() {
     broadcast({ kind: "enginePauses" });
     armPauseTimer();
   }
-  if (drain.on) return;
+  // moved: due here as there, and run there only, so nothing runs twice
+  if (drain.on || movedAway()) return;
   const now = new Date();
   for (const routine of routines.due(now)) {
     if (routine.targetKind === "room") {
@@ -12235,7 +12433,9 @@ const routineTimer = setInterval(() => void runDueRoutines().catch(() => {}), 30
 // changes. A Mac has no use for it and says nothing.
 function sayNextDue() {
   if (!HOSTED) return;
-  relayLink.nextDue(nextDueAt({ routines: routines.routines, watchers, suspended: suspendedFor, now: Date.now() }));
+  // a hosted copy whose work moved has nothing coming up to wake it for
+  const away = movedAway();
+  relayLink.nextDue(nextDueAt({ routines: away ? [] : routines.routines, watchers: away ? [] : watchers, suspended: suspendedFor, now: Date.now() }));
 }
 function nextDueChanged() {
   if (!HOSTED || nextDueSoon) return;
@@ -12273,6 +12473,10 @@ interface TelegramRuntime {
   abort: AbortController;
   inbox: telegram.Inbox;
   personInboxes: Map<string, telegram.Inbox>;
+  groups: TelegramGroupMessages;
+  /** When let-in people's group requests were taken in the last hour,
+   * and who was told about the limit (withinTelegramGroupBudget). */
+  groupBudget: { taken: number[]; told: Map<number, number>; ownerTold?: number };
   /** Chats refused once, remembered for the life of the connection, so
    * somebody who found the bot and keeps typing gets one answer rather
    * than one per message. */
@@ -12293,7 +12497,7 @@ interface TelegramRuntime {
   turns: Map<number, Promise<void>>;
   /** Each chat's messages, taken in the order they came: asking an engine
    * to take one mid-turn is a round trip, and the next must not pass it. */
-  intake: Map<number, Promise<void>>;
+  intake: Map<number | string, Promise<void>>;
   /** This connection's share of telegramWorking, to stop when it goes. */
   working: Set<TelegramWaiter>;
 }
@@ -12354,6 +12558,10 @@ function liveTelegram(botId: string): TelegramRuntime | undefined {
   return runtime && currentTelegram(runtime) ? runtime : undefined;
 }
 
+function groupForLane(laneId: string): TelegramOwnerGroup | undefined {
+  return laneTelegramGroup.get(laneId) ?? [...store.messagesFor(laneId)].reverse().find((m) => m.role === "user" && !m.deleted && !m.unsent && !m.queued)?.telegramGroup;
+}
+
 function senderForRequester(requester: string, laneId: string): TelegramSender | undefined {
   return laneTelegramPerson.get(laneId)?.requester === requester ? laneTelegramPerson.get(laneId) :
     [...store.messagesFor(laneId)].reverse().find((m) => m.telegramPerson?.requester === requester && !m.deleted && !m.unsent && !m.queued)?.telegramPerson;
@@ -12382,7 +12590,8 @@ async function replyToTelegramPerson(credential: AgentToken, input: unknown): Pr
   const sender = credential.reply?.sender;
   const current = () => Boolean(sender && agentTokens.identify(credential.token, Date.now(), turnAlive) === credential &&
     laneTurns.get(credential.taskId) === credential.reply?.turn && laneRequester.get(credential.taskId) === sender.requester &&
-    store.bot(credential.botId) && telegramSenderCurrent(telegramBinding(credential.botId), sender));
+    (laneAudience.get(credential.taskId) ?? "private") === telegramAudience(sender) &&
+    store.bot(credential.botId) && telegramReplySenderCurrent(telegramBinding(credential.botId), sender));
   if (!sender || !current()) throw new Error("This reply credential is no longer valid for this sender and turn.");
   const runtime = liveTelegram(credential.botId);
   if (!runtime) throw new Error("This agent's Telegram connection is unavailable.");
@@ -12393,14 +12602,14 @@ async function replyToTelegramPerson(credential: AgentToken, input: unknown): Pr
   // Spend and record before dispatch. A transport timeout never authorizes
   // another attempt whose first delivery might already have succeeded.
   attempted.add(digest);
-  const message = store.appendMessage(credential.taskId, { role: "bot", kind: "text", text, telegramSent: { personId: sender.personId, name: sender.name, state: "sending" } });
+  const message = store.appendMessage(credential.taskId, { role: "bot", kind: "text", text, telegramSent: { personId: "owner" in sender ? "owner" : sender.personId, name: telegramSenderLabel(sender), audience: telegramAudience(sender), state: "sending" } });
   broadcast({ kind: "message", threadId: credential.taskId, message });
   try {
-    await telegram.replyText(runtime.token, sender.chatId, text, sender.messageId, current);
+    await telegram.replyText(runtime.token, sender.chatId, text, sender.messageId, current, sender.group?.threadId);
     const patched = store.patchMessage(credential.taskId, message.id, { telegramSent: { ...message.telegramSent!, state: "sent" } });
     if (patched) broadcast({ kind: "message.patch", threadId: credential.taskId, message: patched });
-    if (telegramBinding(credential.botId)?.people?.[String(sender.userId)]?.holdReported) updateTelegramPerson(credential.botId, sender.userId, sender.grant, { holdReported: undefined });
-    return "Sent to the person who started this turn.";
+    if (!("owner" in sender)) updateTelegramPerson(credential.botId, sender.userId, sender.grant, { holdReported: undefined, holdAudience: undefined });
+    return sender.group ? "Sent to the addressed group message." : "Sent to the person who started this turn.";
   } catch (error) {
     const failed = error instanceof telegram.TelegramError && error.status >= 400 && error.status < 500;
     const patched = store.patchMessage(credential.taskId, message.id, { telegramSent: { ...message.telegramSent!, state: failed ? "failed" : "uncertain" } });
@@ -12411,13 +12620,23 @@ async function replyToTelegramPerson(credential: AgentToken, input: unknown): Pr
 
 /** A neutral service notice is the one exception to explicit agent replies.
  * It explains a hold without carrying any of the conversation to the sender. */
-function tellTelegramPersonHeld(sender: TelegramSender, why: string): void {
+function tellTelegramPersonHeld(sender: TelegramReplySender, why: string): void {
   const state = telegramBinding(sender.botId);
   const person = state?.people?.[String(sender.userId)];
-  if (!telegramSenderCurrent(state, sender) || !person || person.holdReported) return;
-  updateTelegramPerson(sender.botId, sender.userId, sender.grant, { holdReported: why.slice(0, MAX_DESCRIPTION_CHARS) });
+  if (!telegramReplySenderCurrent(state, sender)) return;
+  if (!("owner" in sender)) {
+    if (!person || (person.holdReported && (person.holdAudience ?? "private") === telegramAudience(sender))) return;
+    updateTelegramPerson(sender.botId, sender.userId, sender.grant, { holdReported: why.slice(0, MAX_DESCRIPTION_CHARS), holdAudience: telegramAudience(sender) });
+  }
   const runtime = liveTelegram(sender.botId);
-  if (runtime) void telegramSay(runtime, sender.chatId, "This agent cannot answer from Telegram yet. The owner can see why in the agent's chat.");
+  if (runtime) void telegramDestinationNotice(runtime, sender, "This agent cannot answer from Telegram yet. The owner can see why in the agent's chat.");
+}
+
+/** A group service notice is an anchored reply too, never a later DM or
+ * an unprompted group post. Errors do not authorize a wider fallback. */
+async function telegramDestinationNotice(runtime: TelegramRuntime, destination: TelegramDestination, text: string): Promise<void> {
+  if (destination.group) await telegram.replyText(runtime.token, destination.chatId, text, destination.messageId, () => Boolean(currentTelegram(runtime)), destination.group.threadId).catch(() => {});
+  else await telegramSay(runtime, destination.chatId, text);
 }
 
 function telegramAdmissionCard(botId: string, person: TelegramPerson): Message | undefined {
@@ -12444,6 +12663,7 @@ function admissionWords(bot: BotRecord, person: TelegramPerson): string {
   const engine = registry.get(bot.modelSelection.instanceId)?.driverKind;
   return [
     `${telegramPersonHandle(person)} wants to message ${bot.name} on Telegram.`,
+    person.first?.destination?.group ? "They addressed this agent in " + person.first.destination.group.title + ". Every group member sees an explicit reply, including people not let in. Group requests remain restricted; private full access does not apply here." : "",
     namesakes.length ? `Someone else here is also called ${person.name} (${namesakes.map(telegramPersonHandle).join("; ")}). Check the id before letting this one in.` : "",
     person.first?.text ? `They wrote: "${person.first.text.slice(0, 280).replace(/\s+/g, " ").trim()}"` : "",
     "Let in only people you trust: they get answers from this agent, which can read files in its working folder. Anything else it does asks you first.",
@@ -12492,7 +12712,7 @@ async function decideTelegramAdmission(botId: string, personId: string, action: 
   if (runtime && person.telegramCardId && state.ownerChatId !== undefined) void telegram.edit(runtime.token, state.ownerChatId, person.telegramCardId, `${person.name} (${telegramPersonHandle(person)}): ${said}.`).catch(() => {});
   // Each write after an await is made to the record as it is then, and
   // only while it is still this decision's.
-  if (runtime && action === "decline" && updateTelegramPerson(botId, person.userId, next.grant, { notice: "sending" })) {
+  if (runtime && action === "decline" && person.chatId !== undefined && !person.first?.destination?.group && updateTelegramPerson(botId, person.userId, next.grant, { notice: "sending" })) {
     await telegramSay(runtime, person.chatId, "Not now. The owner has not let you in.");
     updateTelegramPerson(botId, person.userId, next.grant, { notice: "sent" });
   }
@@ -12526,6 +12746,22 @@ async function revokeTelegramPersonTurns(botId: string, matches: (sender: Telegr
   }
 }
 
+/** Groups turned off, after it is saved: words waiting from any group
+ * stay in the app as unsent, an album still being gathered is dropped,
+ * and a let-in person's group turn stops as if they were taken out. An
+ * owner's own group turn runs on in the app; its reply has nowhere to go. */
+async function closeTelegramGroups(botId: string): Promise<void> {
+  liveTelegram(botId)?.groups.close();
+  for (const lane of store.bot(botId)?.tasks ?? []) {
+    for (const message of store.messagesFor(lane.id)) {
+      if (!message.queued || !(message.telegramGroup || message.telegramPerson?.group)) continue;
+      const patched = store.patchMessage(lane.id, message.id, { queued: false, unsent: true });
+      if (patched) broadcast({ kind: "message.patch", threadId: lane.id, message: patched });
+    }
+  }
+  await revokeTelegramPersonTurns(botId, (sender) => Boolean(sender.group), "Telegram groups were turned off for this agent.");
+}
+
 /**
  * The owner gives a person they let in full access to this agent on
  * Telegram, or takes it back (GitHub 320). Owner-only: the settings route
@@ -12554,39 +12790,42 @@ function deliverFirstTelegramPerson(botId: string, person: TelegramPerson): void
   // this person was taken out
   const current = state?.people?.[String(person.userId)];
   if (!state || state.ownerUserId === undefined || !current || current.grant !== person.grant || current.state !== "allowed" || !current.first) return;
-  const source = telegramSender(botId, state, current, current.first.messageId);
+  const destination = current.first.destination ?? (current.chatId === undefined ? undefined : { chatId: current.chatId, messageId: current.first.messageId });
+  if (!destination) return;
+  const source = telegramSender(botId, state, current, current.first.messageId, destination);
   const text = current.first.text || "The person sent media before admission. Ask them to send it again.";
   updateTelegramPerson(botId, current.userId, current.grant, { first: undefined });
   deliverTelegramPerson(source, text);
 }
 
-function deliverTelegramPerson(sender: TelegramSender, text: string): void {
-  if (!telegramSenderCurrent(telegramBinding(sender.botId), sender)) return;
+function deliverTelegramPerson(sender: TelegramReplySender, text: string): void {
+  if (!telegramReplySenderCurrent(telegramBinding(sender.botId), sender)) return;
   const bot = store.bot(sender.botId);
   const lane = bot?.tasks[0];
   if (!bot || !lane) return;
   // Serialized with the owner's steer attempts, but never folded into them.
   const runtime = liveTelegram(bot.id);
   if (!runtime) return;
-  const intake = (runtime.intake.get(sender.chatId) ?? Promise.resolve()).then(async () => {
-    if (!telegramSenderCurrent(telegramBinding(bot.id), sender)) return;
+  const intakeKey = sender.group ? JSON.stringify([sender.requester, telegramAudience(sender)]) : sender.chatId;
+  const provenance = "owner" in sender ? { telegramGroup: sender } : { telegramPerson: sender, personal: false };
+  const intake = (runtime.intake.get(intakeKey) ?? Promise.resolve()).then(async () => {
+    if (!telegramReplySenderCurrent(telegramBinding(bot.id), sender)) return;
     if (lane.busy && laneRequester.get(lane.id) === sender.requester) {
-      if (await steerTelegramPerson(bot, lane, sender, text)) return;
+      if (await steerLane(bot, lane, text, { ...provenance, fromTelegram: true, telegramBinding: { botId: bot.id, generation: sender.bindingGeneration } })) return;
     }
-    queueOnLane(bot.id, lane.id, text, { telegramPerson: sender, fromTelegram: true, telegramBinding: { botId: bot.id, generation: sender.bindingGeneration }, personal: false });
+    queueOnLane(bot.id, lane.id, text, { ...provenance, fromTelegram: true, telegramBinding: { botId: bot.id, generation: sender.bindingGeneration } });
     drainSteer(lane.id);
   });
-  runtime.intake.set(sender.chatId, intake);
-  void intake.finally(() => { if (runtime.intake.get(sender.chatId) === intake) runtime.intake.delete(sender.chatId); }).catch(() => {});
-}
-
-async function steerTelegramPerson(bot: BotRecord, lane: TaskRecord, sender: TelegramSender, text: string): Promise<boolean> {
-  return Boolean(await steerLane(bot, lane, text, { telegramPerson: sender, personal: false, fromTelegram: true, telegramBinding: { botId: bot.id, generation: sender.bindingGeneration } }));
+  runtime.intake.set(intakeKey, intake);
+  void intake.finally(() => { if (runtime.intake.get(intakeKey) === intake) runtime.intake.delete(intakeKey); }).catch(() => {});
 }
 
 async function takeTelegramIncoming(runtime: TelegramRuntime, message: telegram.Incoming): Promise<void> {
   const state = currentTelegram(runtime);
   if (!state) return;
+  // Off until the owner turns groups on for this agent: a group it was
+  // added to, by anyone, then costs nothing and hears nothing.
+  if (message.chatType === "group" || message.chatType === "supergroup") return state.groups === true ? runtime.groups.take(message) : undefined;
   const decision = telegram.decide(inboxState(state), message);
   if (decision.kind === "pair" || decision.kind === "press" || decision.kind === "deliver") return runtime.inbox.take(message);
   // A tap in the chat of a person with full access, by them, is theirs to
@@ -12597,7 +12836,23 @@ async function takeTelegramIncoming(runtime: TelegramRuntime, message: telegram.
     return;
   }
   if (!isPrivateTelegramHuman(message)) return;
-  const knock = knockTelegram(state, message);
+  const person = await takeTelegramKnock(runtime, message);
+  if (!person) return;
+  const source = telegramSender(runtime.botId, telegramBinding(runtime.botId)!, person, message.messageId);
+  if (state.ownerUserId === undefined) return tellTelegramPersonHeld(source, "The owner needs to pair this bot first.");
+  await personInbox(runtime, person).take(message);
+}
+
+async function takeTelegramKnock(runtime: TelegramRuntime, message: telegram.Incoming, destination?: TelegramDestination): Promise<TelegramPerson | undefined> {
+  let state = currentTelegram(runtime);
+  if (!state) return;
+  const known = state.people?.[String(message.fromId)];
+  if (!destination && known && known.chatId !== message.chatId) {
+    updateTelegramPerson(runtime.botId, known.userId, known.grant, { chatId: message.chatId });
+    runtime.personInboxes.delete(known.id);
+    state = currentTelegram(runtime)!;
+  }
+  const knock = knockTelegram(state, message, destination);
   // room again since the last full inbox: the next full one is said again
   if (!knock.capped && knock.fresh && state.admissionFull) saveTelegramBinding(runtime.botId, { ...state, admissionFull: undefined });
   if (knock.capped) {
@@ -12625,14 +12880,11 @@ async function takeTelegramIncoming(runtime: TelegramRuntime, message: telegram.
     const card = telegramAdmissionCard(runtime.botId, person);
     if (card) updateTelegramPerson(runtime.botId, person.userId, person.grant, { cardId: card.id });
     await forwardTelegramAdmission(runtime, person);
-    if (currentTelegram(runtime)?.people?.[String(person.userId)]?.state === "pending") await telegramSay(runtime, person.chatId, "The owner has been asked to let you in. Please wait for their answer.");
+    if (currentTelegram(runtime)?.people?.[String(person.userId)]?.state === "pending") await telegramDestinationNotice(runtime, destination ?? { chatId: person.chatId!, messageId: message.messageId }, "The owner has been asked to let you in. Please wait for their answer.");
     updateTelegramPerson(runtime.botId, person.userId, person.grant, { notice: "sent" });
     return;
   }
-  if (person.state !== "allowed") return;
-  const source = telegramSender(runtime.botId, state, person, message.messageId);
-  if (state.ownerUserId === undefined) return tellTelegramPersonHeld(source, "The owner needs to pair this bot first.");
-  await personInbox(runtime, person).take(message);
+  return person.state === "allowed" ? person : undefined;
 }
 
 /** Which grant, and which access, each person's inbox was made for. */
@@ -12654,24 +12906,87 @@ function personInbox(runtime: TelegramRuntime, person: TelegramPerson): telegram
   if (!inbox) {
     const state = currentTelegram(runtime)!;
     const source = telegramSender(runtime.botId, state, person);
+    inbox = telegramSenderInbox(runtime, source);
+    inboxGrants.set(inbox, grant);
+    runtime.personInboxes.set(person.id, inbox);
+  }
+  return inbox;
+}
+
+function telegramSenderInbox(runtime: TelegramRuntime, source: TelegramReplySender): telegram.Inbox {
     const active = () => {
-      if (!currentTelegram(runtime) || !telegramSenderCurrent(telegramBinding(runtime.botId), source)) throw new Error("This Telegram person or connection changed.");
+      if (!currentTelegram(runtime) || !telegramReplySenderCurrent(telegramBinding(runtime.botId), source)) throw new Error("This Telegram sender or connection changed.");
     };
-    inbox = new telegram.Inbox({
-      state: () => ({ chatIds: [person.chatId] }),
-      send: async (chatId, text) => { active(); await telegramSay(runtime, chatId, text); },
+    return new telegram.Inbox({
+      state: () => { active(); return { chatIds: [source.chatId] }; },
+      send: async (_chatId, text) => { active(); await telegramDestinationNotice(runtime, source, text); },
       pair: async () => {}, refuse: async () => {}, waiting: () => undefined, answer: async () => {}, press: async () => {},
       download: (fileId, maxBytes) => { active(); return telegram.download(runtime.token, fileId, maxBytes); },
       transcriber: () => speech.transcriptionVendor(cfg) ? (audio) => { active(); return speech.transcribe(cfg, audio, "voice.ogg", "audio/ogg"); } : null,
       saveImage: (bytes) => { active(); return attachments.saveImage(bytes); },
       saveVoice: (bytes) => { active(); return attachments.saveBytes(bytes, "ogg"); },
       saveFile: (bytes, extension) => { active(); return attachments.saveBytes(bytes, extension); },
-      deliver: (_chatId, text, _replyTo, origin) => { active(); deliverTelegramPerson({ ...source, ...(origin?.messageId ? { messageId: origin.messageId } : {}) }, text); },
+      deliver: (_chatId, text, _replyTo, origin) => { active(); deliverTelegramPerson({ ...source, ...(origin?.messageId ? { messageId: origin.messageId } : {}) }, text + (source.group && origin ? telegramQuotedContext(origin) : "")); },
     });
-    inboxGrants.set(inbox, grant);
-    runtime.personInboxes.set(person.id, inbox);
+}
+
+async function takeTelegramGroup(runtime: TelegramRuntime, parts: telegram.Incoming[], destination: TelegramDestination): Promise<void> {
+  const state = currentTelegram(runtime), message = parts[0];
+  // asked again: an album waits half a second, and groups may have been
+  // turned off while it did
+  if (!state || state.groups !== true || !message || !destination.group) return;
+  let sender: TelegramReplySender;
+  if (message.fromId === state.ownerUserId) {
+    sender = { ...destination, group: destination.group, owner: true, botId: runtime.botId, bindingGeneration: runtime.generation,
+      userId: message.fromId!, name: message.from, requester: "owner" };
+  } else {
+    const firstText = parts.map((part) => part.text).filter(Boolean).join("\n\n") + telegramQuotedContext(message);
+    const person = await takeTelegramKnock(runtime, { ...message, text: firstText }, destination);
+    if (!person) return;
+    sender = telegramSender(runtime.botId, telegramBinding(runtime.botId)!, person, destination.messageId, destination);
+    if (state.ownerUserId === undefined) return tellTelegramPersonHeld(sender, "The owner needs to pair this bot first.");
+    if (!(await withinTelegramGroupBudget(runtime, destination))) return;
   }
-  return inbox;
+  // A fresh inbox binds media failures and their service notices to this
+  // album's anchor. Reusing one would send a later failure to an old post.
+  const inbox = telegramSenderInbox(runtime, sender);
+  if (parts.some((part) => part.album)) await inbox.takeAlbum(parts);
+  else await inbox.take(message);
+}
+
+const TELEGRAM_GROUP_HOUR_MS = 60 * 60_000;
+/** When each agent sent a file to its own Telegram chat in the last hour
+ * (bloks telegram send), against MAX_TELEGRAM_SENDS_PER_HOUR. Kept by
+ * agent rather than by connection, so pairing again does not start it
+ * over. */
+const telegramSends = new Map<string, number[]>();
+
+/** Every let-in person's group request can be a turn on the owner's
+ * engine, and a busy group has many of them. Past the hour's share the
+ * rest is dropped before any download, each group is told once, and so
+ * is the owner. The owner's own requests are theirs and not counted. */
+async function withinTelegramGroupBudget(runtime: TelegramRuntime, destination: TelegramDestination): Promise<boolean> {
+  const now = Date.now();
+  const budget = runtime.groupBudget;
+  budget.taken = budget.taken.filter((at) => now - at < TELEGRAM_GROUP_HOUR_MS);
+  if (budget.taken.length < MAX_TELEGRAM_GROUP_REQUESTS_PER_HOUR) {
+    budget.taken.push(now);
+    return true;
+  }
+  for (const [chatId, at] of budget.told) if (now - at >= TELEGRAM_GROUP_HOUR_MS) budget.told.delete(chatId);
+  if (budget.ownerTold === undefined || now - budget.ownerTold >= TELEGRAM_GROUP_HOUR_MS) {
+    budget.ownerTold = now;
+    const bot = store.bot(runtime.botId);
+    if (bot) {
+      const notice = store.appendMessage(bot.threadId, { role: "bot", kind: "notice", text: `Telegram groups asked ${bot.name} more than ${MAX_TELEGRAM_GROUP_REQUESTS_PER_HOUR} times in the last hour. Later group requests are dropped until the hour has passed. Your own are not counted.` });
+      broadcast({ kind: "message", threadId: bot.threadId, message: notice });
+    }
+  }
+  if (!budget.told.has(destination.chatId)) {
+    budget.told.set(destination.chatId, now);
+    await telegramDestinationNotice(runtime, destination, "This agent has taken as many group requests as it can this hour. Please try again later.");
+  }
+  return false;
 }
 
 function saveTelegram(next: TelegramConfig): void {
@@ -12817,7 +13132,8 @@ function makeTelegramRuntime(botId: string, state: AgentTelegram): TelegramRunti
   const runtime: TelegramRuntime = {
     botId, generation: state.generation, token: state.token!, abort: new AbortController(),
     refused: new Set(), asks: new Map(), personAsks: new Map(), typing: new Map(), turns: new Map(), intake: new Map(), working: new Set(),
-    inbox: null as unknown as telegram.Inbox, personInboxes: new Map(),
+    inbox: null as unknown as telegram.Inbox, personInboxes: new Map(), groups: null as unknown as TelegramGroupMessages,
+    groupBudget: { taken: [], told: new Map() },
   };
   const active = () => {
     const current = currentTelegram(runtime);
@@ -12900,6 +13216,7 @@ function makeTelegramRuntime(botId: string, state: AgentTelegram): TelegramRunti
       deliverOverTelegram(runtime, chatId, text, replyRef(suppliedReply));
     },
   });
+  runtime.groups = new TelegramGroupMessages(() => currentTelegram(runtime), (parts, destination) => takeTelegramGroup(runtime, parts, destination));
   return runtime;
 }
 
@@ -12993,7 +13310,7 @@ function fullAccessInbox(runtime: TelegramRuntime, person: TelegramPerson): tele
     if (!sender()) throw new Error("This person's full access or the Telegram connection changed.");
   };
   return new telegram.Inbox({
-    state: () => ({ chatIds: [person.chatId] }),
+    state: () => ({ chatIds: person.chatId === undefined ? [] : [person.chatId] }),
     send: async (chatId, text) => { if (sender()) await telegramSay(runtime, chatId, text); },
     pair: async () => {}, refuse: async () => {},
     download: (fileId, maxBytes) => { active(); return telegram.download(runtime.token, fileId, maxBytes); },
@@ -13036,9 +13353,12 @@ function startTelegramBot(botId: string): void {
       if (message.queued && binding?.generation && (!configured?.token || !configured.enabled || binding.generation !== configured.generation)) dropQueuedTelegram(botId, binding.generation);
     }
   }
-  if (previous && currentTelegram(previous)) return;
+  // a workspace that moved polls nothing: the same bot token polled from
+  // two machines hands each one half the messages
+  if (previous && currentTelegram(previous) && !movedAway()) return;
   if (previous) {
     previous.abort.abort();
+    previous.groups.close();
     dropQueuedTelegram(botId, previous.generation);
     for (const typing of previous.typing.values()) void typing.stop().catch(() => {});
     for (const waiter of previous.working) forgetTelegramWaiter(waiter);
@@ -13048,7 +13368,7 @@ function startTelegramBot(botId: string): void {
     telegramRuntimes.delete(botId);
   }
   const state = telegramBinding(botId);
-  if (!state?.token || !state.enabled || !store.bot(botId)) return;
+  if (!state?.token || !state.enabled || !store.bot(botId) || movedAway()) return;
   const runtime = makeTelegramRuntime(botId, state);
   telegramRuntimes.set(botId, runtime);
   void telegramLoop(runtime);
@@ -13383,6 +13703,9 @@ function startChat(platform: ChatPlatform) {
     chatStatus[platform] = { state, ...(detail ? { detail } : {}) };
     broadcast({ kind: "chat.status", platform, ...chatStatus[platform] });
   };
+  // moved: the bot answers from where the workspace runs now, never from
+  // two places at once
+  if (movedAway()) return;
   if (platform === "slack") {
     const c = cfg.chat?.slack;
     if (!c?.enabled || !c.botToken || !c.appToken) return;
@@ -13787,6 +14110,7 @@ function plantConnectorCards(
       role: "bot",
       kind: "connector",
       ...(laneTelegramPerson.get(threadId) ? { telegramPerson: laneTelegramPerson.get(threadId) } : {}),
+      ...(laneTelegramGroup.get(threadId) ? { telegramGroup: laneTelegramGroup.get(threadId) } : {}),
       connector: { slug, label: connectorLabel(slug), status: "needs-auth", resumeKey: requestId },
     });
     broadcast({ kind: "message", threadId, message });
@@ -13825,6 +14149,7 @@ function plantSecretCard(
     role: "bot",
     kind: "secret",
     ...(laneTelegramPerson.get(threadId) ? { telegramPerson: laneTelegramPerson.get(threadId) } : {}),
+      ...(laneTelegramGroup.get(threadId) ? { telegramGroup: laneTelegramGroup.get(threadId) } : {}),
     secret: {
       envName,
       label,
@@ -13926,7 +14251,8 @@ function maybeResumeAfterConnect(botId: string, threadId: string, resumeKey: str
   void startTurn(
     botId,
     `${names} ${live.length === 1 ? "is" : "are"} now connected. Continue the task you were working on before asking for the connection.`,
-    { taskId: threadId, presetMessage: true, byYou: turnsForYou.has(threadId), ...(live[0].telegramPerson ? { telegramPerson: live[0].telegramPerson, requester: live[0].telegramPerson.requester } : {}) },
+    { taskId: threadId, presetMessage: true, byYou: turnsForYou.has(threadId), ...(live[0].telegramPerson ? { telegramPerson: live[0].telegramPerson, requester: live[0].telegramPerson.requester } : {}),
+      ...(live[live.length - 1].telegramGroup ? { telegramGroup: live[live.length - 1].telegramGroup } : {}) },
   ).catch((e) => {
     // The cards are already marked resumed, and this guard only fires
     // once, so a swallowed refusal leaves the task parked on a
@@ -13966,18 +14292,18 @@ function maybeResumeAfterConnect(botId: string, threadId: string, resumeKey: str
 // (agentChain), which a restart forgets along with the rest of memory.
 const steerQueues = new Map<
   string,
-  { botId: string; items: Array<{ messageId?: string; text?: string; source?: "webhook"; chain?: number; chainTask?: ChainTask; requester?: string; telegramPerson?: TelegramSender }> }
+  { botId: string; items: Array<{ messageId?: string; text?: string; source?: "webhook"; chain?: number; chainTask?: ChainTask; requester?: string; telegramPerson?: TelegramSender; telegramGroup?: TelegramOwnerGroup }> }
 >();
 
 /** What one waiting item says now, or null for a message that no longer
  * says anything: taken back, rewound, or gone from the lane. A message
  * from another agent is framed the way it would have been when it was
  * queued, with who it is from and how to answer. */
-function steerWords(laneId: string, item: { messageId?: string; text?: string; telegramPerson?: TelegramSender }): string | null {
+function steerWords(laneId: string, item: { messageId?: string; text?: string; telegramPerson?: TelegramSender; telegramGroup?: TelegramOwnerGroup }): string | null {
   const m = item.messageId ? store.messagesFor(laneId).find((msg) => msg.id === item.messageId) : undefined;
-  const sender = item.telegramPerson ?? m?.telegramPerson;
+  const sender = item.telegramPerson ?? m?.telegramPerson ?? item.telegramGroup ?? m?.telegramGroup;
   const delegate = m?.telegramDelegate;
-  if ((sender && !telegramSenderCurrent(telegramBinding(sender.botId), sender)) || (delegate && !telegramDelegateCurrent(telegramBinding(delegate.botId), delegate))) {
+  if ((sender && !telegramReplySenderCurrent(telegramBinding(sender.botId), sender)) || (delegate && !telegramDelegateCurrent(telegramBinding(delegate.botId), delegate))) {
     if (m?.queued) {
       const removed = store.patchMessage(laneId, m.id, { queued: false, unsent: true });
       if (removed) broadcast({ kind: "message.patch", threadId: laneId, message: removed });
@@ -14008,6 +14334,59 @@ function deliverQueued(threadId: string, messageIds: readonly string[]) {
     queuedAt: m.queuedAt ?? m.at,
   }));
   for (const message of moved) broadcast({ kind: "message.patch", threadId, message, moved: true });
+}
+
+// ── the sender's record of words that waited ──
+// An agent writing to a busy one gets a "messaged B" row in its own
+// conversation, saying the words wait for their turn. That row was
+// written once, as they were said, and went on saying so long after B
+// had heard and answered them, so the person and both agents took them
+// as stranded and the sender was asked to take back what had already
+// been heard (GitHub 337). The waiting words now carry where that row
+// is (AgentNote.record), on disk, so a restart that drops them can say
+// so too, and the row follows them once: delivered, or not.
+
+/** What the sender's record should say of words that waited, from where
+ * they are now; undefined for a state no record follows. Delivered comes
+ * first: words the person deletes after their turn took them were heard. */
+function recordStatus(m: Message): "sent" | "queued" | "failed" | undefined {
+  if (m.deliveredAt) return "sent";
+  if (m.deleted || m.unsent) return "failed";
+  return m.queued ? "queued" : undefined;
+}
+
+/** Ties words another agent left waiting to its record of sending them.
+ * The tie is itself a change, so they are settled straight away: their
+ * lane may have taken them while that record was being written. */
+function tieRecord(laneId: string, messageId: string, record: { laneId: string; id: string }) {
+  const waiting = store.messagesFor(laneId).find((m) => m.id === messageId);
+  if (waiting?.agent?.dir !== "in") return;
+  try {
+    store.patchMessage(laneId, messageId, { agent: { ...waiting.agent, record } });
+  } catch { /* an untied record says "waiting", as every record did before */ }
+}
+
+/** The sender's record moves on from "queued" once, when the words it is
+ * about go or will never go. A sender lane or row that has gone since
+ * is left alone, and nothing here may stop the words themselves going:
+ * this runs inside every change to a transcript. */
+function settleRecord(m: Message) {
+  const record = m.agent?.dir === "in" ? m.agent.record : undefined;
+  if (!record) return;
+  const status = recordStatus(m);
+  if (!status || status === "queued") return;
+  try {
+    // asked of the agents first, so a lane that has gone is not read
+    // back from disk as an empty one and kept
+    if (!store.botByThread(record.laneId)) return;
+    const row = store.messagesFor(record.laneId).find((r) => r.id === record.id);
+    if (row?.agent?.dir !== "out" || row.agent.status !== "queued") return;
+    const patched = store.patchMessage(record.laneId, row.id, {
+      ...(row.tool ? { tool: { ...row.tool, ok: status !== "failed" } } : {}),
+      agent: { ...row.agent, status },
+    });
+    if (patched) broadcast({ kind: "message.patch", threadId: record.laneId, message: patched });
+  } catch { /* the record is ancillary; the words went, or did not, either way */ }
 }
 
 // ── rewording a queued message ──
@@ -14090,6 +14469,7 @@ function queueOnLane(
     telegramBinding?: Message["telegramBinding"];
     telegramPerson?: TelegramSender;
     telegramDelegate?: TelegramSender;
+    telegramGroup?: TelegramOwnerGroup;
     personal?: boolean;
     waitsFor?: Message["waitsFor"];
     waitsUntil?: number;
@@ -14100,6 +14480,9 @@ function queueOnLane(
     chainTask?: ChainTask;
     /** Why the person's words wait, said under them (server/delivery.ts). */
     delivery?: Delivery;
+    /** Told the words as written down, after the admission, so another
+     * agent's record of sending them can follow them (tieRecord). */
+    onQueued?: (laneId: string, waiting: Message) => void;
   } = {},
 ) {
   // A routine's command keeps Claude Code's command path, as it does
@@ -14123,10 +14506,12 @@ function queueOnLane(
     ...(options.telegramBinding ? { telegramBinding: options.telegramBinding } : {}),
     ...(options.telegramPerson ? { telegramPerson: options.telegramPerson } : {}),
     ...(options.telegramDelegate ? { telegramDelegate: options.telegramDelegate } : {}),
+    ...(options.telegramGroup ? { telegramGroup: options.telegramGroup } : {}),
     ...(!options.from && !options.via && store.bot(botId) ? { commandInstance } : {}),
     ...(options.delivery ? { delivery: options.delivery } : {}),
   });
   options.admission?.accepted("queued");
+  options.onQueued?.(laneId, message);
   broadcast({ kind: "message", threadId: laneId, message });
   const entry = steerQueues.get(laneId) ?? { botId, items: [] };
   entry.items.push({
@@ -14168,7 +14553,7 @@ function steerLane(
   bot: BotRecord,
   lane: TaskRecord,
   text: string,
-  options: { admission?: DirectAdmission; replyTo?: ReplyRef; personal?: boolean; from?: { botId: string; name: string }; fromTelegram?: boolean; telegramBinding?: Message["telegramBinding"]; telegramPerson?: TelegramSender; telegramDelegate?: TelegramSender; delivery?: Delivery; moving?: string } = {},
+  options: { admission?: DirectAdmission; replyTo?: ReplyRef; personal?: boolean; from?: { botId: string; name: string }; fromTelegram?: boolean; telegramBinding?: Message["telegramBinding"]; telegramPerson?: TelegramSender; telegramDelegate?: TelegramSender; telegramGroup?: TelegramOwnerGroup; delivery?: Delivery; moving?: string } = {},
 ): Promise<Message | null> {
   const previous = steerAttempts.get(lane.id);
   if (!previous && laneInstance(bot, lane.id)?.driverKind !== "codex") return steerOne(bot, lane, text, options);
@@ -14195,7 +14580,7 @@ async function steerOne(
   bot: BotRecord,
   lane: TaskRecord,
   text: string,
-  options: { admission?: DirectAdmission; replyTo?: ReplyRef; personal?: boolean; from?: { botId: string; name: string }; fromTelegram?: boolean; telegramBinding?: Message["telegramBinding"]; telegramPerson?: TelegramSender; telegramDelegate?: TelegramSender; delivery?: Delivery; moving?: string } = {},
+  options: { admission?: DirectAdmission; replyTo?: ReplyRef; personal?: boolean; from?: { botId: string; name: string }; fromTelegram?: boolean; telegramBinding?: Message["telegramBinding"]; telegramPerson?: TelegramSender; telegramDelegate?: TelegramSender; telegramGroup?: TelegramOwnerGroup; delivery?: Delivery; moving?: string } = {},
 ): Promise<Message | null> {
   // an agent's words reach the engine framed, so they are never a command
   if (commandTurns.has(lane.id) || (!options.telegramPerson && !options.from && acceptingNative(bot, lane.id) && commandFor(text, acceptingNative(bot, lane.id)!))) return null;
@@ -14205,12 +14590,14 @@ async function steerOne(
   if (claimedLanes.has(lane.id)) return null;
   // Bloks compacting a quiet session is not a turn anybody is talking in
   if (idleCompacting.has(lane.id)) return null;
-  if ((activeRoom.get(lane.id) ?? lane.id) !== lane.id || (laneRequester.get(lane.id) ?? "owner") !== (options.telegramPerson?.requester ?? "owner")) return null;
+  if ((activeRoom.get(lane.id) ?? lane.id) !== lane.id || (laneRequester.get(lane.id) ?? "owner") !== (options.telegramPerson?.requester ?? "owner") ||
+    (laneAudience.get(lane.id) ?? "private") !== telegramAudience(options.telegramPerson ?? options.telegramGroup)) return null;
   if (options.telegramPerson && !telegramSenderCurrent(telegramBinding(bot.id), options.telegramPerson)) return null;
   // A turn a person with full access asked for takes only their words,
   // and their words join only a turn of theirs (GitHub 320).
   if (!sameTelegramDelegate(laneTelegramDelegate.get(lane.id), options.telegramDelegate)) return null;
   if (options.telegramDelegate && !telegramDelegateCurrent(telegramBinding(bot.id), options.telegramDelegate)) return null;
+  if (options.telegramGroup && !telegramOwnerGroupCurrent(telegramBinding(bot.id), options.telegramGroup)) return null;
   const waiting = steerQueues.get(lane.id)?.items ?? [];
   // Words of the person's that are waiting only because they could not
   // go in either, so these would overtake them. Not ones that wait on
@@ -14242,6 +14629,11 @@ async function steerOne(
   // must retain uncertainty, rather than queue a second delivery.
   const took = options.admission ? await taking : await taking.catch(() => false);
   if (!took) return null;
+  // A steer joins this turn. Its stored return keeps this turn's fixed
+  // anchor too, so a restart cannot move the reply to the later words.
+  options = { ...options,
+    ...(options.telegramPerson?.group ? { telegramPerson: laneTelegramPerson.get(lane.id) ?? options.telegramPerson } : {}),
+    ...(options.telegramGroup ? { telegramGroup: laneTelegramGroup.get(lane.id) ?? options.telegramGroup } : {}) };
   options.admission?.accepted("steered");
   // A message that was waiting goes in as itself: moved to where the
   // turn hears it, as a waiting message always is, and marked as joined.
@@ -14261,6 +14653,7 @@ async function steerOne(
     ...(options.telegramPerson ? { telegramPerson: options.telegramPerson } : {}),
     ...(options.telegramDelegate ? { telegramDelegate: options.telegramDelegate } : {}),
     ...(options.delivery ? { delivery: options.delivery } : {}),
+    ...(options.telegramGroup ? { telegramGroup: options.telegramGroup } : {}),
   });
   if (!moved) broadcast({ kind: "message", threadId: lane.id, message });
   // what the turn says from here on is an answer to the person too, and
@@ -14321,10 +14714,12 @@ function recoverQueued(now = Date.now(), joining = new Set<string>()) {
 }
 
 /** What an engine is told about a message another agent sent: who it is
- * from and how to answer. The transcript keeps the words alone, with the
- * sender as data, so the person's chat can say who it was. */
+ * from, how to answer, and that a turn with nothing for the person may
+ * end on the bare quiet word, which then says nothing (unaskedTurn,
+ * GitHub 363). The transcript keeps the words alone, with the sender as
+ * data, so the person's chat can say who it was. */
 function fromAgentPrompt(from: { botId: string; name: string }, text: string) {
-  return `(A message from ${from.name}, another agent. To answer them, use \`bloks say ${from.botId} <text>\`.)\n\n${text}`;
+  return `(A message from ${from.name}, another agent. To answer them, use \`bloks say ${from.botId} <text>\`. If nothing in it needs the person, answer with exactly QUIET and nothing else; the turn then ends without a message.)\n\n${text}`;
 }
 
 /** Name the source without claiming whether the person is here. A quiet
@@ -14358,14 +14753,16 @@ function lastReportFor(laneId: string): string | null {
 
 /** A Telegram person's own part of a conversation: their messages and
  * the replies sent to them, never the owner's side of it. */
-function personsOwn(message: Message, personId: string): boolean {
-  return message.telegramPerson?.personId === personId || message.telegramSent?.personId === personId;
+function personsOwn(message: Message, sender: TelegramSender): boolean {
+  return (message.telegramPerson?.personId === sender.personId && telegramAudience(message.telegramPerson) === telegramAudience(sender)) ||
+    (message.telegramSent?.personId === sender.personId && (message.telegramSent.audience ?? "private") === telegramAudience(sender));
 }
 
 /** Stored words stay unchanged; engines hear who started the message. */
 function storedPrompt(message: Message): string {
   if (message.telegramSent) return `(Explicit Telegram reply to ${JSON.stringify(message.telegramSent.name)}, ${message.telegramSent.state}.)\n\n${message.text ?? ""}`;
-  if (message.telegramPerson) return `(Message from ${JSON.stringify(message.telegramPerson.name)} (Telegram). This person is not the owner; only the owner can approve actions.)\n\n${message.text ?? ""}`;
+  if (message.telegramGroup) return `(Message from the verified owner ${JSON.stringify(telegramSenderLabel(message.telegramGroup))} on Telegram. A group reply must be explicit; private words stay private.)\n\n${message.text ?? ""}`;
+  if (message.telegramPerson) return `(Message from ${JSON.stringify(telegramSenderLabel(message.telegramPerson))} (Telegram). This person is not the owner; only the owner can approve actions.)\n\n${message.text ?? ""}`;
   const text = message.text ?? "";
   const command = Boolean(message.commandInstance && commandFor(text, message.commandInstance));
   const words = message.agent?.dir === "in"
@@ -14463,7 +14860,10 @@ async function sendWaitingNow(bot: BotRecord, lane: TaskRecord): Promise<"steere
   const said = (id?: string) => (id ? store.messagesFor(lane.id).find((m) => m.id === id) : undefined);
   const yours = (steerQueues.get(lane.id)?.items ?? []).filter((item) => {
     const m = said(item.messageId);
-    return m && m.role === "user" && m.queued && !m.deleted && !m.agent && !m.via && !m.telegramPerson && m.text;
+    // This bulk action is private app input. Telegram senders and group
+    // audiences retain their own queued provenance and delivery path.
+    return m && m.role === "user" && m.queued && !m.deleted && !m.agent && !m.via &&
+      !m.telegramPerson && !m.telegramDelegate && !m.telegramGroup && m.text;
   });
   if (!lane.busy || !yours.length) return "nothing";
   if (laneInstance(bot, lane.id)?.adapter.steerTurn) {
@@ -14530,6 +14930,9 @@ async function sendUserMessage(
     /** An agent sent this, to another agent or to itself (chainFrom). */
     chain?: AgentChain;
     guardedAdmission?: (lane: TaskRecord) => DirectAdmission;
+    /** Told the words as written down to wait, behind a turn, a drain or
+     * a pause, so the sender's record of them can follow them (tieRecord). */
+    onQueued?: (laneId: string, waiting: Message) => void;
     /** The person's one tap on how these words meet a running turn, or
      * "answer" for words typed into a card, which are its answer. Unset
      * leaves it to the agent's delivery mode (server/delivery.ts). */
@@ -14562,6 +14965,11 @@ async function sendUserMessage(
   // waiting behind a turn or not, it was said to this agent now
   const yours = Boolean(options.yours && !options.from);
   if (yours) withYou({ bot });
+  // A workflow watching this agent hears what was said when it was said,
+  // whether it starts a turn, goes into one or waits behind one. Only
+  // the turn that started used to be heard, so a message that met a busy
+  // agent never set anything off, then or later.
+  const heard = () => triggersFired({ kind: "message", targetId: bot.id, text, fromUser: true });
   // A goal blocked on the person is waiting for exactly this: their
   // answer. It goes on once the turn that hears it ends, judged as any
   // turn is. One they paused stays paused; that was their decision.
@@ -14590,6 +14998,7 @@ async function sendUserMessage(
         // A turn stopped on a question or an approval reads nothing until
         // that is answered, and the step it is on is the person's own.
         const asked = [...askThreadByRequest.values()].includes(lane.id);
+        heard();
         return {
           ok: true,
           steered: true,
@@ -14628,7 +15037,10 @@ async function sendUserMessage(
       askedEngine = !why;
       const joined = `${bot.name} is in the middle of a turn and reads this after the step it is on.`;
       const steered = why ? null : await steerLane(bot, lane, text, { replyTo: options.replyTo, from: options.from, personal: false, admission: noting(joined) });
-      if (steered) return { ok: true, steered: true, taskId: lane.id, lane: lane.title, note: joined };
+      if (steered) {
+        heard();
+        return { ok: true, steered: true, taskId: lane.id, lane: lane.title, note: joined };
+      }
       notJoined = ` It did not join that turn: ${why ?? `${bot.name}'s turn could not take words mid-turn just then`}.`;
     }
     // Said to the sender too: an agent that thought its "stop" landed would
@@ -14650,15 +15062,17 @@ async function sendUserMessage(
       replyTo: options.replyTo, from: options.from, personal: options.personal, chain: options.chain?.depth, chainTask: options.chain?.task, admission: noting(note),
       ...(drain.on && yours ? { waitsFor: "restart" as const } : paused ? { waitsFor: "pause" as const, waitsUntil: paused.until } : {}),
       ...(delivery ? { delivery } : {}),
+      onQueued: options.onQueued,
     });
     if (paused) sayPaused(lane.id, paused.id, `${pausedWhy(bot, paused)} What is said to it here waits, and goes on its own then.`);
     // Asking the engine took a moment, and the turn may have ended in it,
     // with nothing coming along after to take what now waits.
     if ((yours && options.steer) || askedEngine) drainSteer(lane.id);
+    heard();
     return { ok: true, queued: true, taskId: lane.id, lane: lane.title, note, delivery };
   }
-  await startTurn(bot.id, text, { taskId: lane.id, replyTo: options.replyTo, from: options.from, byYou: yours, personal: options.personal, chain: options.chain?.depth, chainTask: options.chain?.task, admission });
-  triggersFired({ kind: "message", targetId: bot.id, text, fromUser: true });
+  await startTurn(bot.id, text, { taskId: lane.id, replyTo: options.replyTo, from: options.from, byYou: yours, personal: options.personal, chain: options.chain?.depth, chainTask: options.chain?.task, admission, onQueued: options.onQueued });
+  heard();
   // which conversation it went to, so a caller outside the app (the MCP
   // connector) reads the answer from there and not from whichever lane
   // happens to be open
@@ -14777,7 +15191,8 @@ function drainSteer(threadId: string) {
   const byYou = said.some((m) => m && !m.telegramPerson && !m.telegramDelegate && !m.agent && !m.via) || (said.every((m) => !m) && !alive[0].item.telegramPerson && turnsForYou.has(threadId));
   const telegramMessages = alive.flatMap(({ item }) => item.messageId ? [item.messageId] : []);
   const telegramBinding = said.find((message) => message?.telegramBinding)?.telegramBinding;
-  const telegramPerson = said[0]?.telegramPerson ?? alive[0].item.telegramPerson;
+  const telegramPerson = [...said].reverse().find((m) => m?.telegramPerson)?.telegramPerson ?? [...alive].reverse().find((entry) => entry.item.telegramPerson)?.item.telegramPerson;
+  const telegramGroup = [...said].reverse().find((m) => m?.telegramGroup)?.telegramGroup ?? [...alive].reverse().find((entry) => entry.item.telegramGroup)?.item.telegramGroup;
   // a burst is one sender's (queuedSegment), so its first says whose
   const telegramDelegate = telegramPerson ? undefined : said[0]?.telegramDelegate;
   const requester = telegramPerson?.requester ?? alive[0].item.requester;
@@ -14788,9 +15203,9 @@ function drainSteer(threadId: string) {
   const incidentNotes = said.flatMap((m) => (m?.via === "incident" && m.incident ? [m.incident.id] : []));
   const incidentQuiet = incidentNotes.length > 0 && incidentNotes.length === said.length;
   queueStarts.add(threadId);
-  void startTurn(entry.botId, joined, { taskId: threadId, presetMessage: true, answering, byYou, telegramMessages, telegramBinding, telegramPerson, ...(telegramDelegate ? { telegramDelegate } : {}), requester, personalMessages: telegramMessages, commandInstance: queuedCommand(threadId, alive[0].item), chain, chainTask, ...(incidentNotes.length ? { incidentNotes, incidentQuiet } : {}) }).catch((e) => {
+  void startTurn(entry.botId, joined, { taskId: threadId, presetMessage: true, answering, byYou, telegramMessages, telegramBinding, telegramPerson, telegramGroup, ...(telegramDelegate ? { telegramDelegate } : {}), requester, personalMessages: telegramMessages, commandInstance: queuedCommand(threadId, alive[0].item), chain, chainTask, ...(incidentNotes.length ? { incidentNotes, incidentQuiet } : {}) }).catch((e) => {
     for (const id of incidentNotes) deskTurnEnded(id, false);
-    if (telegramPerson) tellTelegramPersonHeld(telegramPerson, (e as Error).message);
+    if (telegramPerson || telegramGroup) tellTelegramPersonHeld((telegramPerson ?? telegramGroup)!, (e as Error).message);
     telegramReturns.finish(threadId, `Could not answer: ${redactSecrets(e instanceof Error ? e.message : String(e))}`, telegramMessages);
     // Delivered already, so no turn will end for it: a phone request
     // among these is answered with why, here.
@@ -15665,7 +16080,10 @@ function customCatalog() {
         name: endpoint.name,
         url: endpoint.url,
         instanceId: customInstanceId(endpoint.id),
+        vision: endpoint.vision === true,
         activeKeyId: active?.id ?? null,
+        // false is chat only, which is what a host nobody vouched for is
+        tools: endpoint.tools === true,
         keys: endpoint.keys.map((cred) => ({
           id: cred.id,
           label: cred.label ?? "",
@@ -15691,6 +16109,14 @@ function parseCustomKey(body: Record<string, unknown>): { key?: string; label?: 
   if (!key) return { error: "a key is required" };
   if (key.length > MAX_KEY_CHARS) return { error: "that key is too long" };
   return { key, ...(label ? { label } : {}) };
+}
+
+/** The endpoint with tools on or off. Off is the field gone rather than
+ * a stored false, so a host that was never switched and one switched
+ * back read the same on disk. */
+function withCustomTools(endpoint: CustomEndpoint, on: boolean): CustomEndpoint {
+  const { tools: _was, ...rest } = endpoint;
+  return on ? { ...rest, tools: true } : rest;
 }
 
 // ── request and response helpers ──────────────────────────────────────
@@ -16528,7 +16954,124 @@ function workspaceEmpty(): boolean {
     (n, bot) => n + bot.tasks.reduce((m, task) => m + store.messagesFor(task.id).filter((msg) => msg.role === "user").length, 0),
     0,
   );
-  return emptyEnoughForMove({ mine, rooms: bloks.bloks.length, routines: routines.routines.length, watchers: watchers.length, intents: intents.length });
+  return emptyEnoughForMove({
+    mine,
+    rooms: bloks.bloks.length,
+    routines: routines.routines.length,
+    watchers: watchers.length,
+    intents: intents.length,
+    workflows: workflows.workflows.length,
+  });
+}
+
+/** Whether a move may land here: an empty workspace, or, asked for in so
+ * many words, the copy a workspace was moved out of, which it replaces
+ * whole (the person was told so before it started). */
+function mayTakeMove(replace: boolean): boolean {
+  return workspaceEmpty() || (replace && movedMark !== null && !movedMark.pending);
+}
+
+/**
+ * What a move counts, here and now: written into the file on the way
+ * out, and asked again once it is in place where it lands, so the app can
+ * say all of it arrived. A memory file counts when it says something: the
+ * seed an agent's folder starts with is not anything that moved.
+ */
+function moveCounts(): MoveCounts {
+  const saying = (files: Array<{ read: () => string }>) => files.filter((file) => file.read().trim()).length;
+  let memoryFiles = saying(workspace.sharedMemoryFiles());
+  for (const bot of store.bots) memoryFiles += saying(workspace.memoryFiles(bot.id));
+  return {
+    agents: store.bots.length,
+    conversations: store.bots.reduce((n, bot) => n + bot.tasks.length, 0),
+    rooms: bloks.bloks.length,
+    routines: routines.routines.length,
+    watchers: watchers.length,
+    workflows: workflows.workflows.length,
+    memoryFiles,
+  };
+}
+
+/** Where this machine's own config.json holds a key, by path and never
+ * by value: what a move landing here keeps, so is not asked for again. */
+function keysHeldHere(): string[] {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? heldKeyPaths(raw as Record<string, unknown>, stripSecrets) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The keys a move out of here would leave behind, by name and page, for
+ * the one question asked before a move starts. Nothing is written. */
+function keysAMoveLeaves(): KeyToEnter[] {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const original = raw as Record<string, unknown>;
+    return keysLeftBehind(stripSecrets(structuredClone(original)), original);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Marks this copy as moved, or takes the mark away, and brings what runs
+ * on its own in line at once: watchers disarmed, Telegram loops and the
+ * Slack and Discord connections closed while it is marked, and started
+ * again when it is not. Routines and workflows read the mark on each
+ * tick. The page hears it, for the banner.
+ */
+function setMoved(mark: MovedMark | null) {
+  if (mark) writeMovedMark(DATA_DIR, mark);
+  else clearMovedMark(DATA_DIR);
+  movedMark = mark;
+  for (const w of watchers) armWatcher(w);
+  for (const bot of store.bots) startTelegramBot(bot.id);
+  for (const platform of CHAT_PLATFORMS) startChat(platform);
+  nextDueChanged();
+  broadcast({ kind: "workspace.moved", moved: mark });
+}
+
+/** A move file in the backups folder, opened as the regular file it is
+ * inside that folder (never through a link), or null for a name that is
+ * not one, or a backup that is not a move. The caller closes it. */
+function heldMoveFile(name: string): ReturnType<typeof openInside> {
+  // a name a backup can have, or the refusal for one that is not
+  backupPath(name);
+  const held = openInside(backupsDirFor(), [name]);
+  if (!held) return null;
+  let kind: BackupInfo["kind"] | null = null;
+  try {
+    kind = readBackupSummaryFrom(held.fd).summary.kind;
+  } catch {}
+  if (kind === "move") return held;
+  closeHeld(held);
+  return null;
+}
+
+/** One move file's parts and their SHA-256s, read once, with the whole
+ * file's: the parts are what the app carries, a part at a time, and the
+ * digests are how each end knows a part arrived as it left. */
+async function moveFileDigests(file: string): Promise<{ size: number; sha256: string; partDigests: string[] }> {
+  const fd = openSync(file, "r");
+  const partDigests: string[] = [];
+  let size = 0;
+  try {
+    size = fstatSync(fd).size;
+    for (let index = 0; index * PART_BYTES < size; index++) {
+      const part = readPartAt(fd, size, index);
+      if (!part) throw new BackupError("The workspace file could not be read back. Try again in a moment.", 409);
+      partDigests.push(part.sha256);
+      // a few hundred megabytes is a few hundred parts: let the rest of
+      // the server answer in between
+      if (index % 16 === 15) await new Promise((r) => setImmediate(r));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { size, sha256: await sha256OfFile(file), partDigests };
 }
 
 /** A file arriving in a request body, written beside the backups as it
@@ -16622,16 +17165,18 @@ function sealedFile(file: string): boolean {
  * does. A wrong or missing passphrase is said at the finish and leaves
  * every part where it is, so it is asked again without sending anything.
  */
-async function serveMoveUpload(req: IncomingMessage, res: ServerResponse, method: string, path: string) {
+async function serveMoveUpload(req: IncomingMessage, res: ServerResponse, method: string, path: string, query: URLSearchParams) {
   try {
     if (path === "/api/workspace/move/upload") {
       if (method !== "POST") return json(res, 405, { error: "POST the file's size to begin" });
       if (backupRunning || restoreUnderWay()) {
         return json(res, 409, { error: "A backup or a restore is already under way. Try again once it is done." });
       }
-      if (!workspaceEmpty()) return json(res, 409, { error: MOVE_NOT_EMPTY });
       const body = await readBody(req);
-      return json(res, 201, moveUploads.start(body.size));
+      if (!mayTakeMove(body.replace === true)) return json(res, 409, { error: MOVE_NOT_EMPTY, notEmpty: true });
+      // the whole file's SHA-256, when the sender says it: the finish holds
+      // what arrived to it
+      return json(res, 201, moveUploads.start(body.size, body.sha256));
     }
     const m = path.match(/^\/api\/workspace\/move\/upload\/(up_[A-Za-z0-9_-]{12})(?:\/(\d{1,6}|finish))?$/);
     if (!m) return json(res, 404, { error: "not found" });
@@ -16647,9 +17192,16 @@ async function serveMoveUpload(req: IncomingMessage, res: ServerResponse, method
     if (m[2] !== "finish") {
       if (method !== "PUT") return json(res, 405, { error: "PUT the part" });
       const bytes = await readBytes(req, PART_BYTES);
-      return json(res, 200, moveUploads.put(id, Number(m[2]), bytes));
+      // in the address rather than a header: Bloks Cloud carries a
+      // request's path and body, and none of its own headers
+      const digest = query.get("sha256");
+      if (digest !== null && !cleanDigest(digest)) return json(res, 400, { error: "That is not a SHA-256 of the part." });
+      return json(res, 200, moveUploads.put(id, Number(m[2]), bytes, cleanDigest(digest)));
     }
     if (method !== "POST") return json(res, 405, { error: "POST to finish" });
+    // an older app finishes with no body at all
+    const asked = await readBody(req).catch(() => ({}) as Record<string, unknown>);
+    const replace = asked.replace === true;
     const status = moveUploads.status(id);
     const data = moveUploads.file(id);
     if (!status || !data) return json(res, 404, { error: "That upload is not here any more. Start the move again." });
@@ -16659,18 +17211,33 @@ async function serveMoveUpload(req: IncomingMessage, res: ServerResponse, method
     if (backupRunning || restoreUnderWay()) {
       return json(res, 409, { error: "A backup or a restore is already under way. Try again once it is done." });
     }
-    if (!workspaceEmpty()) return json(res, 409, { error: MOVE_NOT_EMPTY });
+    if (!mayTakeMove(replace)) return json(res, 409, { error: MOVE_NOT_EMPTY, notEmpty: true });
+    const said = cleanDigest(asked.sha256);
+    if (said && status.sha256 && said !== status.sha256) {
+      return json(res, 409, { error: "That upload is of another workspace file. Start the move again." });
+    }
+    // every part arrived as it left, and together they are the file begun
+    await moveUploads.checkWhole(id);
     const passphrase = typeof req.headers["x-bloks-passphrase"] === "string" && req.headers["x-bloks-passphrase"] ? String(req.headers["x-bloks-passphrase"]) : undefined;
     // checked where it lies, so a refusal costs nothing to try again
     const summary = await checkBackup(data, passphrase);
     if (summary.kind !== "move") throw new BackupError("That is a backup, not a workspace move file. Restore a backup from Backups.", 400);
+    // what the sender counted is what this file says it holds: the app
+    // checks the same counts again once the workspace is in place here
+    const expected = readCounts(asked.counts);
+    if (expected && summary.counts && countsDiffer(expected, summary.counts).length) {
+      return json(res, 409, { error: "The workspace file that arrived does not hold what was written out. Start the move again." });
+    }
     const name = backupFileName(new Date(), "", "move", sealedFile(data)).replace("-move", "-move-in");
     const file = join(backupsDirFor(), name);
     if (existsSync(file)) return json(res, 409, { error: "A workspace file is already arriving. Try again in a moment." });
+    // asked before the folder is swapped: a copy moved back into keeps its
+    // own keys, and only the rest are to be entered again
+    const keys = stillToEnter(summary.keys ?? [], keysHeldHere());
     moveUploads.finish(id, file);
     restoring = { phase: "draining", from: name, startedAt: Date.now() };
     void runRestore(file, passphrase, 0);
-    return json(res, 202, { restore: restoring, toEnter: summary.toEnter ?? [] });
+    return json(res, 202, { restore: restoring, toEnter: summary.toEnter ?? [], keys, counts: summary.counts ?? null });
   } catch (e) {
     if (e instanceof UploadError) return json(res, e.status, { error: e.message });
     if (e instanceof BackupError) {
@@ -16682,25 +17249,145 @@ async function serveMoveUpload(req: IncomingMessage, res: ServerResponse, method
   }
 }
 
-async function serveMove(req: IncomingMessage, res: ServerResponse, method: string, path: string, local: boolean) {
+/**
+ * The move's routes. `local` is this computer's own window or app;
+ * `owner` is that, or, on a hosted workspace, one of the owner's own
+ * paired devices, since a hosted workspace has no window of its own and
+ * the owner's Mac is how its work is carried home (electron/hosting-move.mjs).
+ */
+async function serveMove(req: IncomingMessage, res: ServerResponse, method: string, path: string, local: boolean, owner: boolean, query: URLSearchParams) {
   try {
     if (method === "GET" && path === "/api/workspace/move") {
-      // `canWrite`: writing one out answers only this computer. `partSize`:
-      // a file may come in parts (serveMoveUpload), each this many bytes
-      return json(res, 200, { empty: workspaceEmpty(), hosted: HOSTED, canWrite: local, running: backupRunning, restore: restoring, partSize: PART_BYTES });
+      // `canWrite`: writing one out answers only the owner. `partSize`: a
+      // file may come in parts (serveMoveUpload), each this many bytes.
+      // `counts`, `moved` and `lastRestore` are for the app carrying a
+      // move: what is here, whether this copy's work went elsewhere, and
+      // the last workspace put in place here, by its file's name
+      const last = lastRestore();
+      return json(res, 200, {
+        empty: workspaceEmpty(),
+        hosted: HOSTED,
+        canWrite: owner,
+        running: backupRunning,
+        restore: restoring,
+        partSize: PART_BYTES,
+        counts: moveCounts(),
+        moved: movedMark,
+        lastRestore: last ? { from: last.from, at: last.at, safety: Boolean(last.safety) } : null,
+        // what a move out of here would ask to be entered again, by name
+        keys: owner ? keysAMoveLeaves() : [],
+      });
     }
     if (path === "/api/workspace/move/upload" || path.startsWith("/api/workspace/move/upload/")) {
-      return serveMoveUpload(req, res, method, path);
+      return serveMoveUpload(req, res, method, path, query);
     }
-    // Writing one out is this computer's, like a backup: it is the whole
-    // workspace, and it goes where the person carries it.
+    // Writing one out is the owner's, like a backup: it is the whole
+    // workspace, and it goes where the person carries it. The answer says
+    // how it is carried: its size, its SHA-256, and each part's.
     if (method === "POST" && path === "/api/workspace/move") {
-      if (!local) return json(res, 403, { error: "not from here" });
+      if (!owner) return json(res, 403, { error: "not from here" });
+      if (movedMark && !movedMark.pending) {
+        return json(res, 409, { error: `This copy's work already moved to ${movedMark.name}. Move it from there, where it is up to date.` });
+      }
       const body = await readBody(req);
-      const backup = await makeBackup({ kind: "move", passphrase: passphraseIn(body) });
-      return json(res, 200, { backup, toEnter: backup.toEnter ?? [] });
+      const counts = moveCounts();
+      const backup = await makeBackup({ kind: "move", passphrase: passphraseIn(body), counts });
+      const carried = await moveFileDigests(backup.path);
+      return json(res, 200, { backup, toEnter: backup.toEnter ?? [], keys: backup.keys ?? [], counts, partSize: PART_BYTES, ...carried });
+    }
+    // This copy's work moved elsewhere, or is moving (`pending`), or came
+    // back: the mark that stops what would otherwise run in two places.
+    if (path === "/api/workspace/move/moved") {
+      if (!owner) return json(res, 403, { error: "not from here" });
+      if (method === "GET") return json(res, 200, { moved: movedMark });
+      if (method === "DELETE") {
+        if (movedMark) setMoved(null);
+        return json(res, 200, { moved: null });
+      }
+      if (method !== "POST") return json(res, 405, { error: "GET, POST or DELETE" });
+      const mark = cleanMovedMark({ ...(await readBody(req)), at: Date.now() });
+      if (!mark) return json(res, 400, { error: "Say where it moved: to is hosted or mac." });
+      // a copy whose work already went elsewhere is not the one to move:
+      // what is up to date is there
+      if (mark.pending && movedMark && !movedMark.pending) {
+        return json(res, 409, { error: `This copy's work already moved to ${movedMark.name}. Move it from there, where it is up to date.` });
+      }
+      setMoved(mark);
+      return json(res, 200, { moved: mark });
+    }
+    // A workspace whose work moved out, emptied: set aside whole beside
+    // its folder, its settings kept, and started again empty, so nothing
+    // of it runs here and the machine is ready for a move another day.
+    // Only for a copy marked moved, so it cannot empty a live workspace.
+    if (method === "POST" && path === "/api/workspace/move/empty") {
+      if (!owner) return json(res, 403, { error: "not from here" });
+      if (!movedMark || movedMark.pending) return json(res, 409, { error: "Only a workspace whose work has moved out is emptied." });
+      if (backupRunning || restoreUnderWay()) return json(res, 409, { error: "A backup or a restore is already under way. Try again once it is done." });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const archive = `${DATA_DIR}-moved-${stamp}`;
+      const kept = (() => {
+        try {
+          return JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+        } catch {
+          return null;
+        }
+      })();
+      renameSync(DATA_DIR, archive);
+      mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+      if (kept && typeof kept === "object") {
+        // guests' devices belonged to rooms that are in the copy set aside
+        if (kept.remote) delete kept.remote.memberDevices;
+        writeFileSync(join(DATA_DIR, "config.json"), JSON.stringify(kept, null, 2), { mode: 0o600 });
+      }
+      res.on("finish", () => setTimeout(() => process.exit(0), 50));
+      return json(res, 200, { emptied: true, restarting: true });
+    }
+    // A move that landed here but did not check out, taken back out: the
+    // workspace as it was just before (the backup a restore always takes
+    // first) put back the same way, with a restart.
+    if (method === "POST" && path === "/api/workspace/move/undo") {
+      if (!owner) return json(res, 403, { error: "not from here" });
+      if (backupRunning || restoreUnderWay()) return json(res, 409, { error: "A backup or a restore is already under way. Try again once it is done." });
+      const last = lastRestore();
+      if (!last || !last.from.includes("-move-in") || !last.safety) return json(res, 409, { error: "There is no move here to take back." });
+      const file = backupPath(last.safety);
+      if (!existsSync(file)) return json(res, 409, { error: "The copy from before the move is not here any more, so the move stays." });
+      restoring = { phase: "draining", from: last.safety, startedAt: Date.now() };
+      void runRestore(file, undefined, 0);
+      return json(res, 202, { restore: restoring });
+    }
+    // One part of a move file, by number, for the app carrying it to
+    // another machine through Bloks Cloud, which takes one small request
+    // at a time. Its SHA-256 was in the answer that wrote the file.
+    const part = path.match(/^\/api\/workspace\/move\/([^/]+)\/part\/(\d{1,6})$/);
+    if (part && method === "GET") {
+      if (!owner) return json(res, 403, { error: "not from here" });
+      // opened once, inside the backups folder, and read from that open
+      // file, as a whole download is (GitHub 318)
+      const held = heldMoveFile(decodeURIComponent(part[1]));
+      if (!held) return json(res, 404, { error: "That is not a workspace move file." });
+      let got: { bytes: Buffer } | null;
+      try {
+        got = readPartAt(held.fd, held.stat.size, Number(part[2]));
+      } finally {
+        closeHeld(held);
+      }
+      if (!got) return json(res, 404, { error: "There is no such part." });
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-length": got.bytes.length, "cache-control": "no-store" });
+      res.end(got.bytes);
+      return;
     }
     const m = path.match(/^\/api\/workspace\/move\/([^/]+)$/);
+    // a move file carried where it was going, cleared from here
+    if (m && method === "DELETE" && !["import", "upload", "moved", "empty", "undo"].includes(m[1])) {
+      if (!owner) return json(res, 403, { error: "not from here" });
+      const name = decodeURIComponent(m[1]);
+      const held = heldMoveFile(name);
+      if (!held) return json(res, 404, { error: "That is not a workspace move file." });
+      closeHeld(held);
+      deleteBackup(name);
+      return json(res, 200, { removed: true });
+    }
     if (m && method === "GET" && m[1] !== "import") {
       if (!local) return json(res, 403, { error: "not from here" });
       const name = decodeURIComponent(m[1]);
@@ -17014,6 +17701,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     }
     const hook = webhooks.byToken(hookMatch[1]);
     if (!hook) return json(res, 404, { error: "no such webhook" });
+    // the live copy is on another machine, with webhook addresses of its
+    // own; a 4xx, so the sender stops rather than retries
+    if (movedAway()) return json(res, 409, { error: "This workspace moved to another machine. Point this webhook at its address there." });
     // An archived target keeps its hook, so restoring brings the same
     // URL back. A 4xx and not a 5xx: senders retry on a 5xx, and this
     // will not start working until somebody restores the agent.
@@ -17234,6 +17924,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       ? null
       : deviceForToken(bearerToken(req));
   if (caller) noteClient(caller.id, req.headers["x-bloks-client"]);
+  // On this machine the guard above takes a valid member credential as the
+  // owner at the keyboard. A route that is the owner's alone asks this as
+  // well, and takes a credential that names a member at its word instead.
+  const namesMember = () =>
+    local && !asAgent && req.headers.authorization !== undefined && Boolean(deviceForToken(bearerToken(req))?.personId);
+  // One of the owner's own paired devices, on the network with its token
+  // or through Bloks Cloud: never a member's, whose requests are answered
+  // just below and never reach an owner route, and never an agent's
+  // credential, which only works on this machine.
+  const ownerDevice = Boolean(caller) && !caller?.personId;
   // One conversation's transcript as this caller may receive it: whole
   // here and on the same network, its newest part through Bloks Cloud,
   // with the count of what is left to ask for. olderMessages is always
@@ -17469,9 +18169,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       const placing = readArrangement({ section: body.section, pinned: body.pinned, position: body.position });
       if (!placing.ok) return json(res, 400, { error: placing.error });
 
+      // How hard it thinks, when whoever hires it says: a level the engine
+      // it starts on takes, checked before anybody is made. Unsaid, it
+      // starts on the default for new agents.
+      const settings = await newAgentSettings(asAgent ? (store.bot(asAgent.botId)?.approvals ?? "ask") : undefined);
+      if (body.effort !== undefined) {
+        const on = settings.modelSelection;
+        const refused = effortRefusal(body.effort, on && registry.get(on.instanceId), on?.model);
+        if (refused) return json(res, 400, { error: refused });
+        settings.effort = body.effort as Effort;
+      }
+
       const bot = store.createBot(profile);
       store.patchBot(bot.id, {
-        ...(await newAgentSettings(asAgent ? (store.bot(asAgent.botId)?.approvals ?? "ask") : undefined)),
+        ...settings,
         ...(asAgent ? { hiredBy: asAgent.botId } : {}),
         // made by the person is time spent with them; hired by an agent
         // is not, and it waits below until the person is
@@ -17729,15 +18440,34 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         const refused = computerRefusal(body.computer, HOSTED);
         if (refused) return json(res, 400, { error: refused });
       }
-      // Credits are the person's money: an agent may go back to its own
-      // sign-in, and only the person moves it onto credits.
+      // Claude Code runs on the person's own plan or key, so there is no
+      // other way to pay for it to choose. A phone from before this still
+      // sends the field: its own sign-in is what there is, and is taken
+      // as said; Bloks AI is an engine of its own, picked like any other.
       if (body.engineAccess !== undefined) {
-        const access = body.engineAccess === "own" ? null : body.engineAccess;
-        if (access !== null && access !== "credits") return json(res, 400, { error: 'engineAccess is "credits" or "own"' });
-        if (access === "credits" && asAgent) return json(res, 403, { error: "only the person can put an agent on Bloks AI" });
-        patch.engineAccess = access;
+        if (body.engineAccess !== "own" && body.engineAccess !== null) {
+          return json(res, 400, { error: CLAUDE_ACCESS_REFUSED });
+        }
+        patch.engineAccess = undefined;
       }
-      for (const key of ["name", "title", "description", "notifications", "modelSelection", "computer", "color", "shape", "skills", "skillIds", "effort", "mascotExpression", "hidden"] as const) {
+      // A level being chosen has to be one the agent's engine takes: the
+      // engine this patch moves it to, when it moves. One already saved
+      // stays when the agent moves and its turns get the nearest level,
+      // so saying it again is not refused. Null is the engine's own.
+      if (body.effort !== undefined) {
+        const existing = store.bot(m[1]);
+        if (body.effort === null) {
+          patch.effort = undefined;
+        } else {
+          const on = (body.modelSelection as ModelSelection | undefined) ?? existing?.modelSelection;
+          const refused = isEffort(body.effort) && body.effort === existing?.effort
+            ? null
+            : effortRefusal(body.effort, on && registry.get(on.instanceId), on?.model);
+          if (refused) return json(res, 400, { error: refused });
+          patch.effort = body.effort;
+        }
+      }
+      for (const key of ["name", "title", "description", "notifications", "modelSelection", "computer", "color", "shape", "skills", "skillIds", "mascotExpression", "hidden"] as const) {
         if (body[key] !== undefined) patch[key] = body[key];
       }
       if (body.cwd !== undefined) {
@@ -18154,7 +18884,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         // The omitted selector is stable, even if General or lane state changes.
         const identity = JSON.stringify([m[1], text, requestedTask ?? null, replyTo ?? null, now, ...(named.name ? [named.name] : [])]);
         if (asAgent.report) {
-          if (asAgent.report.identity !== identity) return json(res, 429, { error: "this turn's direct reporting slot is occupied by another submission" });
+          if (asAgent.report.identity !== identity) return json(res, 429, { error: keptBackRefusal(asAgent.report) });
           const receipt = asAgent.report.response;
           return json(res, receipt.status, receipt.body);
         }
@@ -18200,6 +18930,11 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         const sending = sendUserMessage(m[1], text, {
           taskId, replyTo, from, personal: false, now,
           chain: chainFrom(sender, asAgent.taskId, named.name),
+          // told after a queued admission, which has just written the
+          // activity row (accepted, below) for the record to follow them
+          onQueued: (laneId, waiting) => {
+            if (activityId) tieRecord(laneId, waiting.id, { laneId: asAgent.taskId, id: activityId });
+          },
           guardedAdmission: (lane) => {
             claim = agentTokens.claimReport(asAgent, identity, Date.now(), turnAlive);
             const held = claim;
@@ -18296,7 +19031,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           agent: { dir: "out", peerId: recipient.id, peerName: recipient.name, status },
         });
         broadcast({ kind: "message", threadId: asAgent.taskId, message: note });
+        return note;
       };
+      // where the words wait, when they do, for the record to follow them
+      let waiting: { laneId: string; id: string } | undefined;
       // Whether the one written to can answer now, read as it is sent: a
       // sender that will not be answered is told so with the ok, rather
       // than waiting on a reply that is not coming (GitHub 239).
@@ -18320,12 +19058,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           // place in a chain of agents' messages one further; and never as
           // the person's own words, which alone may name a skill or a command
           ...(sender ? { chain: chainFrom(sender, asAgent!.taskId, named.name), personal: false } : {}),
+          ...(from ? { onQueued: (laneId: string, message: Message) => { waiting = { laneId, id: message.id }; } } : {}),
         });
       } catch (e) {
         noteSent("failed");
         throw e;
       }
-      noteSent(result.queued ? "queued" : "sent");
+      // A drain or a pause holds words back without saying queued in the
+      // answer; written down to wait, they wait, whichever door it was.
+      const record = noteSent(result.queued || waiting ? "queued" : "sent");
+      if (record && waiting) tieRecord(waiting.laneId, waiting.id, { laneId: asAgent!.taskId, id: record.id });
       const ready = await reach;
       const warning = ready ? readinessWarning(recipient!.name, ready.engine, ready.readiness) : null;
       return json(res, 202, warning ? { ...result, engine: warning } : result);
@@ -18623,13 +19365,36 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
 
     // The Plan page (server/plan-account.ts): the membership on the
     // licence, the offers on it, the way to billing, and forgetting the
-    // key. This computer's own window only: never an agent, whose
-    // business the person's billing is not, and never a paired device,
-    // since the answer is read with the licence itself.
+    // key. Never an agent, whose business the person's billing is not,
+    // and never a member, a member's credential presented on this machine
+    // included.
+    //
+    // Reading the plan and opening billing are the owner's on any device
+    // of theirs (GitHub 357). A workspace on a server elsewhere has no
+    // window of its own, so its owner had no way to change a plan they
+    // pay for. Neither carries the key: the plan is read with it here,
+    // and the billing link is made only when somebody presses for it and
+    // goes back to the device that pressed. The rest stays on this
+    // computer: forgetting the key, and the way into a hosted workspace,
+    // whose link is sealed for this computer alone.
     if (path === "/api/plan" || path.startsWith("/api/plan/")) {
-      if (asAgent || !local) return json(res, 403, { error: "your plan is shown on this computer only" });
+      if (asAgent || namesMember()) return json(res, 403, { error: "your plan is the owner's" });
+      const anywhere = (method === "GET" && path === "/api/plan") || (method === "POST" && path === "/api/plan/manage");
+      if (!local && !(anywhere && ownerDevice)) {
+        return json(res, 403, { error: "that is done on the computer this workspace runs on" });
+      }
       const answered = await planRoute(method, path, url.searchParams, planDeps, planAccount);
-      if (answered) return json(res, answered.status, answered.body);
+      if (answered) {
+        if (method === "GET" && path === "/api/plan") {
+          // the app starts a move to Hosting once it is running, and the
+          // page is often the first to hear (somebody back from checkout)
+          tellDesktopAccount(answered.body);
+          // whether the key and Hosting can be changed from where this was
+          // asked, so a page elsewhere leaves them out rather than failing
+          return json(res, answered.status, { ...(answered.body as Record<string, unknown>), sameComputer: local });
+        }
+        return json(res, answered.status, answered.body);
+      }
     }
 
     // Bloks AI: what is left, the background switch and a team's member
@@ -19488,10 +20253,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         // Two cards saved back to back: the first one's resume is still
         // running. This one waits for it rather than being refused.
         const entry = steerQueues.get(threadId) ?? { botId: bot.id, items: [] };
-        entry.items.push({ text: note, ...(card.telegramPerson ? { telegramPerson: card.telegramPerson, requester: card.telegramPerson.requester } : {}) });
+        entry.items.push({ text: note, ...(card.telegramPerson ? { telegramPerson: card.telegramPerson, requester: card.telegramPerson.requester } : {}),
+          ...(card.telegramGroup ? { telegramGroup: card.telegramGroup } : {}) });
         steerQueues.set(threadId, entry);
       } else if (!already) {
-        void startTurn(bot.id, note, { taskId: threadId, presetMessage: true, byYou: turnsForYou.has(threadId), ...(card.telegramPerson ? { telegramPerson: card.telegramPerson, requester: card.telegramPerson.requester } : {}) }).catch((e) => {
+        void startTurn(bot.id, note, { taskId: threadId, presetMessage: true, byYou: turnsForYou.has(threadId), ...(card.telegramPerson ? { telegramPerson: card.telegramPerson, requester: card.telegramPerson.requester } : {}),
+          ...(card.telegramGroup ? { telegramGroup: card.telegramGroup } : {}) }).catch((e) => {
           // Same reason as the connector resume: the mark is what stops
           // this firing twice, so leaving it set after a refusal parks
           // the task on a secret that has already been saved.
@@ -19952,6 +20719,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         href,
         // what to write in a reply: the app turns this into the viewer
         markdown: `[${info.name.replace(/[[\]]/g, "")}](${href})`,
+        // Shared all the same, since it opens on this computer. But the
+        // person's phone and their other devices reach it through Bloks
+        // Cloud, and said now the agent can make it smaller or send it
+        // another way, rather than the person finding out (GitHub 366).
+        ...(relayLink.state.configured && info.size > RAW_PARTS_MAX_BYTES
+          ? { warning: `${info.name.split("/").pop()} is too large to open on paired devices through Bloks Cloud, which opens files up to ${RAW_PARTS_MAX_BYTES / 1024 / 1024} MB. It opens on this computer; for the person's phone, make it smaller or send it another way.` }
+          : {}),
       });
     }
 
@@ -19987,6 +20761,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         "content-length": range ? range.end - range.start + 1 : opened.size,
         "accept-ranges": "bytes",
         ...(range ? { "content-range": `bytes ${range.start}-${range.end}/${opened.size}` } : {}),
+        // which version this is, so a device taking the file a part at a
+        // time through Bloks Cloud can tell when it changed in between
+        etag: `"${opened.tag}"`,
         // html artifacts render inside a sandboxed iframe; this keeps a
         // hostile file from becoming a same-origin script on the API
         "content-security-policy": "sandbox allow-scripts",
@@ -19995,6 +20772,79 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       // a viewer that hangs up early takes the open file with it
       pipeline(opened.stream(range), res, () => {});
       return;
+    }
+
+    // ── one file to the agent's own Telegram chat (bloks telegram send) ──
+    // A file goes back to Telegram on its own only after a turn a Telegram
+    // message started (telegramFiles). An agent working from the app, a
+    // routine or another agent's message had no way to send the person
+    // the picture it made, there or anywhere else (GitHub 367). This is
+    // that way, and only that: the chat of the owner this agent's own bot
+    // is paired with, while the pairing holds, and a file from the agent's
+    // own folders, judged as the open file it is (open-inside.ts).
+    m = path.match(/^\/api\/bots\/([\w-]+)\/telegram\/send$/);
+    if (m && method === "POST") {
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such agent" });
+      if (!local) return json(res, 403, { error: "a file is sent to Telegram from the computer it is on" });
+      if (asAgent && asAgent.botId !== bot.id) return json(res, 403, { error: "an agent can only send files to its own Telegram chat" });
+      const body = await readBody(req).catch(() => ({}) as Record<string, unknown>);
+      const wanted = typeof body.path === "string" ? body.path : "";
+      const caption = typeof body.caption === "string" ? body.caption.trim() : "";
+      if (!wanted || !isAbsolute(wanted)) return json(res, 400, { error: "telegram send needs the file, as a path" });
+      if (caption.length > telegram.CAPTION_MAX_CHARS) {
+        return json(res, 400, { error: `a caption is ${telegram.CAPTION_MAX_CHARS} characters at most, and that one is ${caption.length}` });
+      }
+      if (!telegramBinding(bot.id)?.token) {
+        return json(res, 409, { error: "you have no Telegram bot, so there is no chat to send to. Ask the person to connect one with `telegram connect @<your bot's username>`" });
+      }
+      const runtime = liveTelegram(bot.id);
+      const chatId = runtime ? currentTelegram(runtime)?.ownerChatId : undefined;
+      if (!runtime || chatId === undefined) {
+        return json(res, 409, { error: "your Telegram bot is not paired with the person's chat, or is switched off, so nothing was sent. Only the person can pair it or switch it on, in your settings in the app" });
+      }
+      // Its own files, the place its turns work in, and its own workspace,
+      // which is that place when nobody chose another.
+      const lane = bot.tasks.find((t) => t.id === asAgent?.taskId) ?? bot.tasks.find((t) => t.id === activeLaneOf(bot));
+      const roots = [artifacts.artifactsDir(bot.id), workspace.workspaceDir(bot.id), ...(lane ? [laneFolder(bot, lane)] : [])];
+      let held: ReturnType<typeof openUnder>;
+      try {
+        held = openUnder(roots, wanted);
+      } catch {
+        return json(res, 500, { error: `${wanted} could not be read` });
+      }
+      if (typeof held === "string") {
+        const refused = {
+          absent: [404, `there is no file at ${wanted}`],
+          folder: [400, "telegram send takes one file, not a folder. Send the files in it one at a time"],
+          hidden: [403, `${wanted} is a hidden file, or in a hidden folder, and is not sent`],
+          outside: [403, `${wanted} is outside your working folder and your own files (${artifacts.artifactsDir(bot.id)}). Save or copy it there first`],
+        } as const;
+        return json(res, refused[held][0], { error: refused[held][1] });
+      }
+      const name = basename(held.path);
+      if (held.stat.size > telegram.UPLOAD_MAX_BYTES) {
+        closeHeld(held);
+        return json(res, 413, { error: `${name} was not sent: ${telegram.TOO_BIG}` });
+      }
+      const now = Date.now();
+      const recent = (telegramSends.get(bot.id) ?? []).filter((at) => now - at < 60 * 60_000);
+      if (recent.length >= MAX_TELEGRAM_SENDS_PER_HOUR) {
+        closeHeld(held);
+        return json(res, 429, { error: `${name} was not sent: an agent sends at most ${MAX_TELEGRAM_SENDS_PER_HOUR} files to Telegram an hour. Try again later` });
+      }
+      const bytes = readHeld(held, telegram.UPLOAD_MAX_BYTES);
+      if (!bytes) return json(res, 500, { error: `${name} could not be read` });
+      telegramSends.set(bot.id, [...recent, now]);
+      const mime = artifacts.mimeOf(name);
+      const file: telegram.Deliverable = { name, mime, size: bytes.length, ...(caption ? { caption } : {}), blob: async () => new Blob([bytes], { type: mime }) };
+      // the pairing asked again before each try, since an upload can
+      // outlast it
+      const still = () => currentTelegram(runtime)?.ownerChatId === chatId;
+      const why = await telegram.trySendFile(runtime.token, chatId, file, still);
+      if (why) return json(res, 502, { error: `${name} was not sent: ${why}` });
+      const username = currentTelegram(runtime)?.username;
+      return json(res, 200, { ok: true, sent: name, note: `sent to the person's Telegram chat${username ? ` with @${username}` : ""}` });
     }
 
     m = path.match(/^\/api\/bots\/([\w-]+)\/tasks$/);
@@ -20172,6 +21022,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
             if (!note || note.peerId !== other.id || msg.deleted) continue;
             // a send that arrived is listed once, from the side it arrived on
             if (note.dir === "out" && note.status !== "failed") continue;
+            // and one that waited and was never sent, from the sender's
+            // record of it, which says so (settleRecord)
+            if (note.dir === "in" && "record" in note && note.record && msg.unsent) continue;
             const fromSelf = note.dir !== "in";
             entries.push({
               id: msg.id,
@@ -20625,17 +21478,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       if (!url) return json(res, 400, { error: "the endpoint must be an http or https URL" });
       if (url.length > MAX_URL_CHARS) return json(res, 413, { error: "that URL is too long" });
       if (parsed.error) return json(res, parsed.error.includes("too long") ? 413 : 400, { error: parsed.error });
+      if (body.tools !== undefined && typeof body.tools !== "boolean") {
+        return json(res, 400, { error: "tools must be true or false" });
+      }
       if ((cfg.custom ?? []).length >= MAX_CUSTOM_ENDPOINTS) {
         return json(res, 507, { error: `at most ${MAX_CUSTOM_ENDPOINTS} custom endpoints` });
       }
       const cred: CustomKey = { id: randomBytes(8).toString("hex"), key: parsed.key!, ...(parsed.label ? { label: parsed.label } : {}) };
-      const entry: CustomEndpoint = {
+      const entry: CustomEndpoint = withCustomTools({
         id: randomBytes(8).toString("hex"),
         name,
         url,
         keys: [cred],
         activeKeyId: cred.id,
-      };
+      }, body.tools === true);
       await persistCustom([...(cfg.custom ?? []), entry]);
       return json(res, 201, customCatalog());
     }
@@ -20643,6 +21499,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (m && method === "DELETE") {
       const next = (cfg.custom ?? []).filter((endpoint) => endpoint.id !== m![1]);
       if (next.length === (cfg.custom ?? []).length) return json(res, 404, { error: "no such endpoint" });
+      await persistCustom(next);
+      return json(res, 200, customCatalog());
+    }
+    // What the model behind a host can do (call tools, see pictures) is
+    // what changes in place, and only the person can say it (GitHub 359,
+    // 365). The rest is a new host or a key.
+    if (m && method === "PATCH") {
+      const endpoint = (cfg.custom ?? []).find((entry) => entry.id === m![1]);
+      if (!endpoint) return json(res, 404, { error: "no such endpoint" });
+      const body = await readBody(req);
+      if (body.tools === undefined && body.vision === undefined) return json(res, 400, { error: "say tools or vision" });
+      if (body.tools !== undefined && typeof body.tools !== "boolean") return json(res, 400, { error: "tools must be true or false" });
+      if (body.vision !== undefined && typeof body.vision !== "boolean") return json(res, 400, { error: "vision must be true or false" });
+      const next = (cfg.custom ?? []).map((entry) => {
+        if (entry.id !== endpoint.id) return entry;
+        let changed = typeof body.tools === "boolean" ? withCustomTools(entry, body.tools) : entry;
+        // off is no field at all, as for tools
+        if (typeof body.vision === "boolean") {
+          const { vision: _was, ...rest } = changed;
+          changed = body.vision ? { ...rest, vision: true } : rest;
+        }
+        return changed;
+      });
       await persistCustom(next);
       return json(res, 200, customCatalog());
     }
@@ -20849,20 +21728,23 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     }
     if (method === "POST" && path === "/api/bloks") {
       const body = await readBody(req);
+      // counted once each: the same agent named twice is one agent, and
+      // was a way to open a room of one
       const memberIds = Array.isArray(body.memberIds)
-        ? (body.memberIds as unknown[]).filter(
+        ? [...new Set((body.memberIds as unknown[]).filter(
             (id): id is string => typeof id === "string" && roomMayHold(id),
-          )
+          ))]
         : [];
       if (memberIds.length < 2) {
         return json(res, 400, { error: "a room needs at least two agents" });
       }
-      if (memberIds.length > MAX_MEMBERS) {
-        return json(res, 400, { error: `a room holds at most ${MAX_MEMBERS} agents` });
-      }
       // Whoever opened it is in it. An agent that left itself off the
       // roster would have made a room it cannot speak in.
       if (asAgent && !memberIds.includes(asAgent.botId)) memberIds.unshift(asAgent.botId);
+      // and the limit holds with it in
+      if (memberIds.length > MAX_MEMBERS) {
+        return json(res, 400, { error: `a room holds at most ${MAX_MEMBERS} agents` });
+      }
       const lead = readLeadId(body, memberIds, Boolean(asAgent));
       if (!lead.ok) return json(res, lead.status, { error: lead.error });
       const blok = bloks.create(clamp(body.name, MAX_NAME_CHARS) ?? "", memberIds, asAgent ? 0 : Date.now(), lead.leadId ?? null);
@@ -20880,7 +21762,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     if (m && method === "PATCH") {
       const body = await readBody(req);
       const patch: { name?: string; memberIds?: string[]; leadOnly?: boolean; leadId?: string | null; cwd?: string; archived?: boolean } = {};
-      if (typeof body.name === "string") patch.name = body.name;
+      // A name sent is a name kept or a refusal. A blank one used to be
+      // taken and quietly ignored, which read as a rename that worked.
+      if ("name" in body && body.name !== undefined) {
+        const name = clamp(body.name, MAX_NAME_CHARS);
+        if (!name) return json(res, 400, { error: "a room needs a name" });
+        patch.name = name;
+      }
       if (typeof body.leadOnly === "boolean") patch.leadOnly = body.leadOnly;
       if (typeof body.archived === "boolean") patch.archived = body.archived;
       // its section, its pin and its place, by the same reading as an agent's
@@ -20897,10 +21785,34 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         if (!checked.ok) return json(res, 400, { error: checked.error });
         patch.cwd = checked.path ?? undefined;
       }
+      // The roster a new room is held to, held to again when it changes:
+      // two at least, MAX_MEMBERS at most, counted once each. A ninth used
+      // to be cut off without a word, and a roster of one was taken,
+      // which a new room has never been. Whoever is in it already stays
+      // if the edit keeps them, roomMayHold or not: that says who may be
+      // put in a room, and a member's solo agent its maker put there is
+      // not the owner's to drop by adding someone else.
       if (Array.isArray(body.memberIds)) {
-        patch.memberIds = (body.memberIds as unknown[]).filter(
-          (id): id is string => typeof id === "string" && roomMayHold(id),
-        );
+        const room = bloks.get(m[1]);
+        if (!room) return json(res, 404, { error: "no such room" });
+        const memberIds = [
+          ...new Set(
+            (body.memberIds as unknown[]).filter(
+              (id): id is string =>
+                typeof id === "string" && (roomMayHold(id) || (room.memberIds.includes(id) && Boolean(store.bot(id)))),
+            ),
+          ),
+        ];
+        if (memberIds.length < 2) {
+          return json(res, 400, { error: "a room needs at least two agents" });
+        }
+        if (memberIds.length > MAX_MEMBERS) {
+          return json(res, 400, { error: `a room holds at most ${MAX_MEMBERS} agents` });
+        }
+        // A crowned lead the new roster leaves out goes with them, and the
+        // room is back on seniority, the way a room made without a crown
+        // is (BlokStore.patch), unless this request crowns someone else.
+        patch.memberIds = memberIds;
       }
       if ("leadId" in body) {
         const room = bloks.get(m[1]);
@@ -22436,9 +23348,21 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // server that publishes an interface gets it framed here, on our
     // terms: no origin of its own, no network at all, and only the tools
     // it published may be called back.
+    //
+    // The owner's, from this window or from a device of their own (GitHub
+    // 356). A workspace on a server elsewhere has no window, and its owner
+    // was shown a Check that could only fail. None of it is more than the
+    // same device can already ask for: it adds and edits these servers,
+    // and its agents call the same tools. The terms travel with the
+    // document, the policy ahead of the server's own markup, so a frame in
+    // the app on another computer or in a browser is sealed off exactly as
+    // one here is, and what the frame asks for is checked here whoever
+    // relays it. Never a member, and never an agent (NEVER in
+    // server/agent-cli.ts).
+    const appsHere = !asAgent && (local ? !namesMember() : ownerDevice);
     m = path.match(/^\/api\/mcp-servers\/([\w-]+)\/apps$/);
     if (m && method === "GET") {
-      if (!local) return json(res, 403, { error: "not from here" });
+      if (!appsHere) return json(res, 403, { error: "not from here" });
       const server = (cfg.mcpServers ?? []).find((s) => s.id === m![1]);
       if (!server) return json(res, 404, { error: "no such server" });
       try {
@@ -22458,7 +23382,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // no chance to assemble it into something else.
     m = path.match(/^\/api\/mcp-servers\/([\w-]+)\/apps\/view$/);
     if (m && method === "POST") {
-      if (!local) return json(res, 403, { error: "not from here" });
+      if (!appsHere) return json(res, 403, { error: "not from here" });
       const server = (cfg.mcpServers ?? []).find((s) => s.id === m![1]);
       if (!server) return json(res, 404, { error: "no such server" });
       const body = await readBody(req).catch(() => ({}) as Record<string, unknown>);
@@ -22489,7 +23413,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // message was one of the shapes we accept.
     m = path.match(/^\/api\/mcp-servers\/([\w-]+)\/apps\/act$/);
     if (m && method === "POST") {
-      if (!local) return json(res, 403, { error: "not from here" });
+      if (!appsHere) return json(res, 403, { error: "not from here" });
       const server = (cfg.mcpServers ?? []).find((s) => s.id === m![1]);
       if (!server) return json(res, 404, { error: "no such server" });
       const body = await readBody(req).catch(() => ({}) as Record<string, unknown>);
@@ -22515,9 +23439,8 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // listed for, members and invite holders already sent to their own
     // small surface. One narrowing on top: on this machine the guard takes
     // a valid member credential as the owner at the keyboard, and here a
-    // credential that names a member is taken at its word instead.
-    const namesMember = () =>
-      local && !asAgent && req.headers.authorization !== undefined && Boolean(deviceForToken(bearerToken(req))?.personId);
+    // credential that names a member is taken at its word instead
+    // (namesMember, beside the guard).
     if (path === "/api/agent/settings") {
       if (namesMember()) return noStore(res, 403, { error: "settings inspection is the owner's" });
       const saved = savedConfigObservation();
@@ -23089,7 +24012,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
             botName: bot.name,
             laneTitle: task.title,
             busy: Boolean(task.busy),
-            since: turnStarted.get(task.id),
+            // A lane waiting to ask again after a failed turn is still at
+            // that work, and has been since the attempt that failed; it
+            // has no turn of its own to time until the retry starts.
+            since: turnStarted.get(task.id) ?? recoveries.get(task.id)?.tried.at(-1)?.at,
             context: fill,
             blocked: blockedOn(store.messagesFor(task.id), live, { includingPutAside: true }),
           });
@@ -23250,10 +24176,13 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       if (!local || asAgent) return json(res, 403, { error: "not from here" });
       return serveBackups(req, res, method, path);
     }
-    // Moving the whole workspace to another machine. Never an agent's.
+    // Moving the whole workspace to another machine. Never an agent's. On
+    // a hosted workspace the owner's own paired devices write one out and
+    // mark it moved too: it has no window of its own, and the owner's Mac
+    // is how its work comes home. A member never gets this far.
     if (path === "/api/workspace/move" || path.startsWith("/api/workspace/move/")) {
       if (asAgent) return json(res, 403, { error: "not from here" });
-      return serveMove(req, res, method, path, local);
+      return serveMove(req, res, method, path, local, local || (HOSTED && Boolean(caller) && !caller?.personId), url.searchParams);
     }
 
     // ── Slack and Discord, for shared rooms ──
@@ -23387,6 +24316,21 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         const changed = await decideTelegramAdmission(botId, body.personId, body.action);
         return json(res, changed ? 200 : 404, changed ? status() : { error: "no such Telegram person" });
       }
+      // Groups are the owner's choice for this agent alone, on its own
+      // request like a person's access, and they never change the
+      // connection: private chats carry on whichever way it goes.
+      if (body.groups !== undefined) {
+        if (typeof body.groups !== "boolean") return json(res, 400, { error: "groups is on or off" });
+        const before = telegramBinding(botId);
+        if (body.groups && !before?.token) return json(res, 400, { error: "Save a bot token first." });
+        if (body.groups && before?.ownerUserId === undefined) return json(res, 400, { error: "Pair yourself with this bot first, so it can tell your messages in a group from anyone else's." });
+        if (before && (before.groups === true) !== body.groups) {
+          saveTelegramBinding(botId, { ...before, groups: body.groups || undefined });
+          if (!body.groups) await closeTelegramGroups(botId);
+          broadcast({ kind: "config", ...(await configStatus()) });
+        }
+        return json(res, 200, status());
+      }
       const pending = cfg.telegram?.pending;
       const movePending = body.migrate === true;
       if (movePending) {
@@ -23440,8 +24384,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         next = ownerPairing(next);
       }
       // Unpairing forgets the owner too, and is a new connection: a turn
-      // or a card from before it has nobody left to answer to.
-      if (body.unpair === true) next = { ...next, chatIds: [], ownerUserId: undefined, ownerChatId: undefined, pairing: null, generation: randomUUID() };
+      // or a card from before it has nobody left to answer to. Groups go
+      // with them, since nobody there could be told from the owner now.
+      if (body.unpair === true) next = { ...next, chatIds: [], ownerUserId: undefined, ownerChatId: undefined, pairing: null, generation: randomUUID(), groups: undefined };
       if (adoptsPending) saveTelegram({ ...cfg.telegram, version: 2, bots: { ...cfg.telegram?.bots, [botId]: next }, migratedBotId: botId, pending: undefined, migrationError: undefined });
       else saveTelegramBinding(botId, next);
       await revokeTelegramPersonTurns(botId, (sender) => !telegramSenderCurrent(telegramBinding(botId), sender), "This agent's Telegram connection changed.");
@@ -24218,12 +25163,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           }
           next.approvals = asked.approvals as Approvals;
         }
-        if (asked.effort !== undefined) {
-          if (!["low", "medium", "high"].includes(asked.effort as string)) {
-            return json(res, 400, { error: "effort is low, medium or high" });
-          }
-          next.effort = asked.effort as "low" | "medium" | "high";
-        }
         if (asked.modelSelection !== undefined) {
           const pick = asked.modelSelection as { instanceId?: unknown; model?: unknown } | null;
           if (typeof pick?.instanceId !== "string" || typeof pick.model !== "string" || !registry.get(pick.instanceId)) {
@@ -24233,6 +25172,18 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
             return json(res, 400, { error: "modelSelection.model must be a model id" });
           }
           next.modelSelection = { instanceId: pick.instanceId, model: pick.model };
+        }
+        // Judged against the engine chosen here, which new agents start
+        // on. Without one, which engine a hire gets is settled when it is
+        // hired, so any level is kept and each agent runs at the nearest
+        // its engine has. The whole section comes every time, so a level
+        // already saved is not judged again when only the model changes.
+        if (asked.effort !== undefined) {
+          const on = next.modelSelection;
+          const kept = isEffort(asked.effort) && (asked.effort === cfg.agentDefaults?.effort || !on);
+          const refused = kept ? null : effortRefusal(asked.effort, on && registry.get(on.instanceId), on?.model);
+          if (refused) return json(res, 400, { error: refused });
+          next.effort = asked.effort as Effort;
         }
         Object.assign(cfg, saveConfig({ agentDefaults: next }));
         wroteSomething = true;
@@ -24316,13 +25267,22 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // (GitHub 332). The app attaches a file by its path when it can, and a
     // path on a Mac reaching this server through Bloks Cloud, or from a
     // paired device, names nothing here: that file has to be sent. Said by
-    // the server because it is the one that has to open the path.
+    // the server because it is the one that has to open the path. Whether
+    // the asker came through Bloks Cloud too, which only this side can
+    // tell, so a picture is made small enough for it before it goes
+    // (GitHub 333) and one sent on this network is left as it is.
     if (method === "GET" && path === "/api/attachments/where") {
       return json(res, 200, {
         sameComputer: local,
+        throughCloud: viaRelay !== null,
         partBytes: attachments.UPLOAD_PART_BYTES,
         fileMaxBytes: attachments.FILE_MAX_BYTES,
         imageMaxBytes: attachments.IMAGE_MAX_BYTES,
+        // and the most a shared file can be to open that way, so its card
+        // can say so before anybody clicks (GitHub 366). Said only to an
+        // app that takes files in parts: for one that does not, how much
+        // fits in its one answer depends on how well the file compresses.
+        ...(viaRelay !== null && relayTakesParts(req) ? { openMaxBytes: RAW_PARTS_MAX_BYTES } : {}),
       });
     }
     // A file sent in parts, so one of a few megabytes still crosses Bloks
@@ -24588,8 +25548,7 @@ const announceHere = () => {
     stopAnnouncing();
     return;
   }
-  const { id, name } = workspaceIdentity();
-  syncAnnouncement(true, { name: instanceName(computerName(), id === "personal" ? undefined : name), port: PORT, tag: workspaceTag() });
+  syncAnnouncement(true, { name: instanceName(computerName()), port: PORT, tag: workspaceTag() });
 };
 // A port someone else holds is the one startup failure a person can fix
 // on their own, so it is said plainly instead of as a stack trace. The

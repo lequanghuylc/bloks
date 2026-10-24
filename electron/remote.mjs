@@ -20,6 +20,7 @@ import { extname, normalize } from "node:path";
 import { gunzipSync } from "node:zlib";
 
 import { readInside } from "./open-inside.mjs";
+import { gatherParts } from "./raw-parts.mjs";
 import { WAKE_GAVE_UP, createWakeWatch, isWakingAnswer } from "./waking.mjs";
 
 // ── crypto: a mirror of server/relay-crypto.ts ─────────────────────────
@@ -70,6 +71,15 @@ function open(k, payload) {
   } catch {
     return null;
   }
+}
+
+/** What an opened answer says about the whole it is a part of, when it
+ * is one (server/relay-link.ts, servePart); nothing otherwise. */
+function partOf(reply) {
+  const { size, parts, part, tag } = reply;
+  return Number.isSafeInteger(size) && Number.isSafeInteger(parts) && Number.isSafeInteger(part) && typeof tag === "string"
+    ? { size, parts, part, tag }
+    : {};
 }
 
 // ── pairing from a link ────────────────────────────────────────────────
@@ -225,10 +235,14 @@ function readBody(req) {
     let size = 0;
     req.on("data", (c) => {
       size += c.length;
-      if (size > MAX_REQUEST_BYTES) {
-        reject(Object.assign(new Error("too large to send through Bloks Cloud"), { status: 413 }));
-        req.destroy();
-      } else chunks.push(c);
+      if (size <= MAX_REQUEST_BYTES) return void chunks.push(c);
+      // Refused at once, and the rest read and dropped rather than hung up
+      // on: a hang-up takes the answer with it, and the window showed a
+      // lost connection instead of why. Only a sender that goes on far past
+      // it is cut off.
+      chunks.length = 0;
+      reject(Object.assign(new Error("too large to send through Bloks Cloud"), { status: 413 }));
+      if (size > MAX_REQUEST_BYTES * 4) req.destroy();
     });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
@@ -374,7 +388,7 @@ export async function startRemoteProxy(profile, { staticDir, port = 0, onState =
       return { status: 401, type: "application/json", bytes: Buffer.from(JSON.stringify({ error: "this app is no longer paired with that computer" })), heard: true };
     }
     if (!reply) return { status: 502, type: "application/json", bytes: Buffer.from(JSON.stringify({ error: "the answer could not be opened" })), heard: true };
-    if (typeof reply.z === "string") return { status: reply.status, type: reply.type, bytes: gunzipSync(Buffer.from(reply.z, "base64")), heard: true };
+    if (typeof reply.z === "string") return { status: reply.status, type: reply.type, bytes: gunzipSync(Buffer.from(reply.z, "base64")), heard: true, ...partOf(reply) };
     return { status: reply.status, type: "application/json", bytes: Buffer.from(JSON.stringify(reply.body ?? null)), heard: true };
   };
 
@@ -385,6 +399,16 @@ export async function startRemoteProxy(profile, { staticDir, port = 0, onState =
    * window stopped waiting for (`gone`) stops being asked; a write is
    * asked until it lands, so words sent before switching away still go. */
   const ask = (request, { gone } = {}) => watch.run(() => askOnce(request), { gone });
+
+  /** A read through Bloks Cloud, whole however many parts it came in: a
+   * photo or a PDF is often more than one answer carries (raw-parts.mjs).
+   * The other computer answers small things in one part as before, and
+   * one too old to send parts answers as it always did. */
+  const askWhole = (request, { gone } = {}) =>
+    gatherParts((part, tag) => ask({ ...request, parts: true, ...(part ? { part, tag } : {}) }, { gone }), {
+      gone: () => Boolean(gone?.()),
+      join: (pieces) => Buffer.concat(pieces),
+    });
 
   const serveStatic = (req, res) => serveStaticFrom(staticDir, req, res);
 
@@ -649,14 +673,12 @@ export async function startRemoteProxy(profile, { staticDir, port = 0, onState =
       // asked again while the machine wakes; a write is, so it still lands
       let left = false;
       res.on("close", () => (left = !res.writableEnded));
-      const answer = await ask(
-        {
-          method: req.method,
-          path: url.pathname + url.search,
-          ...(body && body.length ? { bodyB64: body.toString("base64"), type: req.headers["content-type"] ?? "application/json" } : {}),
-        },
-        { gone: () => read && left },
-      );
+      const asked = {
+        method: req.method,
+        path: url.pathname + url.search,
+        ...(body && body.length ? { bodyB64: body.toString("base64"), type: req.headers["content-type"] ?? "application/json" } : {}),
+      };
+      const answer = await (req.method === "GET" ? askWhole : ask)(asked, { gone: () => read && left });
       if (req.method === "POST" && url.pathname === "/api/hosted/desktop" && answer.status === 200) noteDoor(answer.bytes);
       const type = answer.type ?? "application/octet-stream";
       res.writeHead(answer.status, {

@@ -1321,7 +1321,10 @@ describe("defaults for new agents", () => {
     for (const bad of [
       { cwd: "relative/path" },
       { cwd: join(h.home, "not-here") },
-      { effort: "max" },
+      // a level some engine lists, but not one Bloks offers
+      { effort: "ultra" },
+      // Claude Code has Max; Grok CLI does not (test/effort-api.test.ts)
+      { modelSelection: { instanceId: "grok_cli", model: "grok-4.7" }, effort: "max" },
       { approvals: "always" },
       { modelSelection: { instanceId: "no-such-engine", model: "x" } },
       { modelSelection: { instanceId: "claude", model: "x".repeat(201) } },
@@ -3436,6 +3439,34 @@ describe("workflows", () => {
     await h.fetch(`/api/bots/${botId}?forget=1`, { method: "DELETE" });
   });
 
+  // It used to be heard only when it started a turn. A message that met a
+  // busy or paused agent waited, and nothing watching for it ever ran.
+  test("a message that has to wait still sets one off", async () => {
+    const botId = await agent("Paused");
+    const { bots } = await h.json("/api/bots");
+    const instanceId = bots.find((b: any) => b.id === botId).modelSelection.instanceId;
+    const workflow = await make({
+      name: "On invoices, paused",
+      trigger: { kind: "message", targetId: botId, targetKind: "agent", contains: "invoice" },
+      steps: [{ action: "approve", text: "Look at it?", targetId: botId }],
+    });
+    const { pause } = await h.json("/api/engine-pauses", {
+      method: "POST",
+      body: JSON.stringify({ what: { instanceId }, agents: [botId], minutes: 60 }),
+    });
+
+    const said = await h.json(`/api/bots/${botId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text: "this invoice is wrong" }),
+    });
+    assert.equal(said.queued, true, "the message did not wait for the pause");
+    const started = await waitFor(async () => (await runOf(workflow.id)) ?? null);
+    assert.ok(started, "a message that waited did not set the workflow off");
+    assert.equal(started.trigger.text, "this invoice is wrong");
+    await h.fetch(`/api/engine-pauses/${pause.id}`, { method: "DELETE" });
+    await h.fetch(`/api/bots/${botId}?forget=1`, { method: "DELETE" });
+  });
+
   test("a reaction sets one off, and taking it back does not", async () => {
     const botId = await agent("Reacted");
     const workflow = await make({
@@ -4687,7 +4718,8 @@ describe("what an MCP server can draw", () => {
     await h.fetch(`/api/mcp-servers/${id}`, { method: "DELETE" });
   });
 
-  test("none of it is reachable from a website or a paired phone", async () => {
+  // the owner's own paired devices reach it too (test/mcp-apps-remote.test.ts)
+  test("none of it is reachable from a website or a device nobody paired", async () => {
     const id = await registered();
     for (const [path, method] of [
       [`/api/mcp-servers/${id}/apps`, "GET"],

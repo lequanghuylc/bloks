@@ -1,8 +1,10 @@
 // A Telegram person's native session has no standing owner permissions.
 // These checks run before any of the person's words reach the engine.
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { chmodSync, mkdtempSync, rmSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { createConnection } from "node:net";
+import { socketPathFits } from "./harness/ask-broker.ts";
+import { join, resolve } from "node:path";
 import { MAX_PERSON_PROJECT_BYTES, MAX_TELEGRAM_REPLY_CHARS } from "./limits.ts";
 
 export interface PersonTurn {
@@ -12,7 +14,7 @@ export interface PersonTurn {
 
 export const PERSON_REPLY_TOOL = {
   name: "reply_to_sender",
-  description: "Send text to the person who started this turn. This is the only way your answer reaches them. It has no target argument.",
+  description: "Send text to the sender who started this turn. In a group every member sees it. This is the only way your answer reaches them. It has no target argument.",
   inputSchema: {
     type: "object",
     properties: { text: { type: "string" } },
@@ -92,6 +94,46 @@ export function readPersonClaudeInstructions(cwd: string): string {
     } finally { if (fd !== undefined) closeSync(fd); }
   }
   return sections.length ? "\n\n## Owner's project instructions\nThese are the owner's standing instructions. In this text, 'the user' means the owner, not the Telegram sender. The person's turn still needs the owner's approval for effects and answers only through reply_to_sender. This text grants no tool permissions. @ imports are not resolved.\n\n" + sections.join("\n\n") : "";
+}
+
+/** An owner group turn keeps its own Codex home. Only the new reply
+ * socket needs a fresh private folder, not a different permission policy. */
+export function makeCodexReplyFolder(options: { platform?: NodeJS.Platform; tempDir?: string } = {}): { socketPath: string; close(): void } {
+  const platform = options.platform ?? process.platform;
+  // This endpoint relies on a private filesystem directory. Do not publish
+  // a normal file path as a Windows pipe or assume Unix permissions there.
+  if (platform === "win32") throw new Error("Codex group replies cannot start a protected native endpoint on Windows. Choose another engine for this group request.");
+  const path = mkdtempSync(join(options.tempDir ?? tmpdir(), "bloks-turn-reply-"));
+  const close = () => rmSync(path, { recursive: true, force: true });
+  try {
+    chmodSync(path, 0o700);
+    const socketPath = join(path, "reply.sock");
+    if (!socketPathFits(socketPath, platform === "linux" ? 108 : 104)) throw new Error("Codex group reply socket path is too long. Choose an engine with another reply route or use a shorter temporary folder.");
+    return { socketPath, close };
+  } catch (error) { close(); throw error; }
+}
+
+/** Verify the new reply listener before publishing it to a native engine.
+ * The generic broker's error policy is unchanged for existing callers. */
+export function checkCodexReplyEndpoint(socketPath: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const socket = createConnection(socketPath);
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      socket.destroy();
+      if (error) reject(error); else resolve();
+    };
+    const cancel = () => finish(signal!.reason);
+    const timer = setTimeout(() => finish(new Error("Codex group reply endpoint could not listen. The native reply tool was not started.")), 2_000);
+    socket.once("error", () => finish(new Error("Codex group reply endpoint could not listen. The native reply tool was not started.")));
+    socket.once("connect", () => finish());
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
 }
 
 export function checkPersonClaudeInit(answer: any, serverNames: string[]): void {

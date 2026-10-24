@@ -67,7 +67,7 @@ async function telegramStub(t: TestContext) {
         }
         return reply({ id: Number(token.split(":")[0]), is_bot: true, username: "PlanningBot" });
       }
-      if (["sendMessage", "sendPhoto", "sendDocument"].includes(method)) return reply({ message_id: ++state.messageId });
+      if (["sendMessage", "sendRichMessage", "sendPhoto", "sendDocument"].includes(method)) return reply({ message_id: ++state.messageId });
       if (method === "deleteMessage") {
         const finish = () => { state.deleted.push({ id: body.message_id, at: Date.now() }); reply(true); };
         if (state.holdDelete) return void state.deleteReleases.push(finish);
@@ -99,7 +99,7 @@ async function telegramStub(t: TestContext) {
     /** Each sendMessage, with the message id the stub gave it. */
     sent() {
       let id = 100;
-      return state.calls.flatMap((c) => (["sendMessage", "sendPhoto", "sendDocument"].includes(c.method) ? [{ ...c, id: ++id }] : []));
+      return state.calls.flatMap((c) => (["sendMessage", "sendRichMessage", "sendPhoto", "sendDocument"].includes(c.method) ? [{ ...c, id: ++id }] : []));
     },
   };
 }
@@ -163,6 +163,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   turn = "work-" + process.pid; reply({ turn: { id: turn } });
   out({ method: "turn/started", params: { threadId: thread, turn: { id: turn } } });
   const text = m.params.input.filter((i) => i.type === "text").map((i) => i.text).join("");
+  if (text.includes("NATIVE_TABLE_REPLY")) {
+    say("table-note", "Checking the sample table.");
+    tool("table-check", "sample-check");
+    await nap(21_500);
+    return finish("**Before**\\n\\n| Item | Price | Note |\\n| --- | --- | --- |\\n| [Sample A](https://example.com/a-(b)) | **12** | |\\n\\n- After");
+  }
   if (text.includes("DELIVERY_BARRIER")) return finish("DELIVERY DONE");
   if (text.includes("RAPID_REFUSE")) return finish("QUEUED RESULT");
   if (text.includes("TIMEOUT_")) {
@@ -237,6 +243,15 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const run = spawnSync(process.execPath, [${JSON.stringify(fileURLToPath(new URL("../../bin/bloks.mjs", import.meta.url)))}, "telegram", "connect", connect[1]], { env: process.env, encoding: "utf8" });
     writeFileSync(root + "/connect-answer.json", JSON.stringify({ status: run.status, out: run.stdout, err: run.stderr }));
     return finish("ASKED");
+  }
+  // any command of the agent's own command line, its arguments as base64
+  // JSON, and what it answered written down
+  const command = text.match(/AGENT_CLI ([A-Za-z0-9+\\/=]+)/);
+  if (command) {
+    const args = JSON.parse(Buffer.from(command[1], "base64").toString("utf8"));
+    const run = spawnSync(process.execPath, [${JSON.stringify(fileURLToPath(new URL("../../bin/bloks.mjs", import.meta.url)))}, ...args], { env: process.env, encoding: "utf8" });
+    writeFileSync(root + "/cli-answer.json", JSON.stringify({ status: run.status, out: run.stdout, err: run.stderr }));
+    return finish("RAN");
   }
   // requests the agent makes with its own credential, and what each got
   const tries = text.match(/AGENT_TRIES (\\[.*\\])/s);
@@ -415,6 +430,20 @@ export async function cardIn(f: Awaited<ReturnType<typeof fixture>>, title: stri
 
 export const heardContext = (f: Awaited<ReturnType<typeof fixture>>) => existsSync(join(f.root, "calls.jsonl")) ? readFileSync(join(f.root, "calls.jsonl"), "utf8").split("\n").slice(0, -1).filter(Boolean).map(x => JSON.parse(x)).filter(x => x.method) : [];
 export const inputWords = (call: any) => call.params.input.filter((x: any) => x.type === "text").map((x: any) => x.text).join("");
+
+/** The agent's own command line, run from inside a turn that began in the
+ * app, and what it answered: its exit status and its JSON. */
+export async function agentCli(f: Awaited<ReturnType<typeof fixture>>, args: string[]): Promise<{ status: number; answer: any }> {
+  const file = join(f.root, "cli-answer.json");
+  rmSync(file, { force: true });
+  const ran = async () => (await f.messages()).filter((m) => m.text === "RAN").length;
+  const before = await ran();
+  await f.post(`/api/bots/${f.bot.id}/messages`, { text: `AGENT_CLI ${Buffer.from(JSON.stringify(args)).toString("base64")}` });
+  await waitFor(() => existsSync(file), "the agent never ran the command");
+  await waitFor(async () => (await ran()) > before, "the turn never ended");
+  const said = JSON.parse(readFileSync(file, "utf8"));
+  return { status: said.status, answer: JSON.parse(said.out) };
+}
 
 /** Requests the agent makes with its own turn credential, from inside a
  * turn, and the status each one got. */

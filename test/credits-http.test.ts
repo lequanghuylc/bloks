@@ -168,18 +168,22 @@ test("background work stays off credits until the person turns it on", async (t)
   assert.equal((await h.json("/api/config")).credits.background, true);
 });
 
-test("an agent's access is credits or its own sign-in, and nothing else", async (t) => {
+test("Claude Code is never put on Bloks AI: the settings route refuses it with a sentence", async (t) => {
   const fake = await service(t);
   const h = await harness(t, { BLOKS_CREDITS_URL: fake.base });
   const { bot } = await h.json("/api/bots", { method: "POST", body: JSON.stringify({ name: "Ada" }) });
   const patch = (body: unknown) => h.fetch(`/api/bots/${bot.id}`, { method: "PATCH", body: JSON.stringify(body) });
+  const refused = await patch({ engineAccess: "credits" });
+  assert.equal(refused.status, 400);
+  const { error } = (await refused.json()) as { error: string };
+  assert.equal(error, "Claude Code runs on your own Claude plan or key, so it cannot run on Bloks AI. To use Bloks AI, pick Bloks AI as this agent's engine.");
+  // and anything else is refused too
   assert.equal((await patch({ engineAccess: "free" })).status, 400);
-  assert.equal((await patch({ engineAccess: "credits" })).status, 200);
-  const on = (await h.json("/api/bots")).bots.find((b: any) => b.id === bot.id);
-  assert.equal(on.engineAccess, "credits", "the phone reads it on the agent");
+  // its own sign-in is what there is, so an older phone saying so is fine
   assert.equal((await patch({ engineAccess: "own" })).status, 200);
-  const off = (await h.json("/api/bots")).bots.find((b: any) => b.id === bot.id);
-  assert.equal(off.engineAccess ?? null, null);
+  assert.equal((await patch({ engineAccess: null })).status, 200);
+  const agent = (await h.json("/api/bots")).bots.find((b: any) => b.id === bot.id);
+  assert.equal("engineAccess" in agent, false, "no agent carries it");
 });
 
 test("the nightly tidy leaves an agent on credits alone until background work may spend them; Tidy now always may", async (t) => {
@@ -188,7 +192,14 @@ test("the nightly tidy leaves an agent on credits alone until background work ma
   const clockHome = mkdtempSync(join(tmpdir(), "bloks-credits-clock-"));
   t.after(() => rmSync(clockHome, { recursive: true, force: true }));
   const clockFile = join(clockHome, "offset");
-  writeFileSync(clockFile, "0");
+  // The test's day starts at noon, whatever the real time. Started in the
+  // small hours, the server would begin inside a night whose tidy it is
+  // still owed and run it at once: one run more than this test counts.
+  const real = Date.now();
+  const noon = new Date(real);
+  noon.setHours(12, 0, 0, 0);
+  if (noon.getTime() <= real) noon.setDate(noon.getDate() + 1);
+  writeFileSync(clockFile, String(noon.getTime() - real));
   const h = await harness(t, {
     BLOKS_CREDITS_URL: fake.base,
     BLOKS_CREDITS_TOKEN: token,
@@ -203,8 +214,8 @@ test("the nightly tidy leaves an agent on credits alone until background work ma
   await waitFor(async () => (await h.json("/api/instances")).instances.find((i: any) => i.instanceId === "bloks" && i.snapshot.state === "available"));
   const tidyAsked = () => fake.completions.length;
 
-  const now = new Date();
-  const night = (days: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, 2, 30).getTime() - now.getTime();
+  // the clock's offset to half past two on the nights after that noon
+  const night = (days: number) => new Date(noon.getFullYear(), noon.getMonth(), noon.getDate() + days, 2, 30).getTime() - Date.now();
   writeFileSync(clockFile, String(night(1)));
   const first = await waitFor(async () => (await h.json(`/api/bots/${bot.id}/memory/tidy`)).runs[0], 20_000);
   assert.ok(first, "the night came");

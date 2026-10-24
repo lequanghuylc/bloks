@@ -22,7 +22,7 @@
 //   The line is disposable. Any error closes it and it dials again with a
 //   backoff; the Mac being asleep for six hours is the normal case, not
 //   an incident.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import type { IncomingMessage } from "node:http";
 
@@ -63,6 +63,7 @@ const INTERNAL = randomBytes(32).toString("hex");
 const RELAY_HEADER = "x-bloks-relay";
 const DEVICE_HEADER = "x-bloks-relay-device";
 const INVITE_HEADER = "x-bloks-relay-invite";
+const PARTS_HEADER = "x-bloks-relay-parts";
 
 /** The invite a replayed request speaks for: somebody who has opened an
  * invite link but has no device yet. Null for anything else, and for
@@ -83,6 +84,62 @@ const MAX_RAW_ANSWER = 1_400_000;
  * past it, which reads here as a lost connection. Stay under with room
  * for the id and status around the payload. */
 const MAX_RESULT_POST = 1_950_000;
+/** One part of a file sent in parts. Bytes that do not compress grow
+ * about 2.37 times on the way (base64 in the answer, again when sealed,
+ * again for the trip), so a part this size is a post of about 1,865,000,
+ * under MAX_RESULT_POST with room for the fields around it. */
+export const RAW_PART_BYTES = 768 * 1024;
+/** The most a device that takes parts is sent of one file. Each part is
+ * a round trip through the relay, and past this the wait is minutes for
+ * something better sent another way. */
+export const RAW_PARTS_MAX_BYTES = 50 * 1024 * 1024;
+/** What a device is told past RAW_PARTS_MAX_BYTES, in the same words the
+ * card and the agent's share answer use. */
+export const RAW_PARTS_REFUSAL = `too large to open through Bloks Cloud, which opens files up to ${RAW_PARTS_MAX_BYTES / 1024 / 1024} MB`;
+/** A part asked for by a version of the file it no longer is. */
+const CHANGED = { error: "the file changed while it was being opened. Open it again.", changed: true };
+
+/** What a part says about the whole it belongs to (RelayResponse). */
+type PartFields = { size?: number; parts?: number; part?: number; tag?: string };
+
+/** Whether a path asks for a range itself, as a phone seeking a video does. */
+function askedForRange(path: string): boolean {
+  try {
+    return new URL(path, "http://x").searchParams.has("range");
+  } catch {
+    return false;
+  }
+}
+
+/** An answer's bytes, or null once they pass `max`: what is not going to
+ * be sent is not read to the end. */
+async function readAtMost(res: Response, max: number): Promise<Buffer | null> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
+
+/** A tag for an answer that came with none of its own: its bytes. */
+function digestOf(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("base64url").slice(0, 22);
+}
 
 /** Who a wake should reach: everybody (a string) or the phones registered
  * by the named relay client digests. `preview` asks for the notification's
@@ -110,6 +167,14 @@ function clientHeader(request: RelayRequest): Record<string, string> {
   return typeof label === "string" && label.length <= 40 && /^[\w .()+/-]+$/.test(label)
     ? { "x-bloks-client": label }
     : {};
+}
+
+/** Whether a replayed request came from a device that takes a file in
+ * parts (servePart), which opens files up to RAW_PARTS_MAX_BYTES rather
+ * than one answer's worth. False for anything that did not come from
+ * this file. */
+export function relayTakesParts(req: IncomingMessage): boolean {
+  return req.headers[RELAY_HEADER] === INTERNAL && req.headers[PARTS_HEADER] === "1";
 }
 
 /** The device id a replayed relay request speaks for, or null for
@@ -157,11 +222,20 @@ const WATCHDOG_MS = 60_000;
  * for a slow relay hop and modest clock skew, tight enough that a
  * captured frame is useless minutes later. */
 const REPLAY_WINDOW_MS = 120_000;
-/** The most of the relay's stream held while waiting for the end of a
- * frame. One ask can be as large as the relay carries (about 2 MB, a part
- * of a workspace file on its way in, say), so this sits well above that,
- * with room for the start of the next frame behind it. */
+/** The most of a followed stream (openStream) held while waiting for the
+ * end of one of its events. */
 const MAX_LINE_BUFFER = 5_000_000;
+/** The longest frame the relay's stream is read for (FrameReader). The
+ * relay refuses a request over 2,000,000 bytes before it gets here, and
+ * writes each as one line, `data: {"kind":"ask","id":...,"payload":...}`,
+ * whose payload is base64 that JSON adds nothing to; so the largest ask it
+ * carries is that and about a hundred characters more. A quarter on top
+ * is room for the frame around it to grow, and a frame past this is not
+ * one the relay carries. */
+export const MAX_FRAME_CHARS = 2_500_000;
+/** How much of a frame too long to hold is kept: its id and the device its
+ * envelope names come first, well inside this. */
+const FRAME_HEAD_CHARS = 4096;
 /** Event streams a paired device may follow through Bloks Cloud (see
  * serveStream): an agent's terminals, whose output is a live stream and
  * not a request and its answer. */
@@ -728,29 +802,18 @@ export class RelayLink {
       armWatchdog();
 
       const decoder = new TextDecoder();
-      let buffer = "";
+      const frames = new FrameReader();
       for (;;) {
         const { value, done } = await reader.read();
         if (!alive()) return;
         if (done) break;
         armWatchdog();
-        buffer += decoder.decode(value, { stream: true });
-        // Bound the buffer: a peer that streams bytes with no separator
-        // must not grow this without limit. Never below the largest ask
-        // the relay carries, or that ask is cut in two and lost.
-        if (buffer.length > MAX_LINE_BUFFER) buffer = buffer.slice(-4096);
-        let cut: number;
-        while ((cut = buffer.indexOf("\n\n")) !== -1) {
-          const chunk = buffer.slice(0, cut);
-          buffer = buffer.slice(cut + 2);
-          const line = chunk.split("\n").find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          let frame: any;
-          try {
-            frame = JSON.parse(line.slice(5).trim());
-          } catch {
+        for (const read of frames.read(decoder.decode(value, { stream: true }))) {
+          if ("tooLarge" in read) {
+            this.refuseTooLarge(read.tooLarge.id, read.tooLarge.deviceId);
             continue;
           }
+          const frame = read.frame;
           // the retry clock only resets once the relay has actually said
           // hello, so an accept-then-drop relay cannot cause a tight storm
           if (frame?.kind === "hello") {
@@ -917,6 +980,11 @@ export class RelayLink {
    * because a file takes longer than a JSON answer.
    */
   private async serveRaw(id: string, request: RelayRequest, replyKey: Buffer, deviceId: string) {
+    // A range the device asked for itself (?range=, which a phone seeks a
+    // video with) is its own business: answered whole, as it always was.
+    if (request.parts === true && request.method === "GET" && !askedForRange(request.path)) {
+      return void this.servePart(id, request, replyKey, deviceId);
+    }
     try {
       const body =
         typeof request.bodyB64 === "string"
@@ -937,26 +1005,129 @@ export class RelayLink {
         signal: AbortSignal.timeout(60_000),
       });
       const bytes = Buffer.from(await res.arrayBuffer());
-      const z = gzipSync(bytes).toString("base64");
-      // what the relay will carry; past it, say so rather than send
-      // something it would drop on the floor
-      if (z.length > MAX_RAW_ANSWER) {
-        return void this.answer(id, 413, { error: "too large to open through Bloks Cloud" }, replyKey, deviceId);
-      }
-      this.answerRaw(id, res.status, res.headers.get("content-type") ?? "application/octet-stream", z, replyKey, deviceId);
+      this.answerBytes(id, res.status, res.headers.get("content-type") ?? "application/octet-stream", bytes, replyKey, deviceId);
     } catch {
       this.answer(id, 502, { error: `${thisMachine()} could not answer that` }, replyKey, deviceId);
     }
   }
 
-  private answerRaw(id: string, status: number, type: string, z: string, key: Buffer, deviceId: string) {
+  /**
+   * A raw answer in parts, for a device that said it takes them, so a
+   * file larger than one answer still opens (GitHub 366). Each part is an
+   * ordinary ask and answer under the relay's limits, so the relay never
+   * knows a file came in pieces.
+   *
+   * The route is asked for that part's bytes alone, by a Range header, so
+   * a large file is never read whole for one piece of it. A route that
+   * does not answer ranges is read whole, and sent whole when that fits,
+   * which keeps a large answer that compresses well (a transcript) the
+   * one answer it always was; it is cut only when it does not fit. Every
+   * part says which version of the file it is from, its tag, and a part
+   * asked for by a tag the file no longer has is refused: half of one
+   * version joined to half of another is a file that never existed.
+   */
+  private async servePart(id: string, request: RelayRequest, replyKey: Buffer, deviceId: string) {
+    const part = request.part ?? 0;
+    const tag = typeof request.tag === "string" ? request.tag : undefined;
+    if (!Number.isSafeInteger(part) || part < 0 || part * RAW_PART_BYTES >= RAW_PARTS_MAX_BYTES || (part > 0 && !tag)) {
+      return void this.answer(id, 416, { error: "there is no such part" }, replyKey, deviceId);
+    }
+    const start = part * RAW_PART_BYTES;
+    const tooLarge = { error: RAW_PARTS_REFUSAL, limit: RAW_PARTS_MAX_BYTES };
+    try {
+      const res = await fetch(`http://127.0.0.1:${this.port}${request.path}`, {
+        method: "GET",
+        headers: {
+          origin: `http://127.0.0.1:${this.port}`,
+          range: `bytes=${start}-${start + RAW_PART_BYTES - 1}`,
+          [RELAY_HEADER]: INTERNAL,
+          [DEVICE_HEADER]: deviceId,
+          [PARTS_HEADER]: "1",
+          ...clientHeader(request),
+        },
+        signal: AbortSignal.timeout(60_000),
+      });
+      const type = res.headers.get("content-type") ?? "application/octet-stream";
+      const etag = res.headers.get("etag");
+      if (res.status === 206) {
+        const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get("content-range") ?? "");
+        const size = Number(range?.[3]);
+        const now = etag ?? `size:${size}`;
+        const refused =
+          !range || Number(range[1]) !== start
+            ? ([502, { error: `${thisMachine()} could not answer that` }] as const)
+            : size > RAW_PARTS_MAX_BYTES
+              ? ([413, tooLarge] as const)
+              : tag !== undefined && tag !== now
+                ? ([412, CHANGED] as const)
+                : null;
+        if (refused) {
+          await res.body?.cancel().catch(() => {});
+          return void this.answer(id, refused[0], refused[1], replyKey, deviceId);
+        }
+        const bytes = Buffer.from(await res.arrayBuffer());
+        return void this.answerPart(id, type, bytes, { size, part, tag: now }, replyKey, deviceId);
+      }
+      // Past the end. For the first part that is an empty file, which no
+      // range can be asked of, so it is asked for whole; for a later one
+      // the file is shorter than it was.
+      if (res.status === 416) {
+        await res.body?.cancel().catch(() => {});
+        if (part > 0) return void this.answer(id, 412, CHANGED, replyKey, deviceId);
+        return void this.serveRaw(id, { ...request, parts: undefined }, replyKey, deviceId);
+      }
+      // a refusal or a missing file goes back as it came
+      if (res.status !== 200) {
+        return void this.answerBytes(id, res.status, type, Buffer.from(await res.arrayBuffer()), replyKey, deviceId);
+      }
+      const whole = await readAtMost(res, RAW_PARTS_MAX_BYTES);
+      if (!whole) return void this.answer(id, 413, tooLarge, replyKey, deviceId);
+      const now = etag ?? digestOf(whole);
+      if (tag === undefined) {
+        const z = gzipSync(whole).toString("base64");
+        const post = z.length <= MAX_RAW_ANSWER ? this.rawPost(id, 200, { type, z, size: whole.length, parts: 1, part: 0, tag: now }, replyKey, deviceId) : null;
+        if (post && post.length <= MAX_RESULT_POST) return void this.deliver(post, 15_000);
+      } else if (tag !== now) {
+        return void this.answer(id, 412, CHANGED, replyKey, deviceId);
+      }
+      if (start >= whole.length) return void this.answer(id, 416, { error: "there is no such part" }, replyKey, deviceId);
+      this.answerPart(id, type, whole.subarray(start, start + RAW_PART_BYTES), { size: whole.length, part, tag: now }, replyKey, deviceId);
+    } catch {
+      this.answer(id, 502, { error: `${thisMachine()} could not answer that` }, replyKey, deviceId);
+    }
+  }
+
+  /** One part of a file sent in parts, with what the device needs to ask
+   * for the rest and put them back together. */
+  private answerPart(id: string, type: string, bytes: Buffer, at: { size: number; part: number; tag: string }, key: Buffer, deviceId: string) {
+    const parts = Math.max(1, Math.ceil(at.size / RAW_PART_BYTES));
+    this.answerBytes(id, 200, type, bytes, key, deviceId, { size: at.size, parts, part: at.part, tag: at.tag });
+  }
+
+  /** Bytes as a raw answer: gzipped, and refused in words when even that
+   * is more than the relay will carry. */
+  private answerBytes(id: string, status: number, type: string, bytes: Buffer, key: Buffer, deviceId: string, more?: PartFields) {
+    const z = gzipSync(bytes).toString("base64");
+    // what the relay will carry; past it, say so rather than send
+    // something it would drop on the floor
+    if (z.length > MAX_RAW_ANSWER) {
+      return void this.answer(id, 413, { error: "too large to open through Bloks Cloud" }, key, deviceId);
+    }
+    this.answerRaw(id, status, type, z, key, deviceId, more);
+  }
+
+  private answerRaw(id: string, status: number, type: string, z: string, key: Buffer, deviceId: string, more?: PartFields) {
     if (!this.config) return;
-    const payload = seal(key, deviceId, { status, type, z });
-    const post = JSON.stringify({ id, status, payload });
+    const post = this.rawPost(id, status, { type, z, ...more }, key, deviceId);
     if (post.length > MAX_RESULT_POST) {
       return this.answer(id, 413, { error: "too large to open through Bloks Cloud" }, key, deviceId);
     }
     void this.deliver(post, 15_000);
+  }
+
+  /** A raw answer sealed and wrapped for the relay, as it will be posted. */
+  private rawPost(id: string, status: number, fields: { type: string; z: string } & PartFields, key: Buffer, deviceId: string): string {
+    return JSON.stringify({ id, status, payload: seal(key, deviceId, { status, ...fields }) });
   }
 
   /**
@@ -1200,6 +1371,19 @@ export class RelayLink {
     this.answer(id, status, null, null, null);
   }
 
+  /**
+   * An ask too long to have been read (FrameReader), answered rather than
+   * left for the relay's twenty seconds to run out on, which the app shows
+   * as this computer not answering. Sealed for the device its envelope
+   * names when that is one paired here, so the app can say why; bare for
+   * anything else, as an envelope for an unknown device always is.
+   */
+  private refuseTooLarge(id: string, deviceId: string | null) {
+    const device = deviceId ? pairedDevices().find((d) => d.id === deviceId) : undefined;
+    if (!device) return this.answer(id, 413, null, null, null);
+    this.answer(id, 413, { error: "too large to send through Bloks Cloud" }, deviceKey(device.hash, "mac-to-phone"), device.id);
+  }
+
   private answer(id: string, status: number, body: unknown, key: Buffer | null, deviceId: string | null): void {
     if (!this.config) return;
     const payload = key && deviceId ? seal(key, deviceId, { status, body }) : "";
@@ -1271,6 +1455,96 @@ export class RelayLink {
       problem: delivering ? (this.state.problem === NOT_DELIVERING ? null : this.state.problem) : NOT_DELIVERING,
     });
   }
+}
+
+/** One thing read off the relay's stream: a frame, or an ask too long to
+ * hold, by the id the relay gave it and the device its envelope names. */
+export type StreamRead = { frame: any } | { tooLarge: { id: string; deviceId: string | null } };
+
+/**
+ * The relay's stream, cut at its blank lines into frames.
+ *
+ * Only the frame still arriving is held, and the bound is on that frame
+ * alone, counted once every whole frame ahead of it has been taken out.
+ * Cutting the buffer before looking for the end of a frame lost every ask
+ * longer than the cut, and any that only arrived in the same read as the
+ * bytes that tipped it over (GitHub 333): an upload went nowhere, nothing
+ * answered it, and the app said this computer had not answered in time.
+ *
+ * A frame that does outgrow the bound is not dropped in silence. Its start
+ * says whose it is, which is handed back to be answered, and the rest goes
+ * past unkept up to the frame's end. A peer that streams bytes with no
+ * separator at all costs a character held, not the bytes it sent.
+ */
+export class FrameReader {
+  private buffer = "";
+  /** Passing over the rest of a frame too long to hold. */
+  private skipping = false;
+  private readonly limit: number;
+
+  constructor(limit = MAX_FRAME_CHARS) {
+    this.limit = limit;
+  }
+
+  /** How much of the stream is held now, which never stays past the limit. */
+  get held(): number {
+    return this.buffer.length;
+  }
+
+  /** One read's text in; what it finished, in order, out. */
+  read(text: string): StreamRead[] {
+    const out: StreamRead[] = [];
+    // only the new text can end a frame, with the character before it in
+    // case the blank line falls across two reads
+    let from = Math.max(0, this.buffer.length - 1);
+    this.buffer += text;
+    if (this.skipping) {
+      const end = this.buffer.indexOf("\n\n");
+      if (end === -1) {
+        this.buffer = this.buffer.slice(-1);
+        return out;
+      }
+      this.buffer = this.buffer.slice(end + 2);
+      this.skipping = false;
+      from = 0;
+    }
+    let cut: number;
+    while ((cut = this.buffer.indexOf("\n\n", from)) !== -1) {
+      const chunk = this.buffer.slice(0, cut);
+      this.buffer = this.buffer.slice(cut + 2);
+      from = 0;
+      const line = chunk.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      try {
+        out.push({ frame: JSON.parse(line.slice(5).trim()) });
+      } catch {
+        continue;
+      }
+    }
+    if (this.buffer.length > this.limit) {
+      const ask = askOf(this.buffer.slice(0, FRAME_HEAD_CHARS));
+      if (ask) out.push({ tooLarge: ask });
+      this.buffer = this.buffer.slice(-1);
+      this.skipping = true;
+    }
+    return out;
+  }
+}
+
+/** Whose ask a frame is, from its first characters: the relay's id, which
+ * it writes ahead of the payload, and the device the sealed envelope
+ * names in the clear (relay-crypto.ts), which comes first inside it. Null
+ * for a start that does not read as an ask. */
+function askOf(head: string): { id: string; deviceId: string | null } | null {
+  const at = head.indexOf("data:");
+  if (at === -1) return null;
+  const start = head.slice(at + 5);
+  if (!/"kind"\s*:\s*"ask"/.test(start)) return null;
+  const id = /"id"\s*:\s*"([^"\\]{1,200})"/.exec(start)?.[1];
+  if (!id) return null;
+  const b64 = /"payload"\s*:\s*"([A-Za-z0-9+/]*)/.exec(start)?.[1] ?? "";
+  const envelope = Buffer.from(b64.slice(0, b64.length - (b64.length % 4)), "base64").toString("utf8");
+  return { id, deviceId: /^\{"d"\s*:\s*"([^"\\]{1,200})"/.exec(envelope)?.[1] ?? null };
 }
 
 /** A sealed request's body, whether it came as JSON or as raw bytes. */

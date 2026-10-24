@@ -34,6 +34,16 @@ const TOKEN = process.env.BLOKS_TOKEN || "";
 
 /** Everything this understands, and what each one is for. */
 const COMMANDS = {
+  reply: {
+    use: "reply <text...>",
+    about: "reply to the group message that started this turn, with no target; every member sees it",
+    run: (args) => {
+      const token = process.env.BLOKS_REPLY_TOKEN || (TOKEN.startsWith("blr_") ? TOKEN : "");
+      const path = process.env.BLOKS_REPLY_PATH;
+      if (!token || !path) throw new Error("this turn has no bound reply to a sender");
+      return request("POST", path, { text: args.join(" ") }, token);
+    },
+  },
   whoami: {
     use: "whoami",
     about: "who this credential says you are",
@@ -424,22 +434,48 @@ const COMMANDS = {
     },
   },
   telegram: {
-    use: "telegram connect @<your bot's username>",
+    use: 'telegram connect @<your bot\'s username> | telegram send <file> [--caption "<words>"]',
     about:
-      "ask the person to connect a Telegram bot you made for yourself with BotFather: a card in the chat names you and the bot, " +
-      "they paste its token there, and it goes to your own Telegram settings without ever being shown to you. Pairing stays theirs. End your turn after asking",
+      "connect: ask the person to connect a Telegram bot you made for yourself with BotFather: a card in the chat names you and the bot, " +
+      "they paste its token there, and it goes to your own Telegram settings without ever being shown to you. Pairing stays theirs. End your turn after asking. " +
+      "send: send one file from your working folder or your own files to the person's Telegram chat with your bot, whatever started this turn, " +
+      "up to 50 MB, with an optional caption of up to 1024 characters. Only while your bot is paired with them. A turn they started on Telegram " +
+      "already sends the files it saved back there, so do not send those again. The answer says whether it went",
     run: async (args) => {
-      const [action, name, ...rest] = args;
-      if (action !== "connect" || !name || rest.length) throw new Error("telegram takes connect and your bot's username, like telegram connect @PlanningBot");
+      const [action, ...rest] = args;
+      if (action === "send") {
+        const flags = parseFlags(rest);
+        const files = positional(rest);
+        if (files.length !== 1) throw new Error('telegram send takes one file, like telegram send chart.png --caption "The Q3 chart"');
+        // the path as the agent sees it, judged again by the workspace,
+        // which opens only a file in the agent's own folders
+        const at = resolve(files[0]);
+        let real;
+        try {
+          real = realpathSync(at);
+        } catch {
+          throw new Error(`there is no file at ${at}`);
+        }
+        if (!statSync(real).isFile()) throw new Error("telegram send takes one file, not a folder. Send the files in it one at a time");
+        const caption = flags.caption !== undefined && flags.caption !== "true" ? flags.caption : undefined;
+        const me = await request("GET", "/api/agent/whoami");
+        return request("POST", `/api/bots/${me.botId}/telegram/send`, { path: at, ...(caption ? { caption } : {}) });
+      }
+      const [name, ...more] = rest;
+      if (action !== "connect" || !name || more.length) {
+        throw new Error('telegram takes connect and your bot\'s username, like telegram connect @PlanningBot, or send and a file, like telegram send chart.png');
+      }
       const me = await request("GET", "/api/agent/whoami");
       return request("POST", `/api/bots/${me.botId}/secrets`, { telegramBot: name });
     },
   },
   hire: {
-    use: 'hire --name <name> --title <role> [--about <description>] [--skills "a,b,c"] [--section <name>] [--pin] [--at <position>]',
+    use: 'hire --name <name> --title <role> [--about <description>] [--skills "a,b,c"] [--effort <level>] [--section <name>] [--pin] [--at <position>]',
     about:
       "add a teammate to the workspace, optionally filed into a sidebar section, and pinned there " +
-      "(--pin puts it after the pins already there; --at puts it at that place among them, 1 at the top)",
+      "(--pin puts it after the pins already there; --at puts it at that place among them, 1 at the top). " +
+      "--effort is how hard it thinks: low, medium, high, xhigh or max, where the engine it starts on has that level; " +
+      "left out, it starts on the workspace's default",
     run: (args) => {
       const flags = parseFlags(args);
       if (!flags.name) throw new Error("hire needs a --name");
@@ -449,6 +485,8 @@ const COMMANDS = {
         title: flags.title ?? "",
         description: flags.about ?? "",
         skills: flags.skills ? flags.skills.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+        // which levels its engine has is the workspace's to say, and it does
+        ...(flags.effort !== undefined ? { effort: flags.effort } : {}),
         ...(flags.section !== undefined ? { section: flags.section } : {}),
         ...(flags.pin !== undefined || at !== undefined ? { pinned: true } : {}),
         ...(at !== undefined ? { position: at } : {}),
@@ -755,7 +793,8 @@ const COMMANDS = {
     about:
       "put one file in the conversation as a card the person can open in the app, here or on their phone, and get back a link " +
       "to write in your reply. The file can be anywhere on this computer you can read: it is copied into your files unless it " +
-      "is already there. --as names the copy, folders allowed (reports/q3.pdf)",
+      "is already there. --as names the copy, folders allowed (reports/q3.pdf). A `warning` in the answer means it is shared but too " +
+      "large to open on the person's paired devices through Bloks Cloud: make it smaller or send it another way",
     run: async (args) => {
       const flags = parseFlags(args);
       const [file] = positional(args);
@@ -996,12 +1035,12 @@ function unreachable(error) {
   );
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, credential = TOKEN) {
   const response = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${TOKEN}`,
+      authorization: `Bearer ${credential}`,
       // the workspace refuses anything that does not look like it came
       // from this machine, and this is what says so
       origin: BASE,
@@ -1053,7 +1092,9 @@ try {
     );
     process.exit(2);
   }
-  if (!TOKEN) throw new Error("no credential in this environment, so there is nobody to act as");
+  // named, since the likeliest cause is an engine that kept the turn's
+  // environment from this shell, and that is something a person can fix
+  if (!TOKEN && !(name === "reply" && process.env.BLOKS_REPLY_TOKEN)) throw new Error("no credential in this environment (BLOKS_TOKEN is not set), so there is nobody to act as");
   const result = await command.run(args);
   process.stdout.write(`${JSON.stringify(result ?? { ok: true }, null, 2)}\n`);
 } catch (error) {
