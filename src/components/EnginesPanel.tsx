@@ -147,6 +147,9 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
                   ? "Connected"
                   : AUTH_NOTE[provider.auth]}
           </div>
+          {provider.connected && !down && !provider.needsSignIn && instance?.snapshot.note ? (
+            <div className="mt-0.5 text-small text-warning">{instance.snapshot.note}</div>
+          ) : null}
         </div>
 
         {provider.auth === "cli" ? (

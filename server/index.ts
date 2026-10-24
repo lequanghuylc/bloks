@@ -173,6 +173,7 @@ import { checkup, filePermissions, tightenPermissions, type SecurityFacts } from
 import {
   clamp,
   clampList,
+  isModelId,
   MAX_BODY_BYTES,
   MAX_CUSTOM_ENDPOINTS,
   MAX_CUSTOM_KEYS,
@@ -183,7 +184,6 @@ import {
   MAX_WEBHOOK_QUEUE_BYTES,
   MAX_WEBHOOK_QUEUE_ITEMS,
   MAX_QUEUED_RECOVERY_MS,
-  MAX_MODEL_ID_CHARS,
   MAX_NAME_CHARS,
   MAX_SKILL_CHARS,
   MAX_SKILLS,
@@ -18429,8 +18429,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           typeof pick?.instanceId !== "string" ||
           !registry.get(pick.instanceId) ||
           typeof pick.model !== "string" ||
-          pick.model.length > MAX_MODEL_ID_CHARS ||
-          !/^[\w.:@/\[\]+-]+$/.test(pick.model)
+          !isModelId(pick.model)
         ) {
           return json(res, 400, { error: "modelSelection must name an engine this workspace has and a model id" });
         }
@@ -25168,7 +25167,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
           if (typeof pick?.instanceId !== "string" || typeof pick.model !== "string" || !registry.get(pick.instanceId)) {
             return json(res, 400, { error: "modelSelection must name an engine this workspace has" });
           }
-          if (!pick.model.trim() || pick.model.length > MAX_MODEL_ID_CHARS) {
+          if (!isModelId(pick.model)) {
             return json(res, 400, { error: "modelSelection.model must be a model id" });
           }
           next.modelSelection = { instanceId: pick.instanceId, model: pick.model };

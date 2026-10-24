@@ -596,6 +596,7 @@ export interface InstanceInfo {
     reason?: string;
     authenticated?: boolean;
     version?: string | null;
+    note?: string;
   };
   /** The effort levels the engine takes, least first; empty for one with
    * no dial. Absent from a server from before they were per engine. */

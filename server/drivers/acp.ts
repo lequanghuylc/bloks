@@ -56,10 +56,20 @@ export interface AcpSpec {
   args: string[];
   /** Extra argv built per turn, for CLIs that take model or permission
    * flags on the command line rather than through the protocol. */
-  turnArgs?: (opts: { fullAuto: boolean; model?: string; effort?: Effort }) => string[];
+  turnArgs?: (opts: { fullAuto: boolean; fullAccess: boolean; model?: string; effort?: Effort }) => string[];
+  /** turnArgs is the whole argv, not an addition to `args`. */
+  replaceArgs?: boolean;
   /** The effort levels turnArgs passes on. Absent for an agent that is
    * given none, whose turns then carry none (server/effort.ts). */
   efforts?: readonly Effort[];
+  /** The model the picker defaults to when the agent lists it, whatever
+   * the session happens to be on. */
+  defaultModel?: string;
+  /** Answers "is the CLI signed in" from its own files, where a path
+   * under the home directory is not enough. */
+  signedIn?: (home: string) => boolean;
+  /** Something about the CLI's own setup worth telling the user. */
+  note?: (home: string) => string | null;
   /** Inherited env vars to strip before spawning. A CLI that owns its own
    * subscription login can silently flip to pay-as-you-go billing if a
    * same-vendor API key leaks through. */
@@ -473,8 +483,9 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
         widenPath();
         void probeCatalog(spec, config.cli, childEnv()).then((catalog) => {
           if (catalog) {
-            models.options = catalog.options;
-            models.default = catalog.default;
+            const pinned = catalogWithDefault(spec, catalog);
+            models.options = pinned.options;
+            models.default = pinned.default;
           }
           finishCatalog();
         });
@@ -485,15 +496,11 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
         if (active.has(threadId)) throw new Error("a turn is already running on this thread");
         const turnId = newId();
 
-        const argv = [
-          ...spec.args,
-          ...(spec.turnArgs?.({
-            // a turn the owner did not vouch for asks, however the engine is set
-            fullAuto: config.fullAuto && !turn.untrusted,
-            model: turn.model,
-            effort: turn.effort,
-          }) ?? []),
-        ];
+        const argv = acpTurnArgv(spec, {
+          ...acpLaunchFlags(config, turn),
+          model: turn.model,
+          effort: turn.effort,
+        });
         widenPath();
         // an npm-installed agent is a .cmd on Windows; see launchSpec
         let launch: ReturnType<typeof launchSpec>;
@@ -936,15 +943,19 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
             if (typeof startupInfo === "string" && startupInfo.trim()) state.banner = startupInfo;
 
             // the agent knows its own model list better than we do
-            const catalog = catalogFromSession(session);
-            if (catalog) {
-              models.options = catalog.options;
-              models.default = catalog.default;
+            // `reported` is what the session is on; the picker default may
+            // be pinned elsewhere, and the switch below compares against
+            // the session, or a session on another model never moves.
+            const reported = catalogFromSession(session);
+            if (reported) {
+              const pinned = catalogWithDefault(spec, reported);
+              models.options = pinned.options;
+              models.default = pinned.default;
             }
             // A model the agent will not switch to must not quietly become
             // a turn on whatever model it already had: say so and stop
             // before anything is sent or spent.
-            if (turn.model && turn.model !== catalog?.default && catalog?.options.some((m) => m.id === turn.model)) {
+            if (turn.model && turn.model !== reported?.default && reported?.options.some((m) => m.id === turn.model)) {
               const option = modelOption(session);
               try {
                 if (option) {
@@ -1080,12 +1091,15 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
             });
         if (!version) return { state: "unavailable", reason: `\`${config.cli}\` CLI not found` };
         const hasKey = (spec.keyEnv ?? []).some((k) => input.environment[k] || process.env[k]);
-        const signedIn = (spec.authFiles ?? []).some((f) => existsSync(join(homedir(), f)));
+        const signedIn = spec.signedIn
+          ? spec.signedIn(homedir())
+          : (spec.authFiles ?? []).some((f) => existsSync(join(homedir(), f)));
         // An agent that answers without a sign-in is not "signed out" for
         // want of one: saying so put up a warning nobody could clear while
         // the agent was answering fine on a free model.
         const authenticated = hasKey || signedIn ? true : spec.signInOptional ? undefined : false;
-        return { state: "available", version: `${spec.name} ${version}`, authenticated };
+        const note = authenticated === true ? spec.note?.(homedir()) ?? undefined : undefined;
+        return { state: "available", version: `${spec.name} ${version}`, authenticated, ...(note ? { note } : {}) };
       };
 
       return {
@@ -1125,6 +1139,59 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
       };
     },
   };
+}
+
+export const CURSOR_AUTO_MODEL = "default[]";
+
+export const CURSOR_RUN_EVERYTHING =
+  "Cursor is set to Run Everything, so this agent will not ask before it acts. Change that in the Cursor CLI if you want Bloks to ask.";
+
+// Two rules. An untrusted turn (one the owner did not vouch for) does not
+// inherit the engine's full-auto setting, so it asks. A shared room does not
+// get full access, even when the agent is set to it.
+export function acpLaunchFlags(
+  config: { fullAuto: boolean },
+  // `shared` is SendTurnInput's room object; only its presence matters here
+  turn: { untrusted?: boolean; fullAccess?: boolean; shared?: unknown },
+): { fullAuto: boolean; fullAccess: boolean } {
+  return {
+    fullAuto: config.fullAuto && !turn.untrusted,
+    fullAccess: Boolean(turn.fullAccess) && !turn.shared,
+  };
+}
+
+export function acpTurnArgv(
+  spec: AcpSpec,
+  flags: { fullAuto: boolean; fullAccess: boolean; model?: string; effort?: Effort },
+): string[] {
+  const extra = spec.turnArgs?.(flags) ?? [];
+  return spec.replaceArgs ? extra : [...spec.args, ...extra];
+}
+
+export function catalogWithDefault(spec: AcpSpec, catalog: ModelCatalog): ModelCatalog {
+  const prefer = spec.defaultModel !== undefined && catalog.options.some((o) => o.id === spec.defaultModel);
+  return { default: prefer ? spec.defaultModel! : catalog.default, options: catalog.options };
+}
+
+function cursorConfig(home: string): Record<string, unknown> | null {
+  try {
+    const raw = JSON.parse(readFileSync(join(home, ".cursor", "cli-config.json"), "utf8"));
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function cursorSignedIn(home: string): boolean {
+  const info = cursorConfig(home)?.authInfo;
+  if (!info || typeof info !== "object" || Array.isArray(info)) return false;
+  const authId = (info as { authId?: unknown }).authId;
+  return typeof authId === "string" && authId.length > 0;
+}
+
+export function cursorApprovalNote(home: string): string | null {
+  if (!cursorSignedIn(home)) return null;
+  return cursorConfig(home)?.approvalMode === "unrestricted" ? CURSOR_RUN_EVERYTHING : null;
 }
 
 /** Every ACP agent Bloks knows how to launch. */
@@ -1230,6 +1297,24 @@ export const ACP_SPECS: readonly AcpSpec[] = [
     models: {
       default: "auto",
       options: [{ id: "auto", label: "Auto" }],
+    },
+  },
+  {
+    kind: "cursorCli",
+    name: "Cursor",
+    command: "agent",
+    args: ["acp"],
+    replaceArgs: true,
+    turnArgs: ({ fullAuto, fullAccess }) => [...(fullAuto || fullAccess ? ["--force"] : []), "acp"],
+    install: "curl -fsSL https://cursor.com/install | bash",
+    signIn: "run `agent login` in a terminal",
+    signedIn: cursorSignedIn,
+    note: cursorApprovalNote,
+    probeModels: true,
+    defaultModel: CURSOR_AUTO_MODEL,
+    models: {
+      default: CURSOR_AUTO_MODEL,
+      options: [{ id: CURSOR_AUTO_MODEL, label: "Auto" }],
     },
   },
 ];

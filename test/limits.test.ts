@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clamp, clampList } from "../server/limits.ts";
+import { clamp, clampList, isModelId } from "../server/limits.ts";
 
 test("clamp trims, caps, and drops what is left empty", () => {
   assert.equal(clamp("  hello  ", 80), "hello");
@@ -35,4 +35,17 @@ test("clampList returns undefined rather than an empty list", () => {
   assert.equal(clampList([], 400, 12), undefined);
   assert.equal(clampList([null, "", "   "], 400, 12), undefined);
   assert.equal(clampList("not an array", 400, 12), undefined);
+});
+
+test("a model id may carry Cursor's bracket parameters", () => {
+  assert.equal(isModelId("default[]"), true);
+  assert.equal(isModelId("composer-2.5[fast=true]"), true);
+  assert.equal(isModelId("claude-opus-4-8[context=1m,effort=high,fast=false]"), true);
+  assert.equal(isModelId("composer 2"), false);
+  assert.equal(isModelId('say "hi"'), false);
+  assert.equal(isModelId("$(whoami)"), false);
+  assert.equal(isModelId("`id`"), false);
+  assert.equal(isModelId("a\nb"), false);
+  assert.equal(isModelId(""), false);
+  assert.equal(isModelId("x".repeat(201)), false);
 });

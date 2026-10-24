@@ -422,6 +422,8 @@ export interface ProviderSnapshot {
   reason?: string;
   authenticated?: boolean;
   version?: string | null;
+  /** Something true about the engine's setup that the user should know. */
+  note?: string;
 }
 
 // ── what a plan has left ───────────────────────────────────────────────

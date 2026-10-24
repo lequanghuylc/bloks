@@ -97,7 +97,7 @@ function effectiveModel(instance: InstanceInfo | undefined, model: string): stri
 }
 
 /** The characters a model id is made of; the server holds to the same. */
-const MODEL_ID = /^[\w.:@/[\]+-]+$/;
+const MODEL_ID = /^[\w.:@/[\]+,=-]+$/;
 
 /** One focusable row in the list, so the arrow keys can walk them all. */
 const OPTION = "[data-model-option]:not(:disabled)";
