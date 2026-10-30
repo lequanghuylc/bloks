@@ -668,3 +668,16 @@ export function openUiFences(text: string): Array<{ code: string; closed: boolea
   }
   return found;
 }
+
+/**
+ * Drop a stray markdown fence marker (and everything after it) that got
+ * swallowed into an openui body — usually from a model gluing the next
+ * sentence onto the closing ``` with no newline. OpenUI has no reason to
+ * start a line with ``` / ~~~, so cutting there recovers the program.
+ */
+export function openUiSource(code: string): string {
+  const lines = code.split("\n");
+  const cut = lines.findIndex((line) => /^\s*(```|~~~)/.test(line));
+  if (cut <= 0) return cut === 0 ? "" : code;
+  return lines.slice(0, cut).join("\n");
+}

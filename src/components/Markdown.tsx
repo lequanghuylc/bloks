@@ -61,7 +61,7 @@ export function withHighlight(nodes: React.ReactNode[], query: string): React.Re
   return out;
 }
 
-const INLINE_CODE = "rounded-[5px] bg-foreground/[0.06] px-[0.3em] py-px font-mono text-body";
+const INLINE_CODE = "rounded-[5px] bg-muted px-[0.3em] py-px font-mono text-body";
 
 /** Bold, code and links, as elements, with the search highlight painted
  * into the text of each, links and bold included. */
@@ -157,7 +157,7 @@ function MarkdownTable({ block, highlight }: { block: TableBlock; highlight: str
     <TableScroll className={cn(FLOW, "rounded-xl border")}>
       <table className="w-full border-collapse text-body">
         <thead>
-          <tr className="border-b bg-foreground/[0.03]">
+          <tr className="border-b bg-muted">
             {block.columns.map((column, i) => (
               <th key={i} className={cn("px-3 py-2 font-semibold whitespace-nowrap", align(i))}>
                 {inlineMd(column, `th${i}`, highlight)}
@@ -187,15 +187,18 @@ function MarkdownTable({ block, highlight }: { block: TableBlock; highlight: str
  * theme's soften, and every one reads at least as well as the hue it
  * came from, because the palette test already holds those to 4.5 to 1.
  */
+// Prefer color-mix when the engine has it; solid theme colours underneath
+// so Safari 15 (no color-mix) still gets a dark code ground and readable
+// token colours instead of an unset --code-bg wash.
 const SYNTAX = {
-  "--code-bg": "color-mix(in srgb, var(--foreground) 3.5%, var(--background))",
-  "--sx-keyword": "color-mix(in srgb, var(--brand-ink) 78%, var(--foreground))",
-  "--sx-function": "color-mix(in srgb, var(--brand-ink) 48%, var(--foreground))",
-  "--sx-string": "color-mix(in srgb, var(--success) 80%, var(--foreground))",
-  "--sx-number": "color-mix(in srgb, var(--warning) 85%, var(--foreground))",
-  "--sx-type": "color-mix(in srgb, var(--warning) 60%, var(--foreground))",
-  "--sx-property": "color-mix(in srgb, var(--destructive) 55%, var(--foreground))",
-  "--sx-tag": "color-mix(in srgb, var(--destructive) 72%, var(--foreground))",
+  "--code-bg": "var(--muted)",
+  "--sx-keyword": "var(--brand-ink)",
+  "--sx-function": "var(--brand-ink)",
+  "--sx-string": "var(--success)",
+  "--sx-number": "var(--warning)",
+  "--sx-type": "var(--warning)",
+  "--sx-property": "var(--destructive)",
+  "--sx-tag": "var(--destructive)",
 } as CSSProperties;
 
 // A diff line is tinted edge to edge, past the block's own padding, so a
@@ -485,7 +488,7 @@ function Prose({
       // somebody else's words. Drawn in the current colour, so it reads
       // on any ground the reply sits on.
       return (
-        <blockquote className={cn(FLOW, "border-l-2 border-current/15 pl-4 text-current/75")}>
+        <blockquote className={cn(FLOW, "border-l-2 border-border pl-4 text-muted-foreground")}>
           <MarkdownishBlocks text={block.text} highlight={highlight} mentions={mentions} />
         </blockquote>
       );

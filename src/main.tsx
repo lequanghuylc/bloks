@@ -1,3 +1,5 @@
+// Before anything else: iPadOS 15.0–15.3 lacks Array.at / Object.hasOwn.
+import "./lib/safari15";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";

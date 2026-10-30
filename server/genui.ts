@@ -32,6 +32,7 @@ import {
   GENUI_ROOT,
   genuiShapes,
   openUiFences,
+  openUiSource,
   type GenUiShapeName,
 } from "./genui-library.ts";
 
@@ -339,7 +340,8 @@ function toTree(root: ElementNode): { tree: UiNode | null; truncated: boolean } 
 export function extractUi(text: string): UiEntry[] | undefined {
   const fences = openUiFences(text).slice(0, MAX_FENCES);
   const entries: UiEntry[] = [];
-  fences.forEach(({ code }, fence) => {
+  fences.forEach(({ code: raw }, fence) => {
+    const code = openUiSource(raw);
     if (!code.trim() || code.length > MAX_SOURCE) return;
     try {
       parser ??= createParser(genuiShapes.toJSONSchema(), GENUI_ROOT);

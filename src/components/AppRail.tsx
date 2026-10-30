@@ -56,11 +56,18 @@ function RailButton({
           aria-label={hint ?? label}
           aria-current={active ? "page" : undefined}
           className={cn(
-            "relative flex size-9 items-center justify-center rounded-[10px] outline-none transition-[background-color,color,scale] duration-150 ease-out active:scale-[0.96]",
-            active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+            // Avoid `/opacity` bg + modern `scale` transitions: Safari 15
+            // keeps the solid accent wash and can leave currentColor icons blank.
+            "relative flex size-9 items-center justify-center rounded-[10px] outline-none transition-colors duration-150 ease-out active:opacity-80",
+            active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
           )}
         >
-          {children}
+          {/* Colour on a span (not only the button): Safari 15 has left
+              Heroicons with currentColor blank when the colour lived only
+              on the Tooltip trigger button. */}
+          <span className={cn("flex items-center justify-center", active ? "text-foreground" : "text-muted-foreground")}>
+            {children}
+          </span>
           {dot && (
             <span
               className={cn(
@@ -113,7 +120,7 @@ export function AppRail() {
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <RailButton label={t("appRail.chat")} active={place === "chat"} onClick={() => go("chat")}>
-            <MessageCircle size={18} strokeWidth={1.75} />
+            <MessageCircle size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
           <RailButton
             label={t("appRail.overview")}
@@ -132,10 +139,10 @@ export function AppRail() {
             dot={activity.waiting > 0 || activity.failed > 0 ? "warning" : briefNew || rehearsalsReady > 0 ? "brand" : null}
             onClick={() => go("overview")}
           >
-            <LayoutGrid size={18} strokeWidth={1.75} />
+            <LayoutGrid size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
           <RailButton label={t("appRail.automations")} active={place === "automations"} onClick={() => go("automations")}>
-            <Zap size={18} strokeWidth={1.75} />
+            <Zap size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
           <RailButton
             label={t("common.memory")}
@@ -144,7 +151,7 @@ export function AppRail() {
             dot={notesWaiting > 0 ? "warning" : null}
             onClick={() => go("memory")}
           >
-            <Brain size={18} strokeWidth={1.75} />
+            <Brain size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
           <RailButton
             label={t("common.plugins")}
@@ -153,7 +160,7 @@ export function AppRail() {
             dot={activity.suggested > 0 ? "warning" : null}
             onClick={() => go("plugins")}
           >
-            <Puzzle size={18} strokeWidth={1.75} />
+            <Puzzle size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
         </div>
 
@@ -165,7 +172,7 @@ export function AppRail() {
         >
           <UpdateRailButton />
           <RailButton label={t("appRail.usage")} active={place === "usage"} onClick={() => go("usage")}>
-            <UsageIcon size={18} strokeWidth={1.75} />
+            <UsageIcon size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
           <RailButton
             label={t("common.settings")}
@@ -174,7 +181,7 @@ export function AppRail() {
             dot={securityRisky > 0 ? "destructive" : null}
             onClick={() => go("settings")}
           >
-            <SettingsIcon size={18} strokeWidth={1.75} />
+            <SettingsIcon size={18} strokeWidth={1.75} className="shrink-0" />
           </RailButton>
         </div>
       </nav>

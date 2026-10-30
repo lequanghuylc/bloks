@@ -41,8 +41,22 @@ const BARE = /https?:\/\/(?:[^\s<>"`*]|\*(?!\*))+/iy;
 // Italic is strict on purpose: the markers hug the words, and neither side
 // touches a letter or another marker. So *beta* and _beta_ are italic, and
 // 2 * 3 * 4, snake_case_names and a bullet's leading "* " are left alone.
+//
+// Lookbehinds are checked in JS (`tokenBoundary`) instead of in the
+// pattern: Safari on iPadOS 15 cannot parse `(?<!...)` / `(?<=...)` and
+// rejects the whole module with "invalid group specifier name".
 const START =
-  /`[^`]+`|\*\*[^*]+\*\*|(?<![\w*])\*(?![\s*])[^*\n]*?[^\s*]\*(?![\w*])|(?<![\w*])\*[^\s*]\*(?![\w*])|(?<![\w_])_(?![\s_])[^_\n]*?[^\s_]_(?![\w_])|(?<![\w_])_[^\s_]_(?![\w_])|\[|(?<![\w/@])https?:\/\//gi;
+  /`[^`]+`|\*\*[^*]+\*\*|\*(?![\s*])[^*\n]*?[^\s*]\*(?![\w*])|\*[^\s*]\*(?![\w*])|_(?![\s_])[^_\n]*?[^\s_]_(?![\w_])|_[^\s_]_(?![\w_])|\[|https?:\/\//gi;
+
+/** True when `at` is a valid place for an italic marker or a bare URL —
+ * the same rules the old lookbehinds enforced. */
+function tokenBoundary(text: string, at: number, kind: "*" | "_" | "url"): boolean {
+  if (at === 0) return true;
+  const prev = text[at - 1]!;
+  if (kind === "*") return !/[\w*]/.test(prev);
+  if (kind === "_") return !/[\w_]/.test(prev);
+  return !/[\w/@]/.test(prev);
+}
 
 /**
  * Sentence punctuation after a bare URL belongs to the sentence, and a
@@ -143,6 +157,10 @@ export function parseInline(text: string, links = true): InlineToken[] {
       out.push({ kind: "bold", children: parseInline(tok.slice(2, -2), links) });
       last = at + tok.length;
     } else if ((tok.startsWith("*") || tok.startsWith("_")) && tok.length > 2) {
+      if (!tokenBoundary(text, at, tok.startsWith("*") ? "*" : "_")) {
+        re.lastIndex = at + 1;
+        continue;
+      }
       pushText(text.slice(last, at));
       out.push({ kind: "italic", children: parseInline(tok.slice(1, -1), links) });
       last = at + tok.length;
@@ -155,6 +173,10 @@ export function parseInline(text: string, links = true): InlineToken[] {
       re.lastIndex = link.end;
     } else {
       if (!links) continue;
+      if (!tokenBoundary(text, at, "url")) {
+        re.lastIndex = at + 1;
+        continue;
+      }
       BARE.lastIndex = at;
       const raw = BARE.exec(text)?.[0] ?? "";
       const url = trimBare(raw);

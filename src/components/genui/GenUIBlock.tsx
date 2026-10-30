@@ -20,6 +20,7 @@ import { useStore } from "@/state/store";
 import { routeAction } from "@/lib/genui/actions";
 import { LabelProvider, useGenUiTarget, useLabelBook } from "./host";
 import { genuiLibrary } from "./library";
+import { openUiSource } from "@/lib/genui/schema";
 import { t } from "@/lib/i18n";
 
 /** Set inside a drawn answer. Markdown in a TextContent that holds a
@@ -104,19 +105,26 @@ export function GenUIBlock({ code, streaming = false }: { code: string; streamin
     [streaming],
   );
 
+  // Models sometimes glue the next sentence onto the closing ``` with
+  // no newline; that marker (and prose after it) lands inside the fence
+  // body and OpenUI reports parse-failed. Cut it off before parsing.
+  const source = openUiSource(code);
   const fallback = <Undrawn code={code} />;
   if (empty && !streaming) return <div data-genui className="min-w-0">{fallback}</div>;
   return (
     <div data-genui className="min-w-0">
-      <Contain fallback={fallback} again={code}>
+      <Contain fallback={fallback} again={source}>
         <InsideGenUi.Provider value>
           <LabelProvider value={labels}>
             <Renderer
-              response={code}
+              response={source}
               library={genuiLibrary}
               isStreaming={streaming}
               onAction={onAction}
               onParseResult={onParseResult}
+              // The chat already shows Undrawn when a fence comes to
+              // nothing; don't also spam the console with openui's warn.
+              onError={() => {}}
               // No tools: Query and Mutation have nothing to call, so they
               // keep whatever was written and fetch nothing.
               toolProvider={null}

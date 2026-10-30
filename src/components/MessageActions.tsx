@@ -476,7 +476,7 @@ export function ReplyContext({
           ? "border-brand-foreground/60 bg-brand-foreground/15"
           : onDark
             ? "border-primary-foreground/60 bg-primary-foreground/20"
-            : "border-brand/50 bg-foreground/[0.05]",
+            : "border-brand/50 bg-muted",
       )}
     >
       <span className="min-w-0 text-small leading-snug">

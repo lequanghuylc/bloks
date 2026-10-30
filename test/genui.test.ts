@@ -12,6 +12,7 @@ import {
   GENUI_SHAPES,
   genuiShapes,
   openUiFences,
+  openUiSource,
 } from "../server/genui-library.ts";
 import {
   extractUi,
@@ -179,6 +180,18 @@ describe("the tree kept for the phone", () => {
     for (const junk of ["root = ", "root = Card(", "))))", "root = Card([[[[[[[[", '"\\u', "root = Card([" + "@".repeat(500) + "])"]) {
       assert.doesNotThrow(() => extractUi(fence(junk)), junk);
     }
+  });
+});
+
+describe("openUiSource", () => {
+  test("drops a glued closing fence and the prose that followed it into the body", () => {
+    const code = [
+      "root = Card([head])",
+      'head = CardHeader("title", "sub")',
+      "```That hung earlier; racks were published another way.",
+    ].join("\n");
+    assert.equal(openUiSource(code), "root = Card([head])\nhead = CardHeader(\"title\", \"sub\")");
+    assert.equal(openUiSource("root = Card([])"), "root = Card([])");
   });
 });
 

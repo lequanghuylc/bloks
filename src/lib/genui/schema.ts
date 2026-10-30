@@ -13,5 +13,6 @@ export {
   GENUI_SHAPES,
   isOpenUiLang,
   openUiFences,
+  openUiSource,
   type GenUiShapeName,
 } from "../../../server/genui-library.ts";

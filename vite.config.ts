@@ -3,6 +3,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { devApiProxyHeaders } from "./vite.dev-proxy.ts";
+import { safari15Css } from "./vite.safari15-css.ts";
 
 // The catalogues are imported with `with { type: "json" }`, which Node
 // needs (the tests load them) and the build strips. The dev server serves
@@ -19,7 +20,7 @@ const catalogueImports: Plugin = {
 };
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), catalogueImports],
+  plugins: [react(), tailwindcss(), safari15Css(), catalogueImports],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
