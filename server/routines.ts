@@ -63,6 +63,12 @@ export interface Routine {
    * off unless asked for on a time of day, and never on a room's
    * routine, where several agents answer and a channel may be reading. */
   quiet?: boolean;
+  /** Its report waits in the morning brief (server/brief.ts) instead of
+   * notifying on its own: no banner and no phone for its reply, one
+   * notification in the morning for all of them. Only an agent's, and
+   * only while the brief is on; with the brief off it notifies as any
+   * other routine does, since a report nobody is told about is lost. */
+  briefOnly?: boolean;
   /** Days it runs, 0 = Sunday through 6 = Saturday. Empty means daily. */
   days: number[];
   /** Weekly is the default. A once routine runs on `date` and then
@@ -72,9 +78,11 @@ export interface Routine {
   date?: string;
   /** How long the calendar blocks out for it, minutes. Display only. */
   durationMin?: number;
-  /** Where the turn runs, overriding the agent's own computer setting:
-   * "cloud" its cloud computer, "local" this Mac, "off" no computer.
-   * Absent means wherever the agent normally runs. */
+  /** The screen the turn gets, overriding the agent's own computer
+   * setting: "cloud" its cloud computer, "local" this Mac's own screen
+   * (none off a Mac), "off" no screen. Absent means the agent's own. The
+   * name is older than the meaning: the turn itself, its commands and its
+   * files run on this computer whichever it is (GitHub 388). */
   runsOn?: "cloud" | "local" | "off";
   /** The conversation it runs in, by title or by id. Absent means the
    * agent's first, General, where the person talks to it too (GitHub
@@ -348,6 +356,12 @@ export function isQuietReply(text: string | undefined): boolean {
 export const QUIET_ASK =
   "If nothing in it needs the person right now, answer with exactly QUIET and nothing else; a quiet answer is not brought to their attention.";
 
+/** What a routine that reports in the morning brief adds to the same
+ * line: its answer is read on a card, not in a notification, so the top
+ * of it is what the person sees first. */
+export const BRIEF_ASK =
+  "Your answer is shown on this routine's card in the person's morning brief, not as a notification: open with the outcome and anything that needs them, then the detail.";
+
 /** The note a routine's next run carries about what it said last time,
  * or null before it has said anything. One line, cut to LAST_REPORT_MAX
  * with an ellipsis, so it reads as a reminder and not as instructions. */
@@ -460,6 +474,7 @@ export function normalize(raw: unknown): Omit<Routine, "id" | "createdAt"> | nul
     every,
     activeHours,
     quiet: targetKind === "agent" && (every !== undefined || o.quiet === true) ? true : undefined,
+    briefOnly: targetKind === "agent" && o.briefOnly === true ? true : undefined,
   };
 }
 
@@ -589,6 +604,7 @@ export class RoutineStore {
     if ("every" in patch) routine.every = patch.every;
     if ("activeHours" in patch) routine.activeHours = patch.activeHours;
     if ("quiet" in patch) routine.quiet = patch.quiet || undefined;
+    if ("briefOnly" in patch) routine.briefOnly = patch.briefOnly || undefined;
     if ("chain" in patch) routine.chain = patch.chain || undefined;
     if ("failures" in patch) routine.failures = patch.failures || undefined;
     if ("failing" in patch) routine.failing = patch.failing;

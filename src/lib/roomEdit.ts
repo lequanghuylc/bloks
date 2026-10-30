@@ -4,6 +4,8 @@
 // pick members the same way and a test can read them without a screen.
 import type { Blok, Bot, NewRoomPreset } from "@/state/reducer";
 import { roomLead } from "./roomLead.ts";
+import { answersOf } from "./roomRoute.ts";
+import { t } from "./i18n.ts";
 
 /** A room holds a working group, not a crowd (MAX_MEMBERS in
  * server/bloks.ts, which refuses a ninth). */
@@ -75,7 +77,7 @@ export function leadNote<T extends { id: string; name: string; seniority?: numbe
   if (leadId && answering.some((m) => m.id === leadId)) return null;
   const after = roomLead(answering, null);
   if (!after || answering.length < MIN_MEMBERS) return null;
-  return `${before.name} is out, so ${after.name} leads now, as the most senior.`;
+  return t("roomEdit.leadMoved", { before: before.name, after: after.name });
 }
 
 /** What "New room with these agents" opens the New room dialog with: the
@@ -91,7 +93,7 @@ export function freshStartPreset(room: Blok, bots: readonly Bot[]): NewRoomPrese
     name: room.name,
     memberIds,
     leadId: room.leadId && memberIds.includes(room.leadId) ? room.leadId : null,
-    leadOnly: Boolean(room.leadOnly),
+    answers: answersOf(room),
     ...(folder ? { cwd: folder } : {}),
     from: room.name,
   };

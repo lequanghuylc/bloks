@@ -28,6 +28,11 @@
 //   its turns' replies are the work too: the goal's end is said once,
 //   when it comes, rather than twenty times on the way.
 //
+//   The morning brief is one notification for the morning, whatever fed
+//   it (server/brief.ts briefNotice decides whether there is one at all),
+//   and it opens that brief on Overview. Not while Overview is in front
+//   of you: the brief is already there.
+//
 //   A quiet check-in never interrupts. Its agent answered QUIET because
 //   nothing needed you, and what a check-in says on the way to deciding
 //   that waits for the end of its turn (CheckInHold), so the commentary
@@ -38,6 +43,7 @@
 //   they land, the way they were before it could say when a turn was over.
 
 import { itemProgress, type CodexText } from "./codexProgress.ts";
+import { t } from "./i18n.ts";
 
 const ENGINE_OUT =
   /credit balance is too low|insufficient[_ ](?:quota|credits|funds|balance)|billing|payment required|\b402\b|out of credits|exceed your available credits|usage limit|limit (?:reached|exceeded)|quota|rate[ _-]?limit|\b429\b|not (?:logged|signed) in|sign in/i;
@@ -108,7 +114,7 @@ function preview(text: string): string {
 export function noticeFor(message: NotifiableMessage, ctx: NotifyContext): Notice | null {
   if (message.role !== "bot" || message.quiet || message.deleted || itemProgress(message)) return null;
 
-  const who = ctx.room ? ctx.room.name : (ctx.bot?.name ?? "An agent");
+  const who = ctx.room ? ctx.room.name : (ctx.bot?.name ?? t("common.anAgent"));
   const target = ctx.room ? ctx.room.id : (ctx.bot?.id ?? ctx.threadId);
   // Looking at it already: the message is on screen, and a banner about
   // something you can see is the definition of noise.
@@ -119,10 +125,10 @@ export function noticeFor(message: NotifiableMessage, ctx: NotifyContext): Notic
   if (message.kind === "options" && message.card && !message.card.answered && !message.card.dismissed && (message.card.requestId || message.card.runId)) {
     if (watching) return null;
     return {
-      title: ctx.room ? `${who}: someone needs you` : `${who} needs you`,
+      title: ctx.room ? t("notify.someoneNeedsYou", { who }) : t("notify.needsYou", { who }),
       body: preview(message.card.runId
-        ? `${message.card.title || "Approval needed"} ${message.card.subtitle || ""}`
-        : message.card.subtitle || message.card.title || "An agent is waiting for your answer."),
+        ? `${message.card.title || t("notify.approvalNeeded")} ${message.card.subtitle || ""}`
+        : message.card.subtitle || message.card.title || t("notify.waitingForYourAnswer")),
       target,
       urgent: true,
     };
@@ -138,7 +144,7 @@ export function noticeFor(message: NotifiableMessage, ctx: NotifyContext): Notic
   if (message.kind === "notice" && message.goal) {
     if (watching) return null;
     if (message.goal === "blocked") {
-      return { title: `${who} needs you`, body: preview(message.text || "A goal is waiting on you."), target, urgent: true };
+      return { title: t("notify.needsYou", { who }), body: preview(message.text || t("notify.goalWaiting")), target, urgent: true };
     }
     if ((message.goal === "done" || message.goal === "out") && ctx.bot?.notifications !== false) {
       return { title: who, body: preview(message.text ?? ""), target, urgent: false };
@@ -152,7 +158,7 @@ export function noticeFor(message: NotifiableMessage, ctx: NotifyContext): Notic
   // note that hands a lead an incident is never the person's news.
   if (message.kind === "notice" && message.incident) {
     if (message.incident.kind === "note" || message.incident.state === "resolved" || watching) return null;
-    return { title: `${who} needs you`, body: preview(message.text || "Something failed."), target, urgent: true };
+    return { title: t("notify.needsYou", { who }), body: preview(message.text || t("notify.somethingFailed")), target, urgent: true };
   }
   // A routine or a watcher that stopped running on its own: worth a word
   // when it happens, not an interruption, since nothing is waiting on it.
@@ -167,7 +173,7 @@ export function noticeFor(message: NotifiableMessage, ctx: NotifyContext): Notic
   // server/failover.ts.
   if (message.kind === "notice" && message.text && ENGINE_OUT.test(message.text)) {
     if (watching) return null;
-    return { title: `${who} could not answer`, body: preview(message.text), target, urgent: true };
+    return { title: t("notify.couldNotAnswer", { who }), body: preview(message.text), target, urgent: true };
   }
 
   if (message.kind !== "text" || !message.text?.trim() || !ctx.replySettled) return null;
@@ -245,4 +251,42 @@ export class NoticeDelivery {
     if (this.keys.size > 512) this.keys.delete(this.keys.values().next().value!);
     return true;
   }
+}
+
+/** What a click on the brief's notification opens: `brief:<id>`, the
+ * same target a background workspace's server gives it
+ * (server/desktop-notice.ts BRIEF_TARGET). */
+export const BRIEF_TARGET = "brief:";
+
+/** One conversation of one agent, `conversation:<agent>/<conversation>`,
+ * each part URI-encoded: what a row in the notch opens, written by the
+ * desktop app (electron/notch.mjs, conversationTarget). */
+export const CONVERSATION_TARGET = "conversation:";
+
+export function conversationOf(target: string): { id: string; lane: string } | null {
+  if (!target.startsWith(CONVERSATION_TARGET)) return null;
+  const [id, lane, ...rest] = target.slice(CONVERSATION_TARGET.length).split("/");
+  if (!id || !lane || rest.length) return null;
+  try {
+    return { id: decodeURIComponent(id), lane: decodeURIComponent(lane) };
+  } catch {
+    return null;
+  }
+}
+
+/** The morning brief's notification, from its brief.ready frame, or null
+ * when there is nothing to say or Overview is already in front of you. */
+export function briefNoticeFor(
+  frame: { id?: unknown; title?: unknown; body?: unknown; headline?: unknown },
+  ctx: { focused: boolean; onOverview: boolean },
+): Notice | null {
+  if (typeof frame.id !== "string" || !frame.id) return null;
+  if (ctx.focused && ctx.onOverview) return null;
+  const body = typeof frame.body === "string" ? frame.body : typeof frame.headline === "string" ? frame.headline : "";
+  return {
+    title: typeof frame.title === "string" && frame.title ? frame.title : t("notify.briefReady"),
+    body: preview(body),
+    target: `${BRIEF_TARGET}${frame.id}`,
+    urgent: false,
+  };
 }

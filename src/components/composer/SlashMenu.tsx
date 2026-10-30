@@ -6,6 +6,7 @@
 // glance, and a glance should not move everything above the box.
 import { cn } from "@/lib/cn";
 import { grouped, type Command } from "@/lib/slashCommands";
+import { t } from "@/lib/i18n";
 
 export function SlashMenu({
   label,
@@ -61,7 +62,7 @@ export function SlashMenu({
                     <span className="min-w-0 flex-1 truncate text-body text-muted-foreground">{c.description || c.name}</span>
                     {c.source === "engine" && (
                       <span className="shrink-0 text-caption text-muted-foreground/80">
-                        {c.kind === "command" ? "command" : "skill"}
+                        {c.kind === "command" ? t("slashMenu.kind.command") : t("slashMenu.kind.skill")}
                       </span>
                     )}
                   </button>
@@ -73,7 +74,7 @@ export function SlashMenu({
       </div>
       {offered.length > 0 && (
         <div className="border-t px-3 py-1.5 text-caption text-muted-foreground max-sm:hidden" aria-hidden>
-          ↑↓ pick · Tab insert · Esc close
+          {t("slashMenu.pickTabInsertEscClose")}
         </div>
       )}
     </div>

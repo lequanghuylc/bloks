@@ -11,6 +11,9 @@ import { TerminalPanel } from "@/components/Terminal";
 import { ConfirmHost } from "@/components/ui/confirm";
 import { Toaster } from "@/components/ui/toast";
 import { api } from "@/state/store";
+import { followMenuKeys } from "@/lib/conversationKeys";
+import { platformOf } from "@/lib/shortcuts";
+import { t } from "@/lib/i18n";
 
 /** The agent a terminal window was opened for, if the address names one. */
 export function terminalWindowAgent(search: string): string | null {
@@ -33,11 +36,18 @@ export function TerminalWindow({ botId }: { botId: string }) {
       .catch(() => setMissing(true));
   }, [botId]);
 
+  // ⌘⇧[ and ⌘⇧] from the menu bar step these tabs, as the keys do
+  useEffect(() => {
+    const bridge = window.bloks;
+    if (!bridge?.onMenuCommand) return;
+    return followMenuKeys(platformOf(), (handler) => bridge.onMenuCommand!(handler));
+  }, []);
+
   return (
     <div className="flex h-full flex-col bg-card">
       {missing ? (
         <div className="m-auto max-w-sm px-6 text-center text-body text-muted-foreground">
-          This agent is not here any more, so neither is its terminal.
+          {t("terminalWindow.thisAgentIsNotHere")}
         </div>
       ) : name ? (
         <TerminalPanel botId={botId} botName={name} mode="window" onClose={() => window.close()} focusNonce={1} />

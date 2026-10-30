@@ -27,6 +27,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { ShortcutKeys } from "@/components/Shortcuts";
 import { Switcher } from "@/components/Switcher";
 import { QuickAsk } from "@/components/QuickAsk";
+import { NotchIsland } from "@/components/notch/NotchIsland";
+import { TraceDemo } from "@/components/trace/TraceDemo";
 import { Toaster, toast } from "@/components/ui/toast";
 import { ConfirmHost } from "@/components/ui/confirm";
 import { YourNameHost } from "@/components/YourNameDialog";
@@ -37,6 +39,7 @@ import { openWorkspaceDialog } from "@/lib/workspaces";
 import { WakingStrip } from "@/components/WakingStrip";
 import { HostingMoveToasts } from "@/components/hosting/HostingMoveToasts";
 import { MovedBanner } from "@/components/hosting/MovedBanner";
+import { t, tr } from "@/lib/i18n";
 
 /**
  * Whatever went wrong, said over every view as an error toast. It used to
@@ -167,21 +170,21 @@ function Shell() {
             // loaded, and truly empty: the next step, not a spinner that
             // never stops
             <>
-              <div className="text-lead font-medium text-foreground">No agents yet</div>
+              <div className="text-lead font-medium text-foreground">{t("app.noAgentsYet")}</div>
               <div className="max-w-[300px] text-center text-body leading-relaxed">
-                An agent has a job, like researcher or writer. Make your first one.
+                {t("app.anAgentHasAJob")}
               </div>
-              <Button onClick={() => dispatch({ type: "toggleNewAgent", open: true })}>New agent</Button>
+              <Button onClick={() => dispatch({ type: "toggleNewAgent", open: true })}>{t("app.newAgent")}</Button>
             </>
           ) : (
             <>
               <Loader2 size={20} className="animate-spin" />
-              <div className="text-ui">{state.connected ? "Loading your agents…" : "Connecting to Bloks…"}</div>
+              <div className="text-ui">{state.connected ? t("app.loadingYourAgents") : t("app.connectingToBloks")}</div>
               {/* a developer hint; someone who installed the app has no
                   command to run and should not be told one */}
               {!state.connected && import.meta.env.DEV && (
                 <div className="text-small">
-                  Start it with <code className="rounded bg-muted px-1.5 py-0.5">pnpm dev:server</code>
+                  {tr("app.startWith", { command: <code className="rounded bg-muted px-1.5 py-0.5">pnpm dev:server</code> })}
                 </div>
               )}
             </>
@@ -231,10 +234,16 @@ export default function App() {
   // The panel window loads the same bundle with a flag. It shares nothing
   // else with the workspace: no store, no stream, no intro, because it is
   // open for four seconds at a time.
-  if (new URLSearchParams(location.search).has("quick")) return <QuickAsk />;
+  const asked = new URLSearchParams(location.search);
+  if (asked.has("quick")) return <QuickAsk />;
   // So does an agent's terminal popped out into a window of its own.
   const terminalFor = terminalWindowAgent(location.search);
   if (terminalFor) return <TerminalWindow botId={terminalFor} />;
+  // And the island in the notch, in a clear window over the menu bar,
+  // which reads the working agents and nothing else.
+  if (asked.has("notch")) return <NotchIsland demo={asked.has("demo")} />;
+  // the trace panel with a made-up turn, to look at without an engine
+  if (asked.get("trace") === "demo") return <TraceDemo />;
   return <WhichApp />;
 }
 

@@ -1,5 +1,8 @@
 // Settings, About and updates: which Bloks this is, the way to the next
-// one, and the two ways to tell us something is wrong.
+// one, and the two ways to tell us something is wrong. Where the app is a
+// window onto a workspace server on another computer, that server's
+// version and its own way to the next one are said apart from the app's
+// (ServerUpdate.tsx).
 import { useEffect, useState } from "react";
 import { Check } from "@/components/icons";
 import { Button } from "@/components/ui/button";
@@ -7,13 +10,15 @@ import { useStore } from "@/state/store";
 import type { UpdateState } from "@/types/bridge";
 import { drainingLine } from "../UpdateCard";
 import { SettingRow, SettingsGroup } from "../SettingsLayout";
+import { ServerUpdateRow, useServerUpdate } from "./ServerUpdate";
+import { t } from "@/lib/i18n";
 
 /** The small mark a hosted workspace wears in Settings, so nobody wonders
  * why the Mac's own options are not there. */
 export function HostedMark() {
   return (
     <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-caption font-medium text-muted-foreground">
-      Hosted
+      {t("aboutPage.hosted")}
     </span>
   );
 }
@@ -31,6 +36,14 @@ export function AboutPage() {
   const hosted = Boolean(state.config?.hosted?.on);
   const [version, setVersion] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateState>({ state: "idle" });
+  // the workspace server, when it is not the one inside this app
+  const server = useServerUpdate();
+  const apart = server.view.kind === "status" || server.view.kind === "older";
+  const bridge = Boolean(window.bloks?.appVersion);
+  const serverVersion =
+    server.view.kind === "status" ? server.view.status.version : server.view.kind === "older" ? server.view.version : null;
+  // the issue's own words, in English for whoever reads the report
+  const serverLine = serverVersion ? `, workspace server Bloks ${serverVersion}` : "";
 
   useEffect(() => {
     // A window without the desktop app (a hosted workspace in a browser)
@@ -48,76 +61,94 @@ export function AboutPage() {
 
   const line =
     update.state === "checking"
-      ? "Checking…"
+      ? t("common.checking")
       : update.state === "downloading"
-        ? `Downloading ${update.version ?? "the update"}${update.percent ? ` (${update.percent}%)` : ""}…`
+        ? update.version
+          ? update.percent
+            ? t("aboutPage.downloadingVersionPercent", { version: update.version, percent: update.percent })
+            : t("aboutPage.downloadingVersion", { version: update.version })
+          : update.percent
+            ? t("aboutPage.downloadingUpdatePercent", { percent: update.percent })
+            : t("aboutPage.downloadingUpdate")
         : update.state === "current"
-          ? "You are on the latest version."
+          ? t("aboutPage.latest")
           : update.state === "ready"
             ? update.draining
               ? drainingLine(update.draining)
-              : `${update.version ?? "An update"} is downloaded and ready.`
+              : update.version
+                ? t("aboutPage.versionReady", { version: update.version })
+                : t("aboutPage.updateReady")
             : update.state === "error"
               ? update.reason === "install"
-                ? "The update downloaded but didn't install. Quit and reopen Bloks to try again."
+                ? t("aboutPage.error.install")
                 : update.reason === "server"
-                  ? "Couldn't get the update. Try again in a few minutes."
-                  : "Couldn't reach the update server. Bloks will try again in a few hours."
+                  ? t("aboutPage.error.server")
+                  : t("aboutPage.error.unreachable")
               : update.state === "dev"
-                ? "Updates apply to the installed app, not a dev build."
+                ? t("aboutPage.devBuild")
                 : null;
   // a restart into an update that came back on the same version says so
   // before whatever the updater is doing now
-  const description = update.notInstalled
-    ? `The update did not install. ${line ?? "You can get the installer from bloks.dev."}`
-    : (line ?? "Updates download on their own and install when you restart.");
+  const said = update.notInstalled
+    ? line
+      ? t("aboutPage.notInstalledThen", { line })
+      : t("aboutPage.notInstalled")
+    : (line ?? t("aboutPage.updatesOnTheirOwn"));
+  // beside a server of its own, which this updater never touches
+  const description = apart ? t("aboutPage.appNotServer", { said }) : said;
 
   return (
     <>
-    <SettingsGroup title="Version">
+    <SettingsGroup title={t("aboutPage.version")}>
       {hosted && (
         <SettingRow
           label={
             <>
-              This workspace <HostedMark />
+              {t("aboutPage.thisWorkspace")} <HostedMark />
             </>
           }
-          description="It runs on a machine hosted for you, not on your Mac. Its browser and its virtual desktop are your agents' computer."
+          description={t("aboutPage.itRunsOnAMachine")}
         />
       )}
-      <SettingRow
-        label={`Bloks ${version ?? ""}`}
-        description={description}
-        control={
-          update.state === "ready" ? (
-            <Button size="sm" disabled={Boolean(update.draining)} onClick={() => void window.bloks?.updateInstall?.()}>
-              Restart to update
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={!window.bloks || update.state === "checking" || update.state === "downloading"}
-              onClick={() => void window.bloks?.updateCheck?.().then(setUpdate)}
-            >
-              Check for updates
-            </Button>
-          )
-        }
-      />
+      {/* A browser has no app of its own to update; the server row below
+          says which Bloks it reaches. */}
+      {(bridge || !apart) && (
+        <SettingRow
+          rowId="check-for-updates"
+          label={apart ? t("aboutPage.thisAppVersion", { version: version ?? "" }) : `Bloks ${version ?? ""}`}
+          description={description}
+          control={
+            update.state === "ready" ? (
+              <Button size="sm" disabled={Boolean(update.draining)} onClick={() => void window.bloks?.updateInstall?.()}>
+                {t("aboutPage.restartToUpdate")}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!window.bloks || update.state === "checking" || update.state === "downloading"}
+                onClick={() => void window.bloks?.updateCheck?.().then(setUpdate)}
+              >
+                {t("aboutPage.checkForUpdates")}
+              </Button>
+            )
+          }
+        />
+      )}
+      <ServerUpdateRow state={server} />
     </SettingsGroup>
-    <SettingsGroup title="Help">
+    <SettingsGroup title={t("aboutPage.help")}>
       <SettingRow
-        label="Something broken, or missing?"
-        description="Opens a GitHub issue."
+        label={t("aboutPage.somethingBrokenOrMissing")}
+        description={t("aboutPage.opensAGithubIssue")}
         control={
           <Button size="sm" variant="secondary" asChild>
             <a
-              href={`https://github.com/hamedgitty/bloks/issues/new?body=${encodeURIComponent(`\n\n---\nBloks ${version ?? ""} on ${navigator.platform}`)}`}
+              href={`https://github.com/hamedgitty/bloks/issues/new?body=${encodeURIComponent(`\n\n---\nBloks ${version ?? ""} on ${navigator.platform}${serverLine}`)}`}
               target="_blank"
               rel="noreferrer"
             >
-              Send feedback
+              {t("aboutPage.sendFeedback")}
             </a>
           </Button>
         }
@@ -153,18 +184,18 @@ function Diagnostics() {
   };
   return (
     <SettingRow
-      label="Diagnostics"
-      info="Versions, connection states, which keys are set (yes or no) and agent counts. Never the keys, and anything that looks like one is removed."
-      description="A short report to paste into a bug report."
-      error={failed ? "Couldn't build the report. Is the server running?" : null}
+      label={t("aboutPage.diagnostics")}
+      info={t("aboutPage.versionsConnectionStatesWhichKeys")}
+      description={t("aboutPage.aShortReportToPaste")}
+      error={failed ? t("aboutPage.reportFailed") : null}
       control={
         <Button size="sm" variant="secondary" onClick={() => void copy()} className="min-w-[128px]">
           {copied ? (
             <>
-              <Check size={14} /> Copied
+              <Check size={14} /> {t("common.copied")}
             </>
           ) : (
-            "Copy diagnostics"
+            t("aboutPage.copyDiagnostics")
           )}
         </Button>
       }

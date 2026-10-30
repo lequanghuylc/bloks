@@ -44,6 +44,7 @@ import {
   useSideColumn,
   type SideColumnSize,
 } from "@/lib/sideColumn";
+import { t } from "@/lib/i18n";
 
 /** How long a fold takes, with the motion class below; the column's
  * contents leave the page once it is over. */
@@ -169,7 +170,7 @@ function ColumnEdge({ id, size, width, resizing }: { id: string; size: SideColum
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize sidebar"
+      aria-label={t("sideColumn.resizeSidebar")}
       aria-controls={`side-column-${id}`}
       aria-valuemin={size.min}
       aria-valuemax={size.max}
@@ -190,7 +191,7 @@ const quietButton =
   "flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg text-muted-foreground outline-none transition-[background-color,color,scale] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.96]";
 
 /** The way back to a folded column, with the key that does the same. */
-export function ShowColumn({ id, label = "Show sidebar", text, className }: { id: string; label?: string; text?: string; className?: string }) {
+export function ShowColumn({ id, label = t("sideColumn.showSidebar"), text, className }: { id: string; label?: string; text?: string; className?: string }) {
   const keys = keysFor("toggleSidebar", platformOf())[0];
   return (
     <TooltipProvider delayDuration={400}>
@@ -199,7 +200,7 @@ export function ShowColumn({ id, label = "Show sidebar", text, className }: { id
           <button
             type="button"
             onClick={() => setColumnOpen(id, true)}
-            aria-label={text ? `${label}: ${text}` : label}
+            aria-label={text ? t("sideColumn.showWithText", { label, text }) : label}
             aria-expanded={false}
             className={cn(quietButton, text ? "px-2 text-body" : "w-8", className)}
           >
@@ -314,7 +315,7 @@ export function SideTabs({
     tabs[next]?.focus();
   };
 
-  const hasCurrent = groups.some((g) => g.tabs.some((t) => t.id === current));
+  const hasCurrent = groups.some((g) => g.tabs.some((tab) => tab.id === current));
   const fade =
     more.before || more.after
       ? `linear-gradient(to right, ${more.before ? "transparent, #000 32px" : "#000"}, ${more.after ? "#000 calc(100% - 32px), transparent" : "#000"})`

@@ -20,6 +20,7 @@ import { AgentAvatar } from "./Avatar";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { platformOf } from "@/lib/shortcuts";
+import { t } from "@/lib/i18n";
 
 // room for the traffic lights, which sit over this header on a Mac
 const isElectron = navigator.userAgent.includes("Electron");
@@ -103,7 +104,7 @@ function SideChat({ bot }: { bot: Bot }) {
             </div>
           ))}
           {live.busy && (
-            <div className="self-start px-1 text-small text-muted-foreground">Working…</div>
+            <div className="self-start px-1 text-small text-muted-foreground">{t("desktopOverlay.working")}</div>
           )}
           <div ref={endRef} />
         </div>
@@ -113,7 +114,7 @@ function SideChat({ bot }: { bot: Bot }) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder={`Message ${bot.name}`}
+          placeholder={t("desktopOverlay.messageAgent", { name: bot.name })}
           className="w-full rounded-xl border border-input bg-transparent px-3 py-2 text-body text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring/60"
         />
       </div>
@@ -145,8 +146,8 @@ export function DesktopOverlay({
   useEffect(() => {
     // settle-debounced: a drag emits dozens of layouts a second, and
     // none of the intermediate ones is worth a synchronous disk write
-    const t = setTimeout(() => localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)), 250);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)), 250);
+    return () => clearTimeout(timer);
   }, [layout]);
 
   useEffect(() => {
@@ -241,10 +242,10 @@ export function DesktopOverlay({
     <div className="flex items-center gap-0.5">
       {(
         [
-          ["left", PanelLeft, "Dock left"],
-          ["bottom", PanelBottom, "Dock bottom"],
-          ["right", PanelRight, "Dock right"],
-          ["float", PictureInPicture2, "Float"],
+          ["left", PanelLeft, t("desktopOverlay.dock.left")],
+          ["bottom", PanelBottom, t("desktopOverlay.dock.bottom")],
+          ["right", PanelRight, t("desktopOverlay.dock.right")],
+          ["float", PictureInPicture2, t("desktopOverlay.dock.float")],
         ] as const
       ).map(([dock, Icon, label]) => (
         <button
@@ -286,7 +287,7 @@ export function DesktopOverlay({
       >
         <div className="flex items-center gap-1.5 pl-1">
           <GripHorizontal size={13} className="text-muted-foreground/50" />
-          <span className="text-small font-medium text-muted-foreground">Chat</span>
+          <span className="text-small font-medium text-muted-foreground">{t("desktopOverlay.chat")}</span>
         </div>
         <div onPointerDown={(e) => e.stopPropagation()}>{dockButtons}</div>
       </div>
@@ -295,7 +296,7 @@ export function DesktopOverlay({
         <div
           onPointerDown={beginCornerResize}
           className="absolute bottom-0 right-0 size-4 cursor-nwse-resize"
-          title="Resize"
+          title={t("desktopOverlay.resize")}
         >
           <div className="absolute bottom-1 right-1 size-2 rounded-sm border-b-2 border-r-2 border-muted-foreground/40" />
         </div>
@@ -316,7 +317,7 @@ export function DesktopOverlay({
   const viewer = (
     <iframe
       src={url}
-      title={`${bot.name}'s desktop`}
+      title={t("desktopOverlay.agentDesktop", { name: bot.name })}
       className={cn("min-h-0 w-full flex-1 border-0 bg-black", dragging && "pointer-events-none")}
       allow="clipboard-read; clipboard-write"
     />
@@ -331,16 +332,16 @@ export function DesktopOverlay({
         <div className={cn("flex items-center gap-2", isElectron && platformOf() === "mac" && "pl-[66px]")}>
           <AgentAvatar bot={bot} size={26} />
           <span className="text-ui font-semibold text-foreground">
-            {bot.name}'s desktop
+            {t("desktopOverlay.agentDesktop", { name: bot.name })}
           </span>
         </div>
         <div className="flex items-center gap-1">
-          <a href={url} target="_blank" rel="noreferrer" title="Open in browser">
-            <Button variant="ghost" size="icon-sm" aria-label="Open in browser">
+          <a href={url} target="_blank" rel="noreferrer" title={t("desktopOverlay.openInBrowser")}>
+            <Button variant="ghost" size="icon-sm" aria-label={t("desktopOverlay.openInBrowser")}>
               <ExternalLink size={15} />
             </Button>
           </a>
-          <Button variant="secondary" size="icon-sm" aria-label="Close desktop view" onClick={onClose}>
+          <Button variant="secondary" size="icon-sm" aria-label={t("desktopOverlay.closeDesktopView")} onClick={onClose}>
             <X size={16} />
           </Button>
         </div>

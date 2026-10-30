@@ -14,19 +14,21 @@ import { CustomEndpoints } from "./CustomEndpoints";
 import { ProviderMark } from "./ProviderIcons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cn";
 import { CREDITS_ENGINE } from "@/lib/credits";
 import { CodexSpeedControl } from "./CodexSpeed";
 import { EngineReport } from "./EngineReport";
 import { EnginePauses } from "./EnginePauses";
-import { EngineSetupActions, EngineUpdateNote } from "./EngineSetup";
+import { EngineOutdatedActions, EnginePathControl, EngineSetupActions, EngineUpdateNote } from "./EngineSetup";
 import { TeamSignInNotice } from "./TeamSignInNotice";
+import { t, type MessageKey } from "@/lib/i18n";
 
-const AUTH_NOTE: Record<ProviderRow["auth"], string> = {
-  oauth: "Browser sign-in",
-  key: "API key",
-  cli: "Uses its own sign-in",
-  none: "Runs on this machine",
+const AUTH_NOTE: Record<ProviderRow["auth"], MessageKey> = {
+  oauth: "enginesPanel.auth.oauth",
+  key: "enginesPanel.auth.key",
+  cli: "enginesPanel.auth.cli",
+  none: "enginesPanel.auth.none",
 };
 
 function KeyForm({ provider, onDone }: { provider: ProviderRow; onDone: () => void }) {
@@ -52,18 +54,18 @@ function KeyForm({ provider, onDone }: { provider: ProviderRow; onDone: () => vo
             if (e.key === "Enter") save();
             if (e.key === "Escape") onDone();
           }}
-          placeholder={provider.keyPrefix ? `${provider.keyPrefix}…` : "Paste your key"}
+          placeholder={provider.keyPrefix ? `${provider.keyPrefix}…` : t("enginesPanel.pasteYourKey")}
           autoComplete="off"
           className="h-8 text-body"
         />
         <Button variant="secondary" onClick={save} disabled={!key.trim()} className="w-[72px]">
           <Check size={13} />
-          Save
+          {t("common.save")}
         </Button>
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-2">
         <span className={cn("text-small", mismatched ? "text-warning" : "text-muted-foreground")}>
-          {mismatched ? `Keys here usually start with ${provider.keyPrefix}` : provider.keyHint}
+          {mismatched ? t("enginesPanel.keysUsuallyStartWith", { prefix: provider.keyPrefix ?? "" }) : provider.keyHint}
         </span>
         <a
           href={provider.docsUrl}
@@ -71,7 +73,7 @@ function KeyForm({ provider, onDone }: { provider: ProviderRow; onDone: () => vo
           rel="noreferrer"
           className="flex shrink-0 items-center gap-1 text-small text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
-          Get one <ExternalLink size={10} />
+          {t("enginesPanel.getOne")} <ExternalLink size={10} />
         </a>
       </div>
     </div>
@@ -83,6 +85,7 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
   const [open, setOpen] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
 
   // an engine can be connected and still be down: no CLI on PATH, a key
   // the provider rejected, a local server that is not running
@@ -97,6 +100,22 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
       .catch(() => {});
   };
   const down = instance && instance.snapshot.state !== "available";
+  // Switched off starts no turns, however installed and signed in it is,
+  // so it is said ahead of all of that (GitHub 421).
+  const off = instance?.enabled === false;
+
+  const switchTo = (on: boolean) => {
+    if (!instance) return;
+    setSwitching(true);
+    setError(null);
+    api(`/api/instances/${encodeURIComponent(instance.instanceId)}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: on }),
+    })
+      .then(({ instances }) => dispatch({ type: "instances", instances }))
+      .catch((e) => setError(e.message))
+      .finally(() => setSwitching(false));
+  };
 
   const signIn = () => {
     setSigningIn(true);
@@ -130,31 +149,46 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
           <div
             className={cn(
               "truncate text-small",
-              down || provider.needsSignIn
-                ? "text-warning"
-                : provider.connected
-                  ? "text-success"
-                  : "text-muted-foreground",
+              off
+                ? "text-muted-foreground"
+                : down || provider.needsSignIn
+                  ? "text-warning"
+                  : provider.connected
+                    ? "text-success"
+                    : "text-muted-foreground",
             )}
           >
             {/* installed without a login cannot answer, so it is not
                 "Connected", however green that would look */}
-            {down
-              ? (instance!.snapshot.reason ?? "Unavailable")
-              : provider.needsSignIn
-                ? "Installed, not signed in"
-                : provider.connected
-                  ? "Connected"
-                  : AUTH_NOTE[provider.auth]}
+            {off
+              ? t("enginesPanel.switchedOff")
+              : down
+                ? (instance!.snapshot.reason ?? t("enginesPanel.unavailable"))
+                : provider.needsSignIn
+                  ? t("enginesPanel.installedNotSignedIn")
+                  : provider.connected
+                    ? t("common.connected")
+                    : t(AUTH_NOTE[provider.auth])}
           </div>
           {provider.connected && !down && !provider.needsSignIn && instance?.snapshot.note ? (
             <div className="mt-0.5 text-small text-warning">{instance.snapshot.note}</div>
           ) : null}
         </div>
 
+        {/* only once there is something to switch: an engine that is set
+            up, or one switched off, which has to be able to come back */}
+        {instance && (off || provider.connected) && (
+          <Switch
+            checked={!off}
+            disabled={switching}
+            aria-label={t("enginesPanel.useEngine", { name: provider.name })}
+            onCheckedChange={switchTo}
+          />
+        )}
+
         {provider.auth === "cli" ? (
           <span className="shrink-0 text-small text-muted-foreground">
-            {provider.connected ? "" : "Not found"}
+            {provider.connected || provider.outdated ? "" : t("enginesPanel.notFound")}
           </span>
         ) : provider.connected ? (
           <Button
@@ -163,20 +197,20 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
             onClick={() => dispatch({ type: "disconnectProvider", kind: provider.kind })}
             className="shrink-0 text-muted-foreground hover:text-destructive"
           >
-            Disconnect
+            {t("common.disconnect")}
           </Button>
         ) : (
           <Button variant="secondary" size="sm" onClick={act} disabled={signingIn} className="shrink-0">
             {signingIn ? (
               <Loader2 size={13} className="animate-spin" />
             ) : provider.auth === "oauth" ? (
-              "Sign in"
+              t("enginesPanel.signIn")
             ) : provider.auth === "none" ? (
-              "Enable"
+              t("enginesPanel.enable")
             ) : (
               <>
                 <Plus size={13} />
-                Key
+                {t("enginesPanel.key")}
               </>
             )}
           </Button>
@@ -194,10 +228,15 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
           onClick={() => dispatch({ type: "openUsage", section: "limits" })}
           className="ml-10 mt-1 text-small text-muted-foreground underline-offset-2 transition-colors duration-150 hover:text-foreground hover:underline"
         >
-          Monthly spending limit
+          {t("enginesPanel.monthlySpendingLimit")}
         </button>
       )}
-      {provider.auth === "cli" && (!provider.connected || provider.needsSignIn) && (
+      {provider.auth === "cli" && provider.outdated && (
+        <div className="pl-10">
+          <EngineOutdatedActions kind={provider.kind} name={provider.name} onChanged={refresh} />
+        </div>
+      )}
+      {provider.auth === "cli" && !provider.outdated && (!provider.connected || provider.needsSignIn) && (
         <div className="pl-10">
           <EngineSetupActions
             kind={provider.kind}
@@ -208,18 +247,29 @@ function EngineRow({ provider }: { provider: ProviderRow }) {
           />
         </div>
       )}
-      {provider.auth === "cli" && (!provider.connected || provider.needsSignIn) && (
+      {provider.auth === "cli" && !provider.outdated && (!provider.connected || provider.needsSignIn) && (
         <div className="mt-1.5 pl-10 text-small leading-relaxed text-muted-foreground">
           {/* Installed and installed-but-signed-out need different advice.
               Some CLIs sign in where we cannot see it, so the second is a
               hint rather than a verdict, and stays muted. */}
           {provider.connected
-            ? `No sign-in detected. ${provider.signInHint ?? provider.keyHint}`
+            ? t("enginesPanel.noSignInDetected", { hint: provider.signInHint ?? provider.keyHint })
             : provider.keyHint}
         </div>
       )}
       {provider.auth === "cli" && provider.connected && (
         <EngineUpdateNote kind={provider.kind} name={provider.name} className="ml-10 mt-2" />
+      )}
+      {provider.auth === "cli" && provider.command && (
+        <div className="pl-10">
+          <EnginePathControl
+            kind={provider.kind}
+            name={provider.name}
+            command={provider.command}
+            path={provider.path ?? null}
+            onChanged={refresh}
+          />
+        </div>
       )}
       {error && <div className="mt-1.5 pl-10 text-small text-destructive">{error}</div>}
     </div>
@@ -248,8 +298,10 @@ export function EnginesPanel() {
   const providers = state.providers;
   if (!providers.length) return null;
 
-  // counted the way the rows read: installed without a login is not ready
-  const connected = providers.filter((p) => p.connected && !p.needsSignIn).length;
+  // counted the way the rows read: installed without a login is not
+  // ready, and neither is one switched off
+  const off = (p: ProviderRow) => state.instances.find((i) => i.driverKind === p.kind)?.enabled === false;
+  const connected = providers.filter((p) => p.connected && !p.needsSignIn && !off(p)).length;
   // Twelve flat rows is a list you scan past. The split is the one that
   // actually changes what an agent can do.
   const agents = providers.filter((p) => p.agentic);
@@ -261,21 +313,21 @@ export function EnginesPanel() {
       <div className="mb-9 overflow-hidden rounded-2xl border bg-card last:mb-0">
         <div className="px-4 pb-3 pt-4">
           <div className="flex items-baseline justify-between gap-2">
-            <div className="text-ui font-semibold text-foreground">Your engines</div>
-            <div className="text-small text-muted-foreground">{connected} connected</div>
+            <div className="text-ui font-semibold text-foreground">{t("enginesPanel.yourEngines")}</div>
+            <div className="text-small text-muted-foreground">{t("enginesPanel.connectedCount", { count: connected })}</div>
           </div>
           <div className="mt-0.5 text-body leading-relaxed text-muted-foreground">
-            What your agents run on. Keys stay on this machine.
+            {t("enginesPanel.whatYourAgentsRunOn")}
           </div>
         </div>
         <Group
-          title="Agents"
-          note="Can run commands and work with files."
+          title={t("common.agents")}
+          note={t("enginesPanel.canRunCommandsAndWork")}
           rows={agents}
         />
         <Group
-          title="Chat models"
-          note="Chat only. Cannot act on your computer."
+          title={t("enginesPanel.chatModels")}
+          note={t("enginesPanel.chatOnlyCannotActOn")}
           rows={chat}
         />
       </div>

@@ -10,6 +10,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle } from "@/components/icons";
+import { ArrowDown } from "@/components/icons";
 import { ArrowUp } from "@/components/icons";
 import { Ban } from "@/components/icons";
 import { Check } from "@/components/icons";
@@ -24,6 +25,8 @@ import { Workflow } from "@/components/icons";
 import { X } from "@/components/icons";
 import { api, useStore, type Message, type TeamPlan } from "@/state/store";
 import { AgentAvatar, BlokAvatar } from "@/components/Avatar";
+import { AppWatchCard } from "@/components/AppWatch";
+import { OpenPlaceCard, SettingsProposalCard } from "@/components/AgentGuideCards";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -44,8 +47,8 @@ import {
   type ApprovalDetail,
   type ApprovalView,
 } from "@/lib/approvalCard";
-import { plural } from "@/lib/plural";
 import { stamp } from "@/lib/when";
+import { hasMessage, t, tr, useLanguage, type MessageKey } from "@/lib/i18n";
 
 type OptionCardData = NonNullable<Message["card"]>;
 
@@ -65,12 +68,17 @@ export function OptionCard({
   botId,
   message,
   roomId,
+  dock,
 }: {
   botId: string;
   message: Message;
   /** Set when the card is being shown inside a room, so an answer goes to
    * the room rather than to the agent alone. */
   roomId?: string;
+  /** For a question waiting above the composer (chat/QuestionDock.tsx):
+   * "card" is the card there, and "line" is where it was asked, which
+   * keeps its place in the conversation and points down to it. */
+  dock?: "card" | "line";
 }) {
   const { state, dispatch } = useStore();
   const card = message.card;
@@ -96,19 +104,23 @@ export function OptionCard({
   };
   const dismiss = () => dispatch({ type: "dismissCard", botId, roomId, messageId: message.id });
 
+  if (card.appWatch) return <AppWatchCard plan={card.appWatch} answered={card.answered} />;
+  if (card.open) return <OpenPlaceCard plan={card.open} agentName={agent?.name ?? t("optionCard.yourAgent")} />;
+  if (card.settingsProposal) return <SettingsProposalCard plan={card.settingsProposal} messageId={message.id} />;
+
   if (card.team) {
     return (
       <TeamProposal
         plan={card.team}
-        leadName={agent?.name ?? "Your agent"}
+        leadName={agent?.name ?? t("optionCard.yourAgent")}
         settled={card.answered}
         onHire={() => dispatch({ type: "hireTeam", botId, messageId: message.id })}
-        onDecline={() => answer("Not now. Handle this yourself.")}
+        onDecline={() => answer(t("optionCard.declineTeamAnswer"))}
       />
     );
   }
 
-  const name = agent?.name ?? "Your agent";
+  const name = agent?.name ?? t("optionCard.yourAgent");
   // in a room the speaker's face is already beside the card
   const face = !roomId && agent ? <AgentAvatar bot={agent} size={28} className="mt-px" /> : null;
 
@@ -126,7 +138,18 @@ export function OptionCard({
       />
     );
   }
-  return <QuestionCard card={card} at={message.at} name={name} face={face} onAnswer={answer} onDismiss={dismiss} />;
+  return (
+    <QuestionCard
+      messageId={message.id}
+      card={card}
+      at={message.at}
+      name={name}
+      face={face}
+      dock={dock}
+      onAnswer={answer}
+      onDismiss={dismiss}
+    />
+  );
 }
 
 // ── approvals ──────────────────────────────────────────────────────────
@@ -156,10 +179,16 @@ function ApprovalCard({
   onAnswer: (text: string) => void;
   onError: (message: string) => void;
 }) {
-  // read with askedFor too, which the server sends and the type leaves out
-  const view = useMemo(() => readApproval(card, { id: agent.id, name: agent.name }), [card, agent.id, agent.name]);
+  // read with askedFor too, which the server sends and the type leaves out;
+  // the view carries the card's words, so it is read again in a new language
+  const language = useLanguage();
+  const view = useMemo(() => readApproval(card, { id: agent.id, name: agent.name }), [card, agent.id, agent.name, language]);
   const [remembered, setRemembered] = useState<AlwaysScope | null>(() => savedRules.get(messageId) ?? null);
+  // "Allow" and "Deny" are what an answer says to the server, so they
+  // go as they are; only the buttons that stand for them are translated.
+  // An agent's own choices are its words and are drawn as written.
   const { allow, deny, others } = splitChoices(card.options.length ? card.options : ["Allow", "Deny"]);
+  const ownWords = card.options.length > 0;
 
   const always = (scope: AlwaysScope) => {
     savedRules.set(messageId, scope);
@@ -168,7 +197,7 @@ function ApprovalCard({
     api("/api/rules", { method: "POST", body: JSON.stringify({ ...scope.rule, enabled: true }) }).catch((e: Error) => {
       savedRules.delete(messageId);
       setRemembered(null);
-      onError(`Allowed this once, but the rule was not saved: ${e.message}`);
+      onError(t("optionCard.ruleNotSaved", { reason: e.message }));
     });
   };
 
@@ -186,8 +215,8 @@ function ApprovalCard({
             name={agent.name}
             face={face}
             active={active}
-            allowLabel={allow ?? "Allow"}
-            denyLabel={deny ?? "Deny"}
+            allowLabel={ownWords && allow ? allow : t("optionCard.allow")}
+            denyLabel={ownWords && deny ? deny : t("optionCard.deny")}
             others={others}
             onAllow={() => onAnswer(allow ?? "Allow")}
             onDeny={() => onAnswer(deny ?? "Deny")}
@@ -247,7 +276,7 @@ function PendingApproval({
   return (
     <div
       role="group"
-      aria-label={`${name} ${view.verb}`}
+      aria-label={t(view.ask.key, view.ask.params)}
       tabIndex={0}
       onKeyDown={onKeyDown}
       className="group/card w-full animate-rise-in rounded-2xl border bg-card shadow-[0_1px_3px_var(--shadow-color)] outline-none"
@@ -256,12 +285,12 @@ function PendingApproval({
         {face}
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-3">
-            <p className="min-w-0 flex-1 text-pretty text-ui text-foreground">
-              <span className="font-semibold">{name}</span> <span className="text-muted-foreground">{view.verb}</span>
+            <p className="min-w-0 flex-1 text-pretty text-ui text-muted-foreground">
+              {tr(view.ask.key, { ...view.ask.params, agent: <span className="font-semibold text-foreground">{name}</span> })}
             </p>
             <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{stamp(at)}</span>
           </div>
-          {view.askedBy && <p className="text-small text-muted-foreground">Asked for by {view.askedBy}</p>}
+          {view.askedBy && <p className="text-small text-muted-foreground">{t("optionCard.askedForBy", { name: view.askedBy })}</p>}
         </div>
       </div>
 
@@ -317,12 +346,12 @@ function AlwaysMenu({ scopes, onPick }: { scopes: AlwaysScope[]; onPick: (scope:
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="ml-auto gap-1 pr-2">
-          Always allow
+          {t("optionCard.alwaysAllow")}
           <ChevronDown size={13} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-[300px] max-w-[calc(100vw-32px)]">
-        <DropdownMenuLabel>Allow now, and from now on</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("optionCard.allowNowAndFromNow")}</DropdownMenuLabel>
         {scopes.map((scope) => (
           <DropdownMenuItem
             key={scope.id}
@@ -333,14 +362,14 @@ function AlwaysMenu({ scopes, onPick }: { scopes: AlwaysScope[]; onPick: (scope:
               <span className="min-w-0 flex-1 truncate">{scope.label}</span>
               {scope.wide && (
                 <span className="shrink-0 rounded-full bg-warning/12 px-1.5 text-caption font-medium text-warning">
-                  All agents
+                  {t("optionCard.allAgents")}
                 </span>
               )}
             </span>
             <span className="text-small leading-snug text-muted-foreground">{scope.note}</span>
           </DropdownMenuItem>
         ))}
-        <p className="px-2.5 pb-1.5 pt-1 text-small text-muted-foreground">Saved as a rule. Remove it in Settings.</p>
+        <p className="px-2.5 pb-1.5 pt-1 text-small text-muted-foreground">{t("optionCard.savedAsARuleRemove")}</p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -361,16 +390,17 @@ function SettledApproval({
 }) {
   const closed = Boolean(card.cutOff || card.closed) || card.answered === CLOSED_UNANSWERED;
   const outcome = closed ? "closed" : settledAs(card.answered);
-  const label =
-    outcome === "closed"
-      ? "Not answered"
-      : outcome === "allowed"
-        ? remembered || /always/i.test(card.answered ?? "")
-          ? "Always allowed"
-          : "Allowed"
-        : outcome === "denied"
-          ? "Denied"
-          : (card.answered ?? "");
+  const by = card.answeredBy;
+  const label = (() => {
+    if (outcome === "closed") return by ? t("optionCard.settled.notAnsweredBy", { name: by }) : t("optionCard.notAnswered");
+    if (outcome === "allowed") {
+      if (remembered || /always/i.test(card.answered ?? "")) return by ? t("optionCard.settled.alwaysAllowedBy", { name: by }) : t("optionCard.settled.alwaysAllowed");
+      return by ? t("optionCard.settled.allowedBy", { name: by }) : t("optionCard.settled.allowed");
+    }
+    if (outcome === "denied") return by ? t("optionCard.settled.deniedBy", { name: by }) : t("optionCard.settled.denied");
+    // the agent's own choice, in its words
+    return by ? t("optionCard.settled.answerBy", { answer: card.answered ?? "", name: by }) : (card.answered ?? "");
+  })();
   const icon =
     outcome === "allowed" ? (
       <Check size={12} className="text-success" />
@@ -380,8 +410,8 @@ function SettledApproval({
       <Minus size={12} />
     );
   // the thing itself when there is one, else what kind of thing it was
-  const what = view.short || sentence(view.verb.replace(/^wants to /, ""));
-  const why = card.cutOff ? "Closed when Bloks stopped." : card.closed;
+  const what = view.short || settledWords(view, "what") || view.verb;
+  const why = card.cutOff ? t("optionCard.closedWhenBloksStopped") : card.closed;
 
   return (
     <SettledLine
@@ -391,21 +421,20 @@ function SettledApproval({
         <>
           <span className="shrink-0 font-medium text-foreground/80">
             {label}
-            {card.answeredBy ? ` by ${card.answeredBy}` : ""}
           </span>
           <span className={cn("min-w-0 truncate", view.short && view.detail?.kind !== "text" && "font-mono")}>{what}</span>
         </>
       }
     >
       <p className="text-small text-muted-foreground">
-        {name} {view.verb.replace(/^wants to /, "asked to ")}.
-        {view.askedBy ? ` Asked for by ${view.askedBy}.` : ""}
+        {settledWords(view, "asked") ?? tr(view.ask.key, { ...view.ask.params, agent: name })}
+        {view.askedBy ? ` ${t("optionCard.askedForBySentence", { name: view.askedBy })}` : ""}
       </p>
       {view.detail && <Detail detail={view.detail} cut={view.cut} quiet />}
       {why && <p className="text-small text-muted-foreground">{why}</p>}
       {remembered && (
         <p className="text-small text-muted-foreground">
-          Saved a rule: {remembered.label.charAt(0).toLowerCase() + remembered.label.slice(1)}.
+          {t("optionCard.savedARule", { rule: remembered.label })}
         </p>
       )}
     </SettledLine>
@@ -448,7 +477,19 @@ function SettledLine({
   );
 }
 
-const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+/** A settled approval says what was asked in the past ("Juno asked to
+ * run a command.") and, with nothing shorter to show, what it was ("Run
+ * a command"): one sentence each per kind of ask, found by the name of
+ * the card's own sentence (approvalCard.ask.<kind>). Undefined for an ask
+ * this file has no words for yet, so the caller can fall back. */
+function settledWords(view: ApprovalView, form: "asked" | "what"): string | undefined {
+  const kind = view.ask.key.replace(/^approvalCard\.ask\./, "") as AskKind;
+  if (!hasMessage(`optionCard.${form}.${kind}`)) return undefined;
+  return form === "asked" ? t(`optionCard.asked.${kind}`, view.ask.params) : t(`optionCard.what.${kind}`, view.ask.params);
+}
+
+/** The kinds of ask approvalCard has a sentence for. */
+type AskKind = MessageKey extends infer K ? (K extends `approvalCard.ask.${infer Kind}` ? Kind : never) : never;
 
 // ── what will run ──────────────────────────────────────────────────────
 
@@ -498,7 +539,7 @@ function CodeBlock({ text, cut, prompt, shade }: { text: string; cut: boolean; p
       >
         {prompt && <span className="select-none text-muted-foreground">$ </span>}
         {text}
-        {cut && <span className="text-muted-foreground" title="Bloks was only sent this much">…</span>}
+        {cut && <span className="text-muted-foreground" title={t("optionCard.bloksWasOnlySentThis")}>…</span>}
       </pre>
       <CopyButton text={text} />
       {long && <MoreToggle open={open} onToggle={() => setOpen((o) => !o)} />}
@@ -659,7 +700,7 @@ function Fields({
       {long && <MoreToggle open={open} onToggle={() => setOpen((o) => !o)} more={fields.length - 5} />}
       {/* the fields that were whole are shown; the one the cut fell in,
           and any after it, never reached Bloks */}
-      {cut && <p className="mt-1.5 text-small text-muted-foreground">The rest was cut short before it reached Bloks.</p>}
+      {cut && <p className="mt-1.5 text-small text-muted-foreground">{t("optionCard.theRestWasCutShort")}</p>}
     </div>
   );
 }
@@ -671,7 +712,7 @@ function MoreToggle({ open, onToggle, more }: { open: boolean; onToggle: () => v
       onClick={onToggle}
       className="mt-1 text-small font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground"
     >
-      {open ? "Show less" : more ? `Show ${more} more` : "Show all"}
+      {open ? t("optionCard.showLess") : more ? t("optionCard.showMore", { count: more }) : t("optionCard.showAll")}
     </button>
   );
 }
@@ -682,8 +723,8 @@ function CopyButton({ text }: { text: string }) {
   return (
     <button
       type="button"
-      aria-label={copied ? "Copied" : "Copy"}
-      title={copied ? "Copied" : "Copy"}
+      aria-label={copied ? t("common.copied") : t("common.copy")}
+      title={copied ? t("common.copied") : t("common.copy")}
       onClick={() => {
         void navigator.clipboard?.writeText(text).then(() => {
           setCopied(true);
@@ -700,22 +741,38 @@ function CopyButton({ text }: { text: string }) {
 
 // ── questions ──────────────────────────────────────────────────────────
 
+/** An answer being typed, by card, for as long as this window is open.
+ * Kept outside the card for the same reason as savedRules: the card is
+ * drawn afresh when it goes up to wait above the composer, and when its
+ * conversation is left and come back to, and a half typed answer should
+ * not go with it. */
+const drafts = new Map<string, string>();
+
 function QuestionCard({
+  messageId,
   card,
   at,
   name,
   face,
+  dock,
   onAnswer,
   onDismiss,
 }: {
+  messageId: string;
   card: OptionCardData;
   at: number;
   name: string;
   face: ReactNode;
+  dock?: "card" | "line";
   onAnswer: (text: string) => void;
   onDismiss: () => void;
 }) {
-  const [custom, setCustom] = useState("");
+  const [custom, setTyped] = useState(() => drafts.get(messageId) ?? "");
+  const setCustom = (text: string) => {
+    if (text) drafts.set(messageId, text);
+    else drafts.delete(messageId);
+    setTyped(text);
+  };
   const workflow = Boolean(card.runId);
   // An engine's question arrives under a generic title, with the question
   // in the subtitle and, for someone else's turn, who it is for in
@@ -756,6 +813,12 @@ function QuestionCard({
     }
   };
 
+  // Waiting above the composer, the question keeps its place here as one
+  // line, which takes you down to it.
+  if (dock === "line" && !card.answered) {
+    return <WaitingQuestionLine messageId={messageId} at={at} question={question} />;
+  }
+
   return (
     <AnimatePresence mode="wait" initial={false}>
       {card.answered ? (
@@ -763,10 +826,12 @@ function QuestionCard({
           <SettledQuestion card={card} at={at} question={question} hint={hint} forWhom={forWhom} />
         </motion.div>
       ) : (
-        <motion.div key="open" exit={leave} className="w-full max-w-[560px]">
+        // Above the composer it takes the composer's width, edge to edge,
+        // so the two read as one column.
+        <motion.div key="open" exit={leave} className={cn("w-full", dock !== "card" && "max-w-[560px]")}>
           <div
             role="group"
-            aria-label={workflow ? "Workflow waiting" : `${name} asks`}
+            aria-label={workflow ? t("optionCard.workflowWaiting") : t("optionCard.asks", { agent: name })}
             tabIndex={0}
             onKeyDown={onKeyDown}
             className="group/card w-full animate-rise-in rounded-2xl border bg-card shadow-[0_1px_3px_var(--shadow-color)] outline-none"
@@ -783,12 +848,12 @@ function QuestionCard({
                 <div className="flex items-baseline gap-3">
                   <p className="min-w-0 flex-1 truncate text-small text-muted-foreground">
                     {workflow ? (
-                      "A workflow is waiting on you"
+                      t("optionCard.aWorkflowIsWaitingOn")
                     ) : (
-                      <>
-                        <span className="font-medium text-foreground">{name}</span> asks
-                        {forWhom && <> for {forWhom}</>}
-                      </>
+                      tr(forWhom ? "optionCard.asksFor" : "optionCard.asks", {
+                        agent: <span className="font-medium text-foreground">{name}</span>,
+                        ...(forWhom ? { who: forWhom } : {}),
+                      })
                     )}
                   </p>
                   <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{stamp(at)}</span>
@@ -807,8 +872,8 @@ function QuestionCard({
               {!workflow && (
                 <button
                   onClick={onDismiss}
-                  aria-label="Dismiss question"
-                  title="Dismiss"
+                  aria-label={t("optionCard.dismissQuestion")}
+                  title={t("common.dismiss")}
                   className="-mr-1.5 -mt-0.5 shrink-0 rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
                 >
                   <X size={15} />
@@ -850,8 +915,8 @@ function QuestionCard({
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) send();
                     }}
-                    placeholder={card.options.length ? "Or answer in your own words" : "Type your answer"}
-                    aria-label="Your answer"
+                    placeholder={card.options.length ? t("optionCard.orAnswerInYourOwn") : t("optionCard.typeYourAnswer")}
+                    aria-label={t("optionCard.yourAnswer")}
                     className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
                   />
                   <Button
@@ -859,7 +924,7 @@ function QuestionCard({
                     variant={custom.trim() ? "brand" : "ghost"}
                     disabled={!custom.trim()}
                     onClick={send}
-                    aria-label="Send answer"
+                    aria-label={t("optionCard.sendAnswer")}
                     className="size-7 rounded-lg"
                   >
                     <ArrowUp size={14} />
@@ -871,6 +936,31 @@ function QuestionCard({
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/** Where a question waiting above the composer was asked. Pressing it
+ * brings the card into view and gives it the keyboard. */
+function WaitingQuestionLine({ messageId, at, question }: { messageId: string; at: number; question: string }) {
+  const toCard = () => {
+    const card = document.querySelector<HTMLElement>(`[data-question-dock="${CSS.escape(messageId)}"] [role="group"]`);
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest" });
+    card.focus({ preventScroll: true });
+  };
+  return (
+    <div className="min-w-0 max-w-full px-1.5">
+      <button
+        type="button"
+        onClick={toCard}
+        className="flex min-w-0 max-w-full items-center gap-2 rounded-md py-0.5 text-left text-small text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      >
+        <ArrowDown size={12} className="shrink-0 text-brand-ink" />
+        <span className="shrink-0 font-medium text-foreground/80">{t("optionCard.waitingBelow")}</span>
+        <span className="min-w-0 truncate">{question}</span>
+        <span className="shrink-0 tabular-nums opacity-80">{stamp(at)}</span>
+      </button>
+    </div>
   );
 }
 
@@ -891,7 +981,7 @@ function SettledQuestion({
   // A live engine question settles on the server as "answer", the kind
   // of reply rather than its words, so there is nothing more to show.
   const said = closed || card.answered === "answer" ? undefined : card.answered;
-  const why = card.cutOff ? "Closed when Bloks stopped." : card.closed;
+  const why = card.cutOff ? t("optionCard.closedWhenBloksStopped") : card.closed;
   return (
     <SettledLine
       icon={closed ? <Minus size={12} /> : <Check size={12} className="text-brand-ink" />}
@@ -902,14 +992,13 @@ function SettledQuestion({
         <>
           {(closed || !said) && (
             <span className="shrink-0 font-medium text-foreground/80">
-              {closed ? "Not answered" : card.answeredBy ? `${card.answeredBy} answered` : "Answered"}
+              {closed ? t("optionCard.notAnswered") : card.answeredBy ? t("optionCard.answeredBy", { name: card.answeredBy }) : t("optionCard.answered")}
             </span>
           )}
           <span className="min-w-0 truncate">{question}</span>
           {said && (
             <span className="min-w-0 max-w-[50%] shrink-0 truncate font-medium text-foreground/80">
-              {card.answeredBy ? `${card.answeredBy}: ` : ""}
-              {said}
+              {card.answeredBy ? t("optionCard.saidBy", { name: card.answeredBy, answer: said }) : said}
             </span>
           )}
         </>
@@ -917,7 +1006,7 @@ function SettledQuestion({
     >
       <p className="text-pretty text-body font-medium text-foreground [overflow-wrap:anywhere]">{question}</p>
       {hint && <p className="text-small text-muted-foreground">{hint}</p>}
-      {forWhom && <p className="text-small text-muted-foreground">Asked for {forWhom}.</p>}
+      {forWhom && <p className="text-small text-muted-foreground">{t("optionCard.askedFor", { who: forWhom })}</p>}
       {card.options.length > 0 && (
         <ul className="flex flex-col gap-0.5">
           {card.options.map((opt) => (
@@ -976,13 +1065,13 @@ function TeamProposal({
     <div className="w-full max-w-[560px] animate-rise-in overflow-hidden rounded-2xl border bg-card shadow-[0_1px_3px_var(--shadow-color)]">
       <div className="px-4 pt-4">
         <div className="text-caption font-semibold uppercase tracking-[0.1em] text-brand-ink">
-          {hired ? "Team hired" : "Proposed team"}
+          {hired ? t("optionCard.teamHired") : t("optionCard.proposedTeam")}
         </div>
         <div className="mt-1 text-lead font-semibold text-foreground">
-          {leadName} wants {plural(plan.members.length, "person", "people")} for “{plan.room}”
+          {t("optionCard.teamWants", { lead: leadName, count: plan.members.length, room: plan.room })}
         </div>
         <div className="mt-0.5 text-body leading-relaxed text-muted-foreground">
-          They use a cheaper model. {leadName} reviews their work and reports to you.
+          {t("optionCard.teamReviewed", { lead: leadName })}
         </div>
       </div>
 
@@ -1025,7 +1114,7 @@ function TeamProposal({
             onClick={() => setOpen((v) => !v)}
             className="text-small font-medium text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            {open ? "Hide brief" : "Show brief"}
+            {open ? t("optionCard.hideBrief") : t("optionCard.showBrief")}
           </button>
           {open && (
             <p className="mt-2 whitespace-pre-wrap text-body leading-relaxed text-muted-foreground">
@@ -1038,23 +1127,23 @@ function TeamProposal({
       <div className="flex items-center gap-2 border-t bg-muted/30 px-4 py-3">
         {hired ? (
           <span className="text-body text-muted-foreground">
-            Hired. {leadName} has briefed them in the room.
+            {t("optionCard.teamBriefed", { lead: leadName })}
           </span>
         ) : settled ? (
-          <span className="text-body text-muted-foreground">Declined.</span>
+          <span className="text-body text-muted-foreground">{t("optionCard.declined")}</span>
         ) : (
           <>
             <button
               onClick={onHire}
               className="rounded-xl bg-brand-ink px-3.5 py-2 text-ui font-medium text-brand-foreground transition-[transform,filter] duration-150 hover:brightness-95 active:scale-[0.98]"
             >
-              Hire the team
+              {t("optionCard.hireTheTeam")}
             </button>
             <button
               onClick={onDecline}
               className="rounded-xl px-3 py-2 text-ui text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
             >
-              Not now
+              {t("common.notNow")}
             </button>
           </>
         )}

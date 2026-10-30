@@ -20,6 +20,10 @@ import { askerWords, foldWords, type Asker, type TurnFold } from "@/lib/turnFold
 import { kindOf } from "@/lib/tool-summary";
 import { goalNoteForPerson } from "@/lib/goalNote";
 import { cn } from "@/lib/cn";
+import { formatList, t } from "@/lib/i18n";
+
+/** Names side by side, "Ada, Linus", with the reader's own commas. */
+const NAMES: Intl.ListFormatOptions = { type: "unit", style: "short" };
 
 /** How recent a fold's newest row must be for it to count as a turn
  * that ended just now: the last call can come well before the reply. */
@@ -32,6 +36,7 @@ export function TurnFoldLine({
   open,
   onToggle,
   onOpenExchange,
+  onOpenTrace,
   className,
   children,
 }: {
@@ -39,6 +44,8 @@ export function TurnFoldLine({
   open: boolean;
   onToggle: () => void;
   onOpenExchange?: (asker: Extract<Asker, { by: "agent" }>) => void;
+  /** Opens the turn's timeline beside the chat. */
+  onOpenTrace?: () => void;
   className?: string;
   /** The work, drawn by whoever draws the conversation. Only when open. */
   children?: ReactNode;
@@ -70,8 +77,8 @@ export function TurnFoldLine({
     : lead
       ? `${lead} · ${counted}`
       : fold.speaker
-        ? `${speaker?.name ?? "An agent"} ${counted}`
-        : counted.charAt(0).toUpperCase() + counted.slice(1);
+        ? foldWords(fold, kindOf, { by: speaker?.name ?? t("common.anAgent") }).join(" · ")
+        : foldWords(fold, kindOf, { opens: true }).join(" · ");
   const messaged = fold.messaged.map((peer) => ({ ...peer, bot: botOf(peer.peerId) }));
   const names = messaged.map((peer) => peer.bot?.name ?? peer.peerName);
   return (
@@ -85,7 +92,7 @@ export function TurnFoldLine({
     >
       <div
         className={cn(
-          "flex min-w-0 max-w-full items-center gap-1.5 text-small",
+          "group/fold flex min-w-0 max-w-full items-center gap-1.5 text-small",
           // nothing was said to the person: quiet, like a quiet check-in
           fold.alone ? "text-muted-foreground/80" : "text-muted-foreground",
         )}
@@ -94,7 +101,7 @@ export function TurnFoldLine({
           <>
             <button
               onClick={() => onOpenExchange?.(linked)}
-              title="Open the exchange"
+              title={t("turnFold.openTheExchange")}
               className="flex min-w-0 max-w-[50%] shrink-0 items-center gap-1.5 rounded-md py-0.5 transition-colors duration-150 hover:text-foreground"
             >
               {askedBy && <AgentAvatar bot={askedBy} size={16} className="shrink-0" />}
@@ -111,9 +118,9 @@ export function TurnFoldLine({
           {speaker && <AgentAvatar bot={speaker} size={16} className="shrink-0" />}
           <span className="truncate">{words}</span>
           {messaged.length > 0 && (
-            <span className="flex shrink-0 items-center gap-1" title={`Messaged ${names.join(", ")}`}>
+            <span className="flex shrink-0 items-center gap-1" title={t("turnFold.messagedNames", { names: formatList(names, NAMES) })}>
               <span aria-hidden>·</span>
-              <span className="sr-only">messaged</span>
+              <span className="sr-only">{t("turnFold.messaged")}</span>
               {messaged.map((peer) => peer.bot && <AgentAvatar key={peer.peerId} bot={peer.bot} size={16} />)}
               {/* one is named; several are faces, and names where a face is gone */}
               {messaged.length === 1 ? (
@@ -121,18 +128,34 @@ export function TurnFoldLine({
               ) : (
                 messaged.some((peer) => !peer.bot) && (
                   <span>
-                    {messaged
-                      .filter((peer) => !peer.bot)
-                      .map((peer) => peer.peerName)
-                      .join(", ")}
+                    {formatList(
+                      messaged.filter((peer) => !peer.bot).map((peer) => peer.peerName),
+                      NAMES,
+                    )}
                   </span>
                 )
               )}
             </span>
           )}
-          {fold.replied && <span className="shrink-0">· replied</span>}
+          {fold.replied && <span className="shrink-0">· {t("turnFold.replied")}</span>}
           <ChevronRight size={12} className={cn("shrink-0 transition-transform duration-200", open && "rotate-90")} />
         </button>
+        {/* The same work again, laid out in time, beside the chat so the
+            line can stay folded. Said when the line is pointed at or
+            reached by keyboard: a page of folds each offering it at
+            rest would be a page of the same word. */}
+        {onOpenTrace && (
+          <span className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity duration-150 group-hover/fold:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+            <span aria-hidden>·</span>
+            <button
+              onClick={onOpenTrace}
+              title={t("turnFold.seeThisTurnsTimeline")}
+              className="rounded-md py-0.5 transition-colors duration-150 hover:text-foreground"
+            >
+              {t("turnFold.timeline")}
+            </button>
+          </span>
+        )}
       </div>
       {open && (
         <div className="ml-[5px] mt-1.5 flex animate-fade-in flex-col gap-2.5 self-stretch border-l pl-3">{children}</div>

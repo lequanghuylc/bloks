@@ -30,11 +30,13 @@ import { Usage as UsageIcon } from "@/components/icons";
 import { SquarePen } from "@/components/icons";
 import { SquareTerminal } from "@/components/icons";
 import { Users } from "@/components/icons";
+import { X } from "@/components/icons";
 import { Zap } from "@/components/icons";
 import { api, openLaneWorking, useStore, type Action, type Blok, type Bot } from "@/state/store";
 import { AgentAvatar } from "./Avatar";
 import { SETTINGS_PAGES } from "./AppSettingsPanel";
 import { askChat } from "@/lib/chatAsk";
+import { closeRefusal } from "@/lib/conversationKeys";
 import { splitHighlight } from "@/lib/find";
 import { keysFor, platformOf } from "@/lib/shortcuts";
 import { cn } from "@/lib/cn";
@@ -42,6 +44,7 @@ import { openWorkspaceDialog, useWorkspaces } from "@/lib/workspaces";
 import type { WorkspaceInfo } from "@/types/bridge";
 import { WorkspaceMark } from "./WorkspaceMark";
 import { goToWorkspace } from "./WorkspaceSwitcher";
+import { t, useLanguage } from "@/lib/i18n";
 
 interface MessageHit {
   threadId: string;
@@ -145,14 +148,14 @@ export function CommandPalette() {
       return;
     }
     let alive = true;
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       api(`/api/search?q=${encodeURIComponent(query.trim())}&limit=12`)
         .then((r) => alive && setHits(r.hits ?? []))
         .catch(() => alive && setHits([]));
     }, 150);
     return () => {
       alive = false;
-      clearTimeout(t);
+      clearTimeout(timer);
     };
   }, [open, query]);
 
@@ -167,6 +170,8 @@ export function CommandPalette() {
     ? null
     : (state.bots.find((b) => b.id === state.selectedId && !b.hidden) ?? state.bots.find((b) => !b.hidden) ?? null);
   const working = bot ? openLaneWorking(bot) : false;
+  // the labels below are words, kept in memos: a new language makes them again
+  const language = useLanguage();
 
   // Agents and rooms together, as the sidebar lists them: most recently
   // with you first. Empty, only the latest few; typed, every match.
@@ -189,23 +194,34 @@ export function CommandPalette() {
       list.push(
         {
           id: "newConversation",
-          label: "New conversation",
+          label: t("commandPalette.newConversation"),
           keywords: `${bot.name} lane thread task chat start fresh`,
           icon: Plus,
           run: () => (toChat(), dispatch({ type: "newTask", botId: bot.id })),
         },
         {
           id: "find",
-          label: "Find in conversation",
+          label: t("commandPalette.findInConversation"),
           keywords: "search this thread text",
           icon: Search,
           run: () => (askChat({ kind: "find", botId: bot.id }), toChat()),
         },
       );
+      // only while the open one can go: General stays, and one at work
+      // is stopped first
+      if (!closeRefusal(bot.tasks ?? [], bot.activeTaskId ?? bot.threadId)) {
+        list.push({
+          id: "closeConversation",
+          label: t("commandPalette.closeConversation"),
+          keywords: `${bot.name} lane thread task tab delete end`,
+          icon: X,
+          run: () => (askChat({ kind: "close", botId: bot.id }), toChat()),
+        });
+      }
       if (working) {
         list.push({
           id: "stop",
-          label: `Stop ${bot.name}`,
+          label: t("commandPalette.stopAgent", { name: bot.name }),
           keywords: "stop interrupt cancel halt agent",
           icon: CircleStop,
           run: go({ type: "interrupt", botId: bot.id }),
@@ -214,19 +230,19 @@ export function CommandPalette() {
       list.push({
         // named for its line in the shortcut list, so the row shows ⌃`
         id: "terminalToggle",
-        label: "Open terminal",
+        label: t("commandPalette.openTerminal"),
         keywords: `shell console command line ${bot.name} folder`,
         icon: SquareTerminal,
         run: () => (askChat({ kind: "terminal", botId: bot.id }), toChat()),
       });
     }
     list.push(
-      { id: "newAgent", label: "New agent", keywords: "create add hire bot", icon: SquarePen, run: go({ type: "toggleNewAgent", open: true }) },
-      { id: "newRoom", label: "New room", keywords: "create add group team", icon: Users, quiet: true, run: go({ type: "toggleNewRoom", open: true }) },
-      { id: "shortcuts", label: "Keyboard shortcuts", keywords: "keys hotkeys help", icon: Keyboard, quiet: true, run: go({ type: "toggleShortcuts", open: true }) },
+      { id: "newAgent", label: t("commandPalette.newAgent"), keywords: "create add hire bot", icon: SquarePen, run: go({ type: "toggleNewAgent", open: true }) },
+      { id: "newRoom", label: t("commandPalette.newRoom"), keywords: "create add group team", icon: Users, quiet: true, run: go({ type: "toggleNewRoom", open: true }) },
+      { id: "shortcuts", label: t("commandPalette.keyboardShortcuts"), keywords: "keys hotkeys help", icon: Keyboard, quiet: true, run: go({ type: "toggleShortcuts", open: true }) },
     );
     return list;
-  }, [bot, working, dispatch]);
+  }, [bot, working, dispatch, language]);
 
   // The other workspaces are places too, and the way to them at any
   // width: the switcher lives in the title bar, which a narrow window hides.
@@ -242,28 +258,28 @@ export function CommandPalette() {
         .filter((ws) => ws.id !== workspaces.current && ws.status !== "failed")
         .map((ws) => ({
           id: `workspace:${ws.id}`,
-          label: `Switch to ${ws.name}`,
+          label: t("commandPalette.switchTo", { name: ws.name }),
           keywords: "workspace switch go open",
           icon: markOf(ws),
           run: () => void goToWorkspace(ws.id),
         })),
-      { id: "workspaceSettings", label: "Workspace settings", keywords: "workspace name mark members online notifications mute", icon: SettingsIcon, quiet: true, run: () => dispatch({ type: "toggleAppSettings", open: true, page: "workspace:general" }) },
-      { id: "newWorkspace", label: "New workspace", keywords: "workspace create add business team", icon: Plus, quiet: true, run: () => openWorkspaceDialog("new") },
+      { id: "workspaceSettings", label: t("commandPalette.workspaceSettings"), keywords: "workspace name mark members online notifications mute", icon: SettingsIcon, quiet: true, run: () => dispatch({ type: "toggleAppSettings", open: true, page: "workspace:general" }) },
+      { id: "newWorkspace", label: t("commandPalette.newWorkspace"), keywords: "workspace create add business team", icon: Plus, quiet: true, run: () => openWorkspaceDialog("new") },
     ];
-  }, [workspaces, dispatch]);
+  }, [workspaces, dispatch, language]);
 
   // The app's places, as the rail has them.
   const places = useMemo<Command[]>(
     () => [
-      { id: "overview", label: "Overview", keywords: "home today brief activity", icon: LayoutGrid, run: () => dispatch({ type: "openPage", page: "overview" }) },
-      { id: "automations", label: "Automations", keywords: "routines schedules watchers workflows webhooks jobs", icon: Zap, run: () => dispatch({ type: "toggleRoutines", open: true }) },
-      { id: "memory", label: "Memory", keywords: "notes remember about you", icon: Brain, run: () => dispatch({ type: "openPage", page: "memory" }) },
-      { id: "plugins", label: "Plugins", keywords: "apps skills connectors integrations tools mcp", icon: Puzzle, run: () => dispatch({ type: "openPage", page: "plugins" }) },
-      { id: "usage", label: "Usage", keywords: "cost spend tokens spending limit plan billing", icon: UsageIcon, run: () => dispatch({ type: "openPage", page: "usage" }) },
-      { id: "settings", label: "Settings", keywords: "preferences options", icon: SettingsIcon, run: () => dispatch({ type: "toggleAppSettings", open: true }) },
+      { id: "overview", label: t("commandPalette.overview"), keywords: "home today brief activity", icon: LayoutGrid, run: () => dispatch({ type: "openPage", page: "overview" }) },
+      { id: "automations", label: t("commandPalette.automations"), keywords: "routines schedules watchers workflows webhooks jobs", icon: Zap, run: () => dispatch({ type: "toggleRoutines", open: true }) },
+      { id: "memory", label: t("common.memory"), keywords: "notes remember about you", icon: Brain, run: () => dispatch({ type: "openPage", page: "memory" }) },
+      { id: "plugins", label: t("common.plugins"), keywords: "apps skills connectors integrations tools mcp", icon: Puzzle, run: () => dispatch({ type: "openPage", page: "plugins" }) },
+      { id: "usage", label: t("commandPalette.usage"), keywords: "cost spend tokens spending limit plan billing", icon: UsageIcon, run: () => dispatch({ type: "openPage", page: "usage" }) },
+      { id: "settings", label: t("common.settings"), keywords: "preferences options", icon: SettingsIcon, run: () => dispatch({ type: "toggleAppSettings", open: true }) },
       ...elsewhere,
     ],
-    [dispatch, elsewhere],
+    [dispatch, elsewhere, language],
   );
 
   const commands = useMemo(
@@ -315,7 +331,7 @@ export function CommandPalette() {
       } else if (hit.botId) {
         const target = state.bots.find((b) => b.id === hit.botId);
         // the hit may live in another lane; open that lane
-        const lane = target?.tasks?.some((t) => t.id === hit.threadId) ? hit.threadId : undefined;
+        const lane = target?.tasks?.some((task) => task.id === hit.threadId) ? hit.threadId : undefined;
         // the conversation lands on the message once it has it
         askChat({ kind: "land", botId: hit.botId, threadId: hit.threadId, messageId: hit.messageId });
         dispatch({ type: "select", id: hit.botId, lane });
@@ -366,7 +382,8 @@ export function CommandPalette() {
   );
   const command = (index: number, c: Command) => {
     const Icon = c.icon;
-    return row(index, <Icon size={16} strokeWidth={1.75} />, c.label, undefined, keysFor(c.id, platform));
+    // a browser tab never passes ⌘T or ⌘W on, so it shows no key for them
+    return row(index, <Icon size={16} strokeWidth={1.75} />, c.label, undefined, keysFor(c.id, platform, Boolean(window.bloks)));
   };
 
   const settles = open === "pointer";
@@ -380,7 +397,7 @@ export function CommandPalette() {
     >
       <div
         role="dialog"
-        aria-label="Search"
+        aria-label={t("common.search")}
         className={cn(
           "flex max-h-[min(560px,64vh)] w-[680px] max-w-[92vw] flex-col overflow-hidden rounded-2xl border bg-popover shadow-2xl shadow-(color:--shadow-color)",
           settles && "animate-pop-in",
@@ -391,7 +408,7 @@ export function CommandPalette() {
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          aria-label="Search chats, messages and commands"
+          aria-label={t("commandPalette.searchChatsMessagesAndCommands")}
           role="combobox"
           aria-expanded
           aria-controls="palette-results"
@@ -410,13 +427,13 @@ export function CommandPalette() {
               if (n < Math.min(chats.length, RECENT)) (e.preventDefault(), activate(n));
             }
           }}
-          placeholder="Search chats, messages and commands"
+          placeholder={t("commandPalette.searchChatsMessagesAndCommands")}
           className="h-14 w-full shrink-0 bg-transparent px-5 text-lead text-foreground outline-none placeholder:text-muted-foreground"
         />
 
         <div ref={listRef} id="palette-results" role="listbox" className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
           {chats.length > 0 && (
-            <Section label="Chats">
+            <Section label={t("commandPalette.chats")}>
               {chats.map((chat, i) =>
                 chat.kind === "agent"
                   ? row(
@@ -430,20 +447,20 @@ export function CommandPalette() {
                       i,
                       <Users size={16} strokeWidth={1.75} />,
                       chat.room.name,
-                      chat.room.section ?? "Room",
+                      chat.room.section ?? t("commandPalette.room"),
                       i < RECENT ? [`${ctrl}${i + 1}`] : undefined,
                     ),
               )}
             </Section>
           )}
           {commands.length > 0 && (
-            <Section label="Actions">
+            <Section label={t("commandPalette.actions")}>
               {commands.map((c, i) => command(commandsAt + i, c))}
             </Section>
           )}
-          {goTo.length > 0 && <Section label="Go to">{goTo.map((c, i) => command(goToAt + i, c))}</Section>}
+          {goTo.length > 0 && <Section label={t("commandPalette.goTo")}>{goTo.map((c, i) => command(goToAt + i, c))}</Section>}
           {pages.length > 0 && (
-            <Section label="Settings">
+            <Section label={t("common.settings")}>
               {pages.map((page, i) => {
                 const Icon = page.icon;
                 return row(pagesAt + i, <Icon size={16} />, page.label, page.description);
@@ -451,7 +468,7 @@ export function CommandPalette() {
             </Section>
           )}
           {hits.length > 0 && (
-            <Section label="Messages">
+            <Section label={t("commandPalette.messages")}>
               {hits.map((hit, i) =>
                 row(
                   hitsAt + i,
@@ -465,7 +482,7 @@ export function CommandPalette() {
           {total === 0 && (
             <div className="flex flex-col items-center gap-1 px-3 py-10 text-center">
               <BotIcon size={18} className="text-muted-foreground" />
-              <div className="text-ui text-muted-foreground">Nothing matches “{q}”</div>
+              <div className="text-ui text-muted-foreground">{t("commandPalette.nothingMatches", { query: q })}</div>
             </div>
           )}
         </div>

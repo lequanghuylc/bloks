@@ -66,8 +66,62 @@ describe("bloks-mcp", () => {
     child.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     const { result } = await rpc("tools/list");
     const names = result.tools.map((t: any) => t.name).sort();
-    assert.deepEqual(names, ["ask_agent", "list_agents", "list_rooms", "message_room", "morning_brief", "read_conversation", "read_message", "search", "waiting_on_me"]);
+    assert.deepEqual(names, [
+      "ask_agent",
+      "browser_click",
+      "browser_open",
+      "browser_press",
+      "browser_read",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_select",
+      "browser_snapshot",
+      "browser_switch_tab",
+      "browser_tabs",
+      "browser_type",
+      "browser_wait",
+      "home_call",
+      "home_entities",
+      "home_history",
+      "list_agents",
+      "list_rooms",
+      "list_skills",
+      "message_room",
+      "morning_brief",
+      "propose_skill_revision",
+      "read_conversation",
+      "read_message",
+      "read_skill",
+      "search",
+      "skill_history",
+      "waiting_on_me",
+    ]);
     assert.ok(!names.some((n: string) => /approve|delete|setting|key/i.test(n)), "nothing that approves, deletes or configures");
+  });
+
+  test("the home is closed to other apps until the owner opens it", async () => {
+    const shut = await tool("home_entities");
+    assert.equal(shut.isError, true);
+    assert.match(shut.text, /not connected|has not let other AI apps/);
+  });
+
+  test("skills are read by version, and a change to one is only ever proposed", async () => {
+    await h.json("/api/skills", { method: "POST", body: JSON.stringify({ id: "standup", name: "Standup", description: "The morning standup", body: "Three lines: done, doing, blocked." }) });
+    assert.match((await tool("list_skills")).text, /- standup: Standup\. The morning standup \(version 1\)/);
+    const read = await tool("read_skill", { skill: "standup" });
+    assert.match(read.text, /^Standup, version 1\nFor: The morning standup\n\nThree lines/);
+    assert.match((await tool("skill_history", { skill: "standup" })).text, /version 1 \(current\)/);
+
+    const stale = await tool("propose_skill_revision", { skill: "standup", from: 0, why: "x", text: "y" });
+    assert.equal(stale.isError, true);
+    assert.match(stale.text, /version 1 now/);
+    const proposed = await tool("propose_skill_revision", { skill: "standup", from: 1, why: "Name who is blocked", text: "Three lines: done, doing, blocked by whom." });
+    assert.equal(proposed.isError, false);
+    assert.match(proposed.text, /unchanged until they do/);
+    const { skill } = await h.json("/api/skills/standup");
+    assert.equal(skill.body, "Three lines: done, doing, blocked.", "proposing changed the skill");
+    const { proposals } = await h.json("/api/skills/proposals");
+    assert.ok(proposals.some((p: any) => p.skillId === "standup" && p.botName === "An app over MCP" && p.whole));
   });
 
   test("ask an agent by name and get its reply", async () => {
@@ -77,6 +131,12 @@ describe("bloks-mcp", () => {
     assert.match(answer.text, /Release notes drafted/);
     assert.match((await tool("read_conversation", { agent: "Writer" })).text, /You: Draft the release notes/);
     assert.match((await tool("search", { query: "release notes" })).text, /Writer/);
+  });
+
+  test("the Bloks browser, with no desktop app behind this workspace, says where it is", async () => {
+    const opened = await tool("browser_open", { url: "https://example.com" });
+    assert.equal(opened.isError, true);
+    assert.match(opened.text, /part of the Bloks desktop app/);
   });
 
   test("an unknown agent is a readable error, and the rest answer plainly", async () => {

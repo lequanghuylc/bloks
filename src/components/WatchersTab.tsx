@@ -21,8 +21,10 @@ import { Rss } from "@/components/icons";
 import { ShieldCheck } from "@/components/icons";
 import { SquareTerminal } from "@/components/icons";
 import { Trash2 } from "@/components/icons";
+import { Zap } from "@/components/icons";
 import { api, useStore } from "@/state/store";
 import { AgentAvatar } from "./Avatar";
+import { ago, AppDraftFields, appRowStatus, AppWatchDetail, appWhen, type AppDraftValue, type AppsStatus, type AppView } from "./AppWatch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Slider, type SliderStop } from "@/components/ui/slider";
@@ -32,8 +34,9 @@ import { cn } from "@/lib/cn";
 import { intervalLabel, intervalPhrase } from "@/lib/checkIns";
 import { AUTOMATIONS_LIST, AUTOMATIONS_LIST_SIZE, useColumnFolded } from "@/lib/sideColumn";
 import { ShowColumn, SideColumn } from "./SideColumn";
+import { formatDate, formatList, formatNumber, t, type MessageKey } from "@/lib/i18n";
 
-type Kind = "folder" | "page" | "feed" | "check" | "place";
+type Kind = "folder" | "page" | "feed" | "check" | "place" | "app";
 
 interface WatcherRow {
   id: string;
@@ -68,51 +71,64 @@ interface WatcherRow {
   until?: number;
   /** Finished on its own: acted once, or its time ran out. */
   done?: { at: number; why: "once" | "until" };
+  /** Apps: the app, the event, and what each event became. */
+  app?: AppView;
 }
 
+// Keys, not words, so the cards read in the language of the moment. The
+// placeholders of a path, an address or a command stay as they are typed;
+// a place's is words, and translates.
 const KIND: Record<
   Kind,
-  { icon: typeof Folder; label: string; example: string; field: string; placeholder: string; instruction: string }
+  { icon: typeof Folder; label: MessageKey; example: MessageKey; field: MessageKey; placeholder: () => string; instruction: MessageKey }
 > = {
   folder: {
     icon: Folder,
-    label: "Folder",
-    example: "New files land in it",
-    field: "Which folder",
-    placeholder: "/Users/you/Invoices",
-    instruction: "When a new invoice arrives, rename it by date and vendor and add it to the expenses sheet.",
+    label: "watchersTab.kind.folder.label",
+    example: "watchersTab.kind.folder.example",
+    field: "watchersTab.kind.folder.field",
+    placeholder: () => "/Users/you/Invoices",
+    instruction: "watchersTab.kind.folder.instruction",
   },
   page: {
     icon: Globe,
-    label: "Page",
-    example: "A price or a page changes",
-    field: "Which page",
-    placeholder: "https://example.com/pricing",
-    instruction: "If the price drops below $400, tell me.",
+    label: "watchersTab.kind.page.label",
+    example: "watchersTab.kind.page.example",
+    field: "watchersTab.kind.page.field",
+    placeholder: () => "https://example.com/pricing",
+    instruction: "watchersTab.kind.page.instruction",
   },
   feed: {
     icon: Rss,
-    label: "Feed",
-    example: "A blog posts something new",
-    field: "Which feed",
-    placeholder: "https://example.com/blog/rss.xml",
-    instruction: "Summarise each new post in two lines and tell me if it mentions us.",
+    label: "watchersTab.kind.feed.label",
+    example: "watchersTab.kind.feed.example",
+    field: "watchersTab.kind.feed.field",
+    placeholder: () => "https://example.com/blog/rss.xml",
+    instruction: "watchersTab.kind.feed.instruction",
   },
   check: {
     icon: SquareTerminal,
-    label: "Check",
-    example: "A script says it is time",
-    field: "Command to run",
-    placeholder: "python3 scripts/supplier_replied.py",
-    instruction: "A supplier replied: read it and decide the next step.",
+    label: "watchersTab.kind.check.label",
+    example: "watchersTab.kind.check.example",
+    field: "watchersTab.kind.check.field",
+    placeholder: () => "python3 scripts/supplier_replied.py",
+    instruction: "watchersTab.kind.check.instruction",
   },
   place: {
     icon: MapPin,
-    label: "Place",
-    example: "You arrive or leave",
-    field: "Which place",
-    placeholder: "Toronto, or 43.6777,-79.6248",
-    instruction: "When I land, send me the hotel address and the check-in time.",
+    label: "watchersTab.kind.place.label",
+    example: "watchersTab.kind.place.example",
+    field: "watchersTab.kind.place.field",
+    placeholder: () => t("watchersTab.kind.place.placeholder"),
+    instruction: "watchersTab.kind.place.instruction",
+  },
+  app: {
+    icon: Zap,
+    label: "watchersTab.kind.app.label",
+    example: "watchersTab.kind.app.example",
+    field: "watchersTab.kind.app.field",
+    placeholder: () => "",
+    instruction: "watchersTab.kind.app.instruction",
   },
 };
 
@@ -131,11 +147,11 @@ function lookStops(every: number): SliderStop<number>[] {
 /** What is being watched, in as few words as a sentence can carry: a
  * folder's last name, a page without its scheme. */
 function shortTarget(kind: Kind, target: string): string {
-  const t = target.trim();
-  if (!t) return "";
-  if (kind === "folder") return t.split(/[\\/]/).filter(Boolean).pop() ?? t;
-  if (kind === "check" || kind === "place") return t.length > 40 ? `${t.slice(0, 39)}…` : t;
-  const bare = t.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+  const text = target.trim();
+  if (!text) return "";
+  if (kind === "folder") return text.split(/[\\/]/).filter(Boolean).pop() ?? text;
+  if (kind === "check" || kind === "place") return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+  const bare = text.replace(/^https?:\/\//i, "").replace(/\/$/, "");
   return bare.length > 40 ? `${bare.slice(0, 39)}…` : bare;
 }
 
@@ -144,16 +160,7 @@ function shortTarget(kind: Kind, target: string): string {
 const mayRun = (w: WatcherRow, approvals?: string) =>
   w.kind !== "check" || w.approvedBy === "person" || (w.approvedBy === "mode" && (approvals === "auto" || approvals === "full"));
 
-const ago = (at?: number) => {
-  if (!at) return "never";
-  const minutes = Math.round((Date.now() - at) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? `${hours} h ago` : new Date(at).toLocaleDateString();
-};
-
-function Draft({ onMade }: { onMade: (id: string) => void }) {
+function Draft({ apps, onMade }: { apps: AppsStatus | null; onMade: (id: string) => void }) {
   const { state } = useStore();
   const bots = state.bots.filter((b) => !b.hidden && !b.archivedAt);
   const [botId, setBotId] = useState(bots[0]?.id ?? "");
@@ -163,19 +170,35 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
   const [instruction, setInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // an app is picked in its own fields, and names where its turns go here
+  const [app, setApp] = useState<AppDraftValue | null>(null);
+  const [thread, setThread] = useState("");
   const pick = async () => {
     const path = await window.bloks?.pickFolder?.();
     if (path) setTarget(path);
   };
   const [every, setEvery] = useState(30);
   const bot = bots.find((b) => b.id === botId);
-  const ready = Boolean(botId && target.trim() && instruction.trim());
+  const ready = Boolean(botId && instruction.trim() && (kind === "app" ? app?.ready : target.trim()));
   const make = () => {
     if (!ready || busy) return;
     setBusy(true);
     setError(null);
     // a folder is watched as it changes, so how often means nothing to it
-    const body = { botId, kind, target, instruction, ...(kind === "folder" || kind === "place" ? {} : { every }), ...(kind === "place" ? { when } : {}) };
+    const body =
+      kind === "app" && app
+        ? {
+            botId,
+            kind,
+            instruction,
+            toolkit: app.toolkit,
+            trigger: app.trigger,
+            config: app.config,
+            ...(app.accountId ? { accountId: app.accountId } : {}),
+            ...(app.filter.trim() ? { filter: app.filter.trim() } : {}),
+            ...(thread.trim() ? { thread: thread.trim() } : {}),
+          }
+        : { botId, kind, target, instruction, ...(kind === "folder" || kind === "place" ? {} : { every }), ...(kind === "place" ? { when } : {}) };
     api("/api/watchers", { method: "POST", body: JSON.stringify(body) })
       .then((r) => onMade(r.watcher.id))
       .catch((e: Error) => setError(e.message))
@@ -183,19 +206,27 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
   };
 
   // the watcher read back as one plain sentence, as it is filled in
-  const who = bot?.name ?? "The agent";
+  const who = bot?.name ?? t("watchersTab.readback.theAgent");
   const what = shortTarget(kind, target);
   const often = intervalPhrase(every);
   const readback =
     kind === "folder"
-      ? `${who} will watch ${what || "the folder"} and act within seconds of a change.`
+      ? t("watchersTab.readback.folder", { who, what: what || t("watchersTab.readback.theFolder") })
       : kind === "page"
-        ? `${who} will look at ${what || "the page"} ${often} and act when it changes.`
+        ? t("watchersTab.readback.page", { who, what: what || t("watchersTab.readback.thePage"), often })
         : kind === "feed"
-          ? `${who} will read ${what || "the feed"} ${often} and act on each new post.`
+          ? t("watchersTab.readback.feed", { who, what: what || t("watchersTab.readback.theFeed"), often })
           : kind === "place"
-            ? `${who} will act when your iPhone says you ${when === "leave" ? "left" : "arrived in"} ${what || "the place"}.`
-            : `${who} will run ${what ? `“${what}”` : "the command"} ${often} and act when it exits 0.`;
+            ? t(when === "leave" ? "watchersTab.readback.placeLeave" : "watchersTab.readback.placeArrive", { who, what: what || t("watchersTab.readback.thePlace") })
+            : kind === "app"
+              ? app?.toolkit && app.trigger
+                ? t("watchersTab.readback.app", {
+                    event: appWhen({ ...app, filter: app.filter.split(",").map((f) => f.trim()).filter(Boolean) }),
+                    who,
+                    where: thread.trim() ? t("watchersTab.readback.quoted", { text: thread.trim() }) : t("watchersTab.readback.theMainChat"),
+                  })
+                : t("watchersTab.readback.appUnpicked", { who })
+              : t("watchersTab.readback.check", { who, what: what ? t("watchersTab.readback.quoted", { text: what }) : t("watchersTab.readback.theCommand"), often });
 
   return (
     <div
@@ -207,10 +238,10 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
         }
       }}
     >
-      <h2 className="text-heading font-semibold text-foreground">New watcher</h2>
-      <p className="mt-1 text-body text-muted-foreground">An agent keeps an eye on something and acts when it changes.</p>
+      <h2 className="text-heading font-semibold text-foreground">{t("watchersTab.newWatcher")}</h2>
+      <p className="mt-1 text-body text-muted-foreground">{t("watchersTab.anAgentKeepsAnEye")}</p>
 
-      <div role="radiogroup" aria-label="What to watch" className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div role="radiogroup" aria-label={t("watchersTab.whatToWatch")} className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {(Object.keys(KIND) as Kind[]).map((k, i) => {
           const Icon = KIND[k].icon;
           const on = kind === k;
@@ -238,32 +269,38 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
                 <Icon size={14} />
               </span>
               <span className="min-w-0">
-                <span className="block text-body font-medium text-foreground">{KIND[k].label}</span>
-                <span className="block text-small leading-snug text-muted-foreground">{KIND[k].example}</span>
+                <span className="block text-body font-medium text-foreground">{t(KIND[k].label)}</span>
+                <span className="block text-small leading-snug text-muted-foreground">{t(KIND[k].example)}</span>
               </span>
             </motion.button>
           );
         })}
       </div>
 
-      <label className="mt-6 mb-2 text-body font-medium text-foreground" htmlFor="watch-target">
-        {KIND[kind].field}
-      </label>
-      <div className="flex gap-2">
-        <Input
-          id="watch-target"
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          placeholder={KIND[kind].placeholder}
-          spellCheck={false}
-          className="rounded-xl font-mono text-body"
-        />
-        {kind === "folder" && window.bloks?.pickFolder && (
-          <Button variant="secondary" onClick={pick} className="h-9 rounded-xl">
-            Choose
-          </Button>
-        )}
-      </div>
+      {kind === "app" ? (
+        <AppDraftFields apps={apps} onChange={setApp} />
+      ) : (
+        <>
+          <label className="mt-6 mb-2 text-body font-medium text-foreground" htmlFor="watch-target">
+            {t(KIND[kind].field)}
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="watch-target"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder={KIND[kind].placeholder()}
+              spellCheck={false}
+              className="rounded-xl font-mono text-body"
+            />
+            {kind === "folder" && window.bloks?.pickFolder && (
+              <Button variant="secondary" onClick={pick} className="h-9 rounded-xl">
+                {t("watchersTab.choose")}
+              </Button>
+            )}
+          </div>
+        </>
+      )}
       {/* a check runs a command with nobody watching; say so where the
           command is written, not after it is filed */}
       <AnimatePresence initial={false}>
@@ -275,16 +312,13 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
             className="mt-2 flex items-start gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2.5 text-small leading-relaxed text-foreground"
           >
             <ShieldCheck size={14} className="mt-0.5 shrink-0 text-warning" />
-            <span>
-              A check is a command, and it runs on its own {often} without asking. Exit 0 means act on its output,
-              exit 1 means nothing to do.
-            </span>
+            <span>{t("watchersTab.checkRunsOnItsOwn", { often })}</span>
           </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="mt-6 mb-2 text-body font-medium text-foreground">Who acts on it</div>
-      <div role="radiogroup" aria-label="Who acts on it" className="flex flex-wrap gap-1.5">
+      <div className="mt-6 mb-2 text-body font-medium text-foreground">{t("watchersTab.whoActsOnIt")}</div>
+      <div role="radiogroup" aria-label={t("watchersTab.whoActsOnIt")} className="flex flex-wrap gap-1.5">
         {bots.map((b) => {
           const on = b.id === botId;
           return (
@@ -304,24 +338,34 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
             </button>
           );
         })}
-        {bots.length === 0 && <span className="text-body text-muted-foreground">No agents yet. Make one first.</span>}
+        {bots.length === 0 && <span className="text-body text-muted-foreground">{t("watchersTab.noAgentsYetMakeOne")}</span>}
       </div>
 
       <label className="mt-6 mb-2 text-body font-medium text-foreground" htmlFor="watch-instruction">
-        What {bot?.name ?? "the agent"} does when it changes
+        {t(kind === "app" ? "watchersTab.whatDoesWhenHappens" : "watchersTab.whatDoesWhenChanges", { name: bot?.name ?? t("watchersTab.theAgent") })}
       </label>
       <Textarea
         id="watch-instruction"
         value={instruction}
         onChange={(e) => setInstruction(e.target.value)}
-        placeholder={KIND[kind].instruction}
+        placeholder={t(KIND[kind].instruction)}
         className="min-h-[90px] rounded-xl text-body"
       />
 
-      {kind === "place" ? (
+      {kind === "app" ? (
         <>
-          <div className="mt-6 mb-2 text-body font-medium text-foreground">When</div>
-          <div role="radiogroup" aria-label="When" className="flex flex-wrap gap-1.5">
+          <label className="mt-6 mb-2 text-body font-medium text-foreground" htmlFor="watch-thread">
+            {t("watchersTab.whichChatItRepliesIn")}
+          </label>
+          <Input id="watch-thread" value={thread} onChange={(e) => setThread(e.target.value)} placeholder={t("common.general")} className="rounded-xl text-body" />
+          <div className="mt-1.5 text-small leading-relaxed text-muted-foreground">
+            {t("watchersTab.appThreadHint", { name: bot?.name ?? t("watchersTab.theAgent") })}
+          </div>
+        </>
+      ) : kind === "place" ? (
+        <>
+          <div className="mt-6 mb-2 text-body font-medium text-foreground">{t("watchersTab.when")}</div>
+          <div role="radiogroup" aria-label={t("watchersTab.when")} className="flex flex-wrap gap-1.5">
             {(["arrive", "leave"] as const).map((w) => (
               <button
                 key={w}
@@ -334,22 +378,21 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
                   when === w ? "border-brand bg-brand-soft font-medium text-foreground" : "bg-card text-foreground/90 hover:border-foreground/20",
                 )}
               >
-                {w === "arrive" ? "When I arrive" : "When I leave"}
+                {w === "arrive" ? t("watchersTab.whenIArrive") : t("watchersTab.whenILeave")}
               </button>
             ))}
           </div>
           <div className="mt-2 text-small leading-relaxed text-muted-foreground">
-            A place as your iPhone names it (a city or a neighbourhood), or latitude,longitude for a spot. It acts when your iPhone next says where
-            you are, so Location has to be on in the Bloks app there, and a spot needs Exact position.
+            {t("watchersTab.aPlaceAsYourIphone")}
           </div>
         </>
       ) : (
         <>
-          <div className="mt-6 mb-2 text-body font-medium text-foreground">How often it looks</div>
+          <div className="mt-6 mb-2 text-body font-medium text-foreground">{t("watchersTab.howOftenItLooks")}</div>
           {kind === "folder" ? (
-            <div className="text-body text-muted-foreground">As it changes. Folders are watched within seconds.</div>
+            <div className="text-body text-muted-foreground">{t("watchersTab.asItChangesFoldersAre")}</div>
           ) : (
-            <Slider aria-label="How often it looks" stops={lookStops(every)} value={every} onChange={setEvery} onCommit={setEvery} />
+            <Slider aria-label={t("watchersTab.howOftenItLooks")} stops={lookStops(every)} value={every} onChange={setEvery} onCommit={setEvery} />
           )}
         </>
       )}
@@ -360,7 +403,7 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
           <motion.p
             // a new kind, agent or pace swaps the sentence; typing the
             // address only rewrites it, so it never flickers per key
-            key={`${kind}-${every}-${botId}-${when}`}
+            key={`${kind}-${every}-${botId}-${when}-${app?.trigger ?? ""}`}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -376,22 +419,42 @@ function Draft({ onMade }: { onMade: (id: string) => void }) {
       <div className="mt-5 flex items-center gap-3">
         <Button size="lg" disabled={busy || !ready} onClick={make}>
           {busy ? <Loader2 size={15} className="animate-spin" /> : <Eye size={15} />}
-          {busy ? "Starting" : "Start watching"}
+          {busy ? t("watchersTab.starting") : t("watchersTab.startWatching")}
         </Button>
         {!ready && (
           <span className="text-small text-muted-foreground">
-            {!target.trim()
-              ? kind === "check"
-                ? "Add the command."
-                : `Add the ${KIND[kind].label.toLowerCase()}.`
-              : !instruction.trim()
-                ? "Say what to do when it changes."
-                : ""}
+            {kind === "app"
+              ? (app?.missing ?? (!instruction.trim() ? t("watchersTab.sayWhatToDoWhen") : ""))
+              : !target.trim()
+                ? kind === "check"
+                  ? t("watchersTab.addTheCommand")
+                  : t(`watchersTab.add.${kind}`)
+                : !instruction.trim()
+                  ? t("watchersTab.sayWhatToDoWhenIt")
+                  : ""}
           </span>
         )}
       </div>
     </div>
   );
+}
+
+const untilDate = (at: number) => formatDate(at, { dateStyle: "medium", timeStyle: "short" });
+
+/** "When you leave, within 2.5 km, once, until Oct 3, 2026, 4:00 PM.": a
+ * place's terms, each said only when it is set. */
+function placeTerms(w: WatcherRow): string {
+  const terms = [w.when === "leave" ? t("watchersTab.whenYouLeave") : t("watchersTab.whenYouArrive")];
+  if (w.radius) {
+    terms.push(
+      w.radius >= 1000
+        ? t("watchersTab.place.withinKm", { n: formatNumber(Math.round(w.radius / 100) / 10) })
+        : t("watchersTab.place.withinM", { n: w.radius }),
+    );
+  }
+  if (w.once) terms.push(t("watchersTab.place.once"));
+  if (w.until) terms.push(t("watchersTab.place.until", { date: untilDate(w.until) }));
+  return t("watchersTab.place.terms", { terms: formatList(terms, { type: "unit" }) });
 }
 
 function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
@@ -402,7 +465,7 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
   useEffect(() => setThread(w.thread ?? ""), [w.id, w.thread]);
   // where its turns land: the named conversation, by id or title, or the
   // agent's first
-  const laneId = w.thread ? bot?.tasks?.find((t) => t.id === w.thread || t.title === w.thread)?.id : bot?.tasks?.[0]?.id;
+  const laneId = w.thread ? bot?.tasks?.find((task) => task.id === w.thread || task.title === w.thread)?.id : bot?.tasks?.[0]?.id;
   const [checking, setChecking] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   useEffect(() => setInstruction(w.instruction), [w.id, w.instruction]);
@@ -412,7 +475,7 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
     setChecking(true);
     setNote(null);
     api(`/api/watchers/${w.id}/check`, { method: "POST" })
-      .then((r) => setNote(r.note || "Checked"))
+      .then((r) => setNote(r.note || t("watchersTab.checked")))
       .catch((e: Error) => setNote(e.message))
       .finally(() => setChecking(false));
   };
@@ -423,15 +486,17 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
       {w.kind === "check" && waiting && (
         <div className="flex flex-col gap-2 rounded-xl border border-warning/40 bg-warning/10 px-3.5 py-3 text-body text-foreground">
           <div className="flex items-center gap-2 font-medium">
-            <ShieldCheck size={14} className="text-warning" /> {bot?.name ?? "An agent"} wants to run this command on its own
+            <ShieldCheck size={14} className="text-warning" /> {t("watchersTab.wantsToRunCommand", { name: bot?.name ?? t("common.anAgent") })}
           </div>
           <code className="block break-all rounded-lg bg-background px-2.5 py-1.5 font-mono text-small">{w.target}</code>
           <div className="text-muted-foreground">
-            Runs every {w.every < 60 ? `${w.every} minutes` : `${Math.round(w.every / 60)} hours`} without asking, once you approve it.
+            {w.every < 60
+              ? t("watchersTab.runsEveryMinutes", { count: w.every })
+              : t("watchersTab.runsEveryHours", { count: Math.round(w.every / 60) })}
           </div>
           <div>
             <Button size="sm" onClick={() => patch({ approved: true })}>
-              Approve
+              {t("common.approve")}
             </Button>
           </div>
         </div>
@@ -445,19 +510,23 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
           {w.kind === "check" && !waiting && (
             <div className="mt-1 flex items-center gap-1.5 text-small text-muted-foreground">
               <ShieldCheck size={12} />
-              {w.approvedBy === "person" ? "You approved this command." : `${bot?.name ?? "Its agent"} can run commands without asking.`}
+              {w.approvedBy === "person"
+                ? t("watchersTab.youApprovedThisCommand")
+                : bot
+                  ? t("watchersTab.canRunCommands", { name: bot.name })
+                  : t("watchersTab.itsAgentCanRunCommands")}
               {w.approvedBy === "person" && (
                 <button className="underline underline-offset-2" onClick={() => patch({ approved: false })}>
-                  Withdraw
+                  {t("watchersTab.withdraw")}
                 </button>
               )}
             </div>
           )}
         </div>
-        <Switch checked={w.enabled} onCheckedChange={(on) => patch({ enabled: on })} aria-label="Watching" />
+        <Switch checked={w.enabled} onCheckedChange={(on) => patch({ enabled: on })} aria-label={t("watchersTab.watching")} />
       </div>
       <label className="flex flex-col gap-1.5 text-body text-muted-foreground">
-        What {bot?.name ?? "the agent"} does when it changes
+        {t("watchersTab.whatDoesWhenChanges", { name: bot?.name ?? t("watchersTab.theAgent") })}
         <Textarea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
@@ -466,50 +535,57 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
         />
       </label>
       <label className="flex flex-col gap-1.5 text-body text-muted-foreground">
-        Which chat it replies in
+        {t("watchersTab.whichChatItRepliesIn")}
         <Input
           value={thread}
           onChange={(e) => setThread(e.target.value)}
           onBlur={() => thread.trim() !== (w.thread ?? "") && patch({ thread: thread.trim() })}
-          placeholder="General"
+          placeholder={t("common.general")}
           className="text-body text-foreground"
         />
         <span className="text-small">
-          Leave blank for the main chat. A new name starts a new one.
+          {t("watchersTab.leaveBlankForTheMain")}
         </span>
       </label>
-      {w.kind === "place" && (
+      {/* every kind can be asked to act once or stop at a time, so every
+          kind says so, and says when it is done */}
+      {(w.kind === "place" || w.once || w.until || w.done) && (
         <div className="flex flex-col gap-1 text-body text-muted-foreground">
-          <span>
-            {w.when === "leave" ? "When you leave" : "When you arrive"}
-            {w.radius ? `, within ${w.radius >= 1000 ? `${Math.round(w.radius / 100) / 10} km` : `${w.radius} m`}` : ""}
-            {w.once ? ", once" : ""}
-            {w.until ? `, until ${new Date(w.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : ""}.
-          </span>
+          {w.kind === "place" ? (
+            <span>{placeTerms(w)}</span>
+          ) : (
+            w.once || w.until ? (
+              <span>
+                {w.until
+                  ? t(w.once ? "watchersTab.actsOnceUntil" : "watchersTab.actsOnEveryChangeUntil", { date: untilDate(w.until) })
+                  : t("watchersTab.actsOnce")}
+              </span>
+            ) : null
+          )}
           {w.done && (
             <span className="text-foreground">
-              Done {ago(w.done.at)}: {w.done.why === "once" ? "it acted once, as asked." : "its time ran out."} Switch it on to watch again.
+              {t(w.done.why === "once" ? "watchersTab.doneOnce" : "watchersTab.doneUntil", { when: ago(w.done.at) })}
             </span>
           )}
         </div>
       )}
       {w.kind !== "folder" && w.kind !== "place" && (
         <div className="max-w-[460px]">
-          <div className="mb-1.5 text-body text-muted-foreground">How often it looks</div>
+          <div className="mb-1.5 text-body text-muted-foreground">{t("watchersTab.howOftenItLooks")}</div>
           {/* saved where the finger lets go, not at every stop on the way */}
-          <Slider aria-label="How often it looks" stops={lookStops(w.every)} value={w.every} onCommit={(every) => patch({ every })} />
+          <Slider aria-label={t("watchersTab.howOftenItLooks")} stops={lookStops(w.every)} value={w.every} onCommit={(every) => patch({ every })} />
         </div>
       )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-body text-muted-foreground">
         <label className="flex items-center gap-1.5">
-          <Switch checked={w.mode === "rehearse"} onCheckedChange={(on) => patch({ mode: on ? "rehearse" : "act" })} aria-label="Rehearse first" />
-          <FlaskConical size={13} /> Try it on a copy first
+          <Switch checked={w.mode === "rehearse"} onCheckedChange={(on) => patch({ mode: on ? "rehearse" : "act" })} aria-label={t("watchersTab.rehearseFirst")} />
+          <FlaskConical size={13} /> {t("watchersTab.tryOnACopyFirst")}
         </label>
-        <span>Last checked {ago(w.lastCheck)}</span>
+        <span>{t("watchersTab.lastChecked", { when: ago(w.lastCheck) })}</span>
       </div>
       {w.enabled && w.suspended === "archived" && (
         <div className="rounded-lg bg-muted px-3 py-2 text-body text-muted-foreground">
-          Paused while {bot?.name ?? "its agent"} is archived. Resumes when restored.
+          {t("watchersTab.pausedWhileNameArchived", { name: bot?.name ?? t("watchersTab.itsAgent") })}
         </div>
       )}
       {/* Stopped for failing: said apart from the last error, since it is
@@ -517,26 +593,26 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
           starts it again, and so does Check now when the look works. */}
       {w.failing && (
         <div className="flex flex-col gap-2 rounded-xl border bg-card px-3.5 py-3 text-body">
-          <div className="font-medium text-warning">Stopped after failing {w.failures ?? 3} times in a row</div>
+          <div className="font-medium text-warning">{t("watchersTab.stoppedAfterFailing", { count: w.failures ?? 3 })}</div>
           <div className="text-muted-foreground">
-            It does not look on its own until you change it, or a look by hand works. The last time: {w.failing.error}
+            {t("watchersTab.doesNotLookUntil", { error: w.failing.error })}
           </div>
           <div className="flex flex-wrap gap-1.5">
             <Button variant="secondary" size="sm" disabled={checking} onClick={check}>
-              Look again now
+              {t("watchersTab.lookAgainNow")}
             </Button>
             <Button variant="ghost" size="sm" onClick={() => patch({ enabled: false })}>
-              Pause
+              {t("common.pause")}
             </Button>
           </div>
         </div>
       )}
       {w.lastError && !w.failing && <div className="rounded-lg bg-warning/10 px-3 py-2 text-body text-warning">{w.lastError}</div>}
       <div>
-        <div className="mb-1.5 text-small font-medium text-muted-foreground">Triggered</div>
+        <div className="mb-1.5 text-small font-medium text-muted-foreground">{t("watchersTab.triggered")}</div>
         {w.fires.length === 0 ? (
           <div className="text-body text-muted-foreground">
-            Not yet.
+            {t("watchersTab.notYet")}
           </div>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -551,7 +627,7 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="secondary" size="sm" disabled={checking} onClick={check}>
-          {checking ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />} Check now
+          {checking ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />} {t("watchersTab.checkNow")}
         </Button>
         {laneId && bot && (
           <Button
@@ -561,7 +637,7 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
               dispatch({ type: "select", id: bot.id, lane: laneId });
             }}
           >
-            Open chat
+            {t("watchersTab.openChat")}
           </Button>
         )}
         <Button
@@ -570,7 +646,7 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
           className="ml-auto text-destructive hover:text-destructive"
           onClick={() => api(`/api/watchers/${w.id}`, { method: "DELETE" }).then(onChanged).catch(() => {})}
         >
-          <Trash2 size={13} /> Stop watching
+          <Trash2 size={13} /> {t("watchersTab.stopWatching")}
         </Button>
       </div>
       {note && <div className="text-body text-muted-foreground">{note}</div>}
@@ -581,11 +657,16 @@ function Detail({ w, onChanged }: { w: WatcherRow; onChanged: () => void }) {
 export function WatchersTab() {
   const { state } = useStore();
   const [rows, setRows] = useState<WatcherRow[] | null>(null);
+  // whether app watchers can hear at all, said beside every one of them
+  const [apps, setApps] = useState<AppsStatus | null>(null);
   // a card about a watcher that stopped for failing opens it here
   const [selected, setSelected] = useState<string | "new" | null>(() => (state.routinesFocus?.kind === "watcher" ? state.routinesFocus.id : null));
   const load = useCallback(() => {
     api("/api/watchers")
-      .then((r) => setRows(r.watchers ?? []))
+      .then((r) => {
+        setRows(r.watchers ?? []);
+        setApps(r.apps ?? null);
+      })
       .catch(() => setRows([]));
   }, []);
   useEffect(load, [load, state.ticks.watchers]);
@@ -595,11 +676,11 @@ export function WatchersTab() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <SideColumn id={AUTOMATIONS_LIST} size={AUTOMATIONS_LIST_SIZE} label="Watchers" className="max-h-[200px] w-full border-b md:max-h-none md:border-b-0">
+      <SideColumn id={AUTOMATIONS_LIST} size={AUTOMATIONS_LIST_SIZE} label={t("watchersTab.watchers")} className="max-h-[200px] w-full border-b md:max-h-none md:border-b-0">
         <div className="flex items-center justify-between px-4 pb-1 pt-3">
-          <span className="text-small font-medium text-muted-foreground">Watching</span>
+          <span className="text-small font-medium text-muted-foreground">{t("watchersTab.watching")}</span>
           <button onClick={() => setSelected("new")} className="rounded-lg px-1.5 py-1 text-small text-muted-foreground hover:bg-accent hover:text-foreground">
-            + New
+            {t("watchersTab.new")}
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
@@ -620,8 +701,28 @@ export function WatchersTab() {
                     <Icon size={12} className="shrink-0 text-muted-foreground" />
                     <span className="truncate">{w.name}</span>
                   </span>
-                  <span className={cn("block truncate text-caption", waiting || w.lastError || w.failing ? "text-warning" : w.enabled ? "text-muted-foreground" : "text-muted-foreground/70")}>
-                    {w.done ? "Done" : !w.enabled ? "Paused" : w.suspended === "archived" ? "Paused while archived" : w.failing ? "Stopped for failing" : waiting ? "Needs your approval" : w.lastError ? "Needs a look" : w.fires[0] ? `Triggered ${ago(w.fires[0].at)}` : `Checked ${ago(w.lastCheck)}`}
+                  <span
+                    className={cn(
+                      "block truncate text-caption",
+                      waiting || w.lastError || w.failing || w.app?.paused || w.app?.proposal ? "text-warning" : w.enabled ? "text-muted-foreground" : "text-muted-foreground/70",
+                    )}
+                  >
+                    {w.done
+                      ? t("common.done")
+                      : w.suspended === "archived" && w.enabled
+                        ? t("watchersTab.pausedWhileArchived")
+                        : (appRowStatus(w) ??
+                          (!w.enabled
+                            ? t("common.paused")
+                            : w.failing
+                              ? t("watchersTab.stoppedForFailing")
+                              : waiting
+                                ? t("watchersTab.needsYourApproval")
+                                : w.lastError
+                                  ? t("watchersTab.needsALook")
+                                  : w.fires[0]
+                                    ? t("watchersTab.triggeredAgo", { when: ago(w.fires[0].at) })
+                                    : t("watchersTab.checkedAgo", { when: ago(w.lastCheck) })))}
                   </span>
                 </span>
               </button>
@@ -631,14 +732,17 @@ export function WatchersTab() {
       </SideColumn>
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {/* the list folded away: the way back to it, named for what it lists */}
-        {folded && <ShowColumn id={AUTOMATIONS_LIST} text="Watching" label="Show the list" className="-ml-2 -mt-2 mb-3" />}
+        {folded && <ShowColumn id={AUTOMATIONS_LIST} text={t("watchersTab.watching")} label={t("watchersTab.showTheList")} className="-ml-2 -mt-2 mb-3" />}
         {rows === null ? null : showing === "new" ? (
           <Draft
+            apps={apps}
             onMade={(id) => {
               setSelected(id);
               load();
             }}
           />
+        ) : showing?.kind === "app" && showing.app ? (
+          <AppWatchDetail key={showing.id} w={{ ...showing, app: showing.app }} apps={apps} onChanged={load} />
         ) : showing ? (
           <Detail key={showing.id} w={showing} onChanged={load} />
         ) : null}

@@ -42,6 +42,7 @@ import { cn } from "@/lib/cn";
 import { safeHttpUrl } from "@/lib/genui/actions";
 import { FormSent } from "./forms";
 import { elements, figure, isElement, list, localImage, text, type Element } from "./read";
+import { t } from "@/lib/i18n";
 
 type Part = ComponentRenderer<Record<string, unknown>>;
 
@@ -168,7 +169,7 @@ export const Image: Part = ({ props }) => {
       className="flex max-w-full items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-body transition-colors duration-150 hover:bg-accent/60"
     >
       <FileImage size={16} aria-hidden className="shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1 truncate text-foreground">{alt || "Image"}</span>
+      <span className="min-w-0 flex-1 truncate text-foreground">{alt || t("genuiParts.image")}</span>
       <span className="shrink-0 text-small text-muted-foreground">{new URL(url).host}</span>
       <ArrowUpRight size={13} aria-hidden className="shrink-0 text-muted-foreground" />
     </a>
@@ -267,7 +268,7 @@ const MAX_ROWS = 200;
 
 function cell(value: unknown): ReactNode {
   if (typeof value === "number") return Number.isFinite(value) ? figure(value) : "";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return value ? t("genuiParts.yes") : t("genuiParts.no");
   const words = text(value);
   return words ? <InlineMarkdown text={words} /> : null;
 }
@@ -332,7 +333,7 @@ export const Table: Part = ({ props }) => {
           </tbody>
         </table>
       </TableScroll>
-      {rows > shown && <div className="mt-1.5 text-small text-muted-foreground">{rows - shown} more rows not shown</div>}
+      {rows > shown && <div className="mt-1.5 text-small text-muted-foreground">{t("genuiParts.moreRowsNotShown", { count: rows - shown })}</div>}
     </div>
   );
 };
@@ -346,21 +347,21 @@ function StepMark({ state, index }: { state: string; index: number }) {
       return (
         <span className={cn(base, "bg-success/12 text-success")}>
           <Check size={11} strokeWidth={2.6} aria-hidden />
-          <span className="sr-only">Done:</span>
+          <span className="sr-only">{t("genuiParts.step.done")}</span>
         </span>
       );
     case "doing":
       return (
         <span className={cn(base, "bg-brand-soft text-brand-ink")}>
           <CircleDot size={11} aria-hidden />
-          <span className="sr-only">In progress:</span>
+          <span className="sr-only">{t("genuiParts.step.inProgress")}</span>
         </span>
       );
     case "failed":
       return (
         <span className={cn(base, "bg-destructive/10 text-destructive")}>
           <X size={11} strokeWidth={2.6} aria-hidden />
-          <span className="sr-only">Failed:</span>
+          <span className="sr-only">{t("genuiParts.step.failed")}</span>
         </span>
       );
     case "todo":
@@ -525,7 +526,7 @@ export const OptionCards: Part = ({ props }) => {
                   <Check size={14} strokeWidth={2.4} aria-hidden className="shrink-0 text-brand-ink" />
                 ) : (
                   i === recommended && (
-                    <span className="shrink-0 rounded-full bg-brand-soft px-1.5 py-px text-caption font-medium text-brand-ink">Recommended</span>
+                    <span className="shrink-0 rounded-full bg-brand-soft px-1.5 py-px text-caption font-medium text-brand-ink">{t("genuiParts.recommended")}</span>
                   )
                 )}
               </span>
@@ -546,11 +547,11 @@ export const Sources: Part = ({ props }) => {
   if (!items.length) return null;
   return (
     <div className="border-t pt-2.5">
-      <div className="text-small font-medium text-muted-foreground">Sources</div>
+      <div className="text-small font-medium text-muted-foreground">{t("genuiParts.sources")}</div>
       <ol className="mt-1 flex flex-col">
         {items.map((source, i) => {
           const url = safeHttpUrl(source.url);
-          const title = text(source.title) || (url ? new URL(url).host : "Source");
+          const title = text(source.title) || (url ? new URL(url).host : t("genuiParts.source"));
           const from = text(source.sourceName) || (url ? new URL(url).host.replace(/^www\./, "") : "");
           const row = (
             <>
@@ -599,7 +600,7 @@ export const Tabs: Part = ({ props, renderNode }) => {
             value={String(i)}
             className="flex-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-body font-medium text-muted-foreground outline-none transition-[background-color,color,box-shadow] duration-150 hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:not-focus-visible:shadow-[0_1px_2px_rgba(0,0,0,0.06),0_0_0_0.5px_rgba(0,0,0,0.06)] dark:data-[state=active]:not-focus-visible:shadow-[0_0_0_0.5px_rgba(255,255,255,0.08)]"
           >
-            {text(item.props.trigger) || `Tab ${i + 1}`}
+            {text(item.props.trigger) || t("genuiParts.tabNumbered", { number: i + 1 })}
           </TabsPrimitive.Trigger>
         ))}
       </TabsPrimitive.List>

@@ -4,14 +4,15 @@
 import { useEffect, useState } from "react";
 import { api } from "@/state/store";
 import { SettingRow, SettingsSelect } from "./SettingsLayout";
+import { t } from "@/lib/i18n";
 
-const CHOICES: Array<[number, string]> = [
-  [10, "10 minutes"],
-  [20, "20 minutes"],
-  [60, "1 hour"],
-  [240, "4 hours"],
-  [0, "Never"],
-];
+const CHOICES = [10, 20, 60, 240, 0];
+
+// read at render, so the choices follow a change of language
+function choiceLabel(minutes: number): string {
+  if (minutes === 0) return t("boxSleep.never");
+  return minutes % 60 === 0 ? t("boxSleep.hours", { count: minutes / 60 }) : t("boxSleep.minutes", { count: minutes });
+}
 
 export function BoxSleep() {
   const [minutes, setMinutes] = useState<number | null>(null);
@@ -23,11 +24,11 @@ export function BoxSleep() {
   if (minutes === null) return null;
   return (
     <SettingRow
-      label="Sleep idle cloud computers after"
-      description="It bills while awake. Asleep, it keeps its files and wakes when a turn needs it."
+      label={t("boxSleep.sleepIdleCloudComputersAfter")}
+      description={t("boxSleep.itBillsWhileAwakeAsleep")}
       control={
         <SettingsSelect
-          aria-label="Sleep idle cloud computers after"
+          aria-label={t("boxSleep.sleepIdleCloudComputersAfter")}
           value={minutes}
           onChange={(e) => {
             const next = Number(e.target.value);
@@ -36,9 +37,9 @@ export function BoxSleep() {
           }}
           className="w-[150px]"
         >
-          {CHOICES.map(([value, label]) => (
+          {CHOICES.map((value) => (
             <option key={value} value={value}>
-              {label}
+              {choiceLabel(value)}
             </option>
           ))}
         </SettingsSelect>

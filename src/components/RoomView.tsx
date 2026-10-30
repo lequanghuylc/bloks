@@ -2,14 +2,17 @@
 // every line is attributed, because who said it is half the meaning.
 import { Notice } from "./chat/Bubble";
 import { useSettingsObservation } from "@/lib/useSettingsObservation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useInView, useReducedMotion } from "motion/react";
 import { AlertTriangle } from "@/components/icons";
+import { MessageGuard } from "./chat/MessageGuard";
 import { BookmarkPlus } from "@/components/icons";
 import { FolderOpen } from "@/components/icons";
 import { CalendarClock } from "@/components/icons";
 import { Check } from "@/components/icons";
+import { ChevronDown } from "@/components/icons";
 import { Crown } from "@/components/icons";
+import { Sparkles } from "@/components/icons";
 import { Rows3 } from "@/components/icons";
 import { MessagesSquare } from "@/components/icons";
 import { Loader2 } from "@/components/icons";
@@ -36,6 +39,7 @@ import { GroupMessage, PersonAvatar, SeenBy } from "./chat/Group";
 import { receiptsAt, runs, senderOf } from "@/lib/participants";
 import { useNamer, useWorkspaceRoster } from "@/lib/members";
 import { seedReads, useReadPosition, useReads } from "@/lib/readReceipts";
+import { useViewingReport } from "@/lib/viewing";
 import { JumpToLatest } from "./chat/JumpToLatest";
 import { HeldSends } from "./chat/HeldSends";
 import { heldToShow, isHostedWindow, useHeldSends, useWake } from "@/lib/waking";
@@ -57,11 +61,17 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ROOM_ANSWERS, answersOf, answersWords, routeWords, type RoomAnswers, type RoomRoute } from "@/lib/roomRoute";
 import { replyCounts, replyLabel } from "@/lib/threads";
 import { queuedLine } from "@/lib/when";
 import { cn } from "@/lib/cn";
+import { shareAsFile, teamFilename } from "@/lib/shareFile";
+import { toast } from "@/components/ui/toast";
 import { roomLead } from "@/lib/roomLead";
 import { useStickToBottom } from "@/lib/useStickToBottom";
 import { usePageVisible } from "@/lib/pageVisible";
@@ -75,6 +85,7 @@ import { onAsk, peekRoomAsk, takeAsk } from "@/lib/chatAsk";
 import { freshStartPreset } from "@/lib/roomEdit";
 import { RoomRename } from "./room/RoomRename";
 import { RoomAgentsDialog } from "./room/RoomAgentsDialog";
+import { formatList, t } from "@/lib/i18n";
 
 /** A reaction in a room is the cheapest thing anyone can say, and often
  * the right thing: agreeing with a plan should not wake six agents. */
@@ -90,6 +101,7 @@ function reactTo(roomId: string, messageId: string, emoji: string) {
 }
 
 /** Where a room message said in a linked chat came from, for the strip. */
+// product names, the same in every language
 const CHANNEL_NAMES: Partial<Record<NonNullable<Message["via"]>, string>> = {
   slack: "Slack",
   discord: "Discord",
@@ -154,12 +166,12 @@ function RoomPresence({
   members,
   lead,
   working,
-  leadOnly,
+  answers,
 }: {
   members: Bot[];
   lead: Bot | null;
   working: Bot[];
-  leadOnly: boolean;
+  answers: RoomAnswers;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref);
@@ -171,7 +183,7 @@ function RoomPresence({
   const more = ordered.length - shown.length;
   return (
     <TooltipProvider delayDuration={300}>
-      <div ref={ref} role="group" aria-label="Members" className="mr-1 hidden items-center gap-1.5 sm:flex">
+      <div ref={ref} role="group" aria-label={t("common.members")} className="mr-1 hidden items-center gap-1.5 sm:flex">
         {shown.map((m) => {
           const crowned = m.id === lead?.id && members.length > 1;
           const live = working.some((w) => w.id === m.id);
@@ -181,7 +193,15 @@ function RoomPresence({
               <TooltipTrigger asChild>
                 <span
                   role="img"
-                  aria-label={`${m.name}${crowned ? ", lead" : ""}${live ? ", working" : ""}`}
+                  aria-label={
+                    crowned && live
+                      ? t("roomView.presence.leadWorking", { name: m.name })
+                      : crowned
+                        ? t("roomView.presence.lead", { name: m.name })
+                        : live
+                          ? t("roomView.presence.working", { name: m.name })
+                          : m.name
+                  }
                   className="relative flex shrink-0"
                 >
                   <AnimatePresence initial={false}>
@@ -216,18 +236,20 @@ function RoomPresence({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="max-w-[240px] text-center">
-                {crowned ? `${m.name} leads and has the final call` : m.name}
-                {crowned && leadOnly && (
-                  <span className="block font-normal opacity-75">Answers unless you @name someone</span>
+                {crowned ? t("roomView.leadsWithFinalCall", { name: m.name }) : m.name}
+                {crowned && answers !== "everyone" && (
+                  <span className="block font-normal opacity-75">
+                    {answers === "auto" ? t("roomView.answersWhenAutoCantPick") : t("roomView.answersUnlessYouNameSomeone")}
+                  </span>
                 )}
-                {live && <span className="block font-normal opacity-75">Working now</span>}
+                {live && <span className="block font-normal opacity-75">{t("roomView.workingNow")}</span>}
               </TooltipContent>
             </Tooltip>
           );
         })}
         {more > 0 && (
           <span
-            title={ordered.slice(shown.length).map((m) => m.name).join(", ")}
+            title={formatList(ordered.slice(shown.length).map((m) => m.name), { type: "unit" })}
             className="flex h-[26px] min-w-[26px] items-center justify-center rounded-[9px] bg-muted px-1 text-caption font-medium tabular-nums text-muted-foreground"
           >
             +{more}
@@ -251,13 +273,73 @@ function HandoffLine({ from, to, ask, onOpen }: { from: string; to: string; ask:
       >
         <span className="shrink-0 font-medium text-foreground/80">{from}</span>
         <span aria-hidden className="shrink-0">→</span>
-        <span className="sr-only">to</span>
+        <span className="sr-only">{t("roomView.to")}</span>
         <span className="shrink-0 font-medium text-foreground/80">
           {to}
           {ask && ":"}
         </span>
         {ask && <span className="truncate">{ask}</span>}
       </button>
+    </div>
+  );
+}
+
+/** What a room on Auto chose for a message that named nobody, on the
+ * side the answer comes from: who it went to and what it read the
+ * message as, or that the lead took it. Pressed, it opens to the reason
+ * and to the others, any of whom one tap names instead. */
+function RouteLine({
+  route,
+  nameOf,
+  others,
+  onMention,
+}: {
+  route: RoomRoute;
+  nameOf: (id: string) => string;
+  /** Who else could have answered, for asking one of them instead. */
+  others: Bot[];
+  onMention: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  const words = routeWords(route, nameOf);
+  return (
+    <div className="mt-1 flex flex-col items-start pl-9">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={detailId}
+        onClick={() => setOpen((was) => !was)}
+        className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-small text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      >
+        {route.fallback ? (
+          <Crown size={12} className="shrink-0" />
+        ) : (
+          <Sparkles size={12} className="shrink-0 text-brand-ink" />
+        )}
+        <span className="truncate">{words.line}</span>
+        <ChevronDown size={12} className={cn("shrink-0 transition-transform duration-150", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div id={detailId} className="max-w-[460px] animate-fade-in pb-1 pt-0.5">
+          <p className="text-pretty text-small leading-snug text-muted-foreground">{words.detail}</p>
+          {others.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <span className="mr-0.5 text-small text-muted-foreground">{t("roomView.askInstead")}</span>
+              {others.slice(0, 4).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onMention(m.name)}
+                  className="inline-flex items-center gap-1 rounded-full border bg-card py-0.5 pl-0.5 pr-2 text-small text-foreground transition-[background-color,border-color,scale] duration-150 ease-out hover:border-foreground/20 hover:bg-accent active:scale-[0.97]"
+                >
+                  <AgentAvatar bot={m} size={16} className={m.avatarAt ? undefined : "rounded-[5px]"} />@{m.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -296,7 +378,7 @@ function WorkingLine({ bots }: { bots: Bot[] }) {
         ))}
       </span>
       <span className="min-w-0 truncate">
-        {namesLine(bots.map((b) => b.name))} {bots.length === 1 ? "is" : "are"} working
+        {t("roomView.working", { count: bots.length, names: namesLine(bots.map((b) => b.name)) })}
       </span>
     </div>
   );
@@ -311,13 +393,13 @@ function RoomWelcome({
   name,
   members,
   lead,
-  leadOnly,
+  answers,
   onMention,
 }: {
   name: string;
   members: Bot[];
   lead: Bot | null;
-  leadOnly: boolean;
+  answers: RoomAnswers;
   onMention: (name: string) => void;
 }) {
   const others = members.filter((m) => m.id !== lead?.id).map((m) => m.name);
@@ -347,8 +429,8 @@ function RoomWelcome({
       <h2 className="mt-5 text-title font-semibold text-foreground">{name}</h2>
       <p className="mt-1 max-w-[360px] text-pretty text-body leading-relaxed text-muted-foreground">
         {lead
-          ? `${lead.name} leads, with ${namesLine(others)}.`
-          : `${namesLine(members.map((m) => m.name))} ${members.length === 1 ? "is" : "are"} here.`}
+          ? t("roomView.welcome.leadsWith", { lead: lead.name, others: namesLine(others) })
+          : t("roomView.welcome.here", { count: members.length, names: namesLine(members.map((m) => m.name)) })}
       </p>
       <div className="mt-5 flex max-w-[420px] flex-wrap justify-center gap-1.5">
         {members.map((m) => (
@@ -362,9 +444,11 @@ function RoomWelcome({
         ))}
       </div>
       <p className="mt-3 max-w-[360px] text-pretty text-caption text-muted-foreground">
-        {leadOnly && lead
-          ? `${lead.name} answers unless you name someone with @.`
-          : "Everyone can answer. Name someone with @ to ask just them."}
+        {answers === "auto" && lead && members.length > 1
+          ? t("roomView.welcome.auto", { lead: lead.name })
+          : answers !== "everyone" && lead
+            ? t("roomView.welcome.leadAnswers", { lead: lead.name })
+            : t("roomView.everyoneCanAnswerNameSomeone")}
       </p>
     </div>
   );
@@ -406,7 +490,7 @@ function RoomMessage({
   const names = [...members.map((m) => m.name), ...people.map((p) => p.name), ...(ownerName ? [ownerName] : [])];
   const speaker = message.from ? members.find((m) => m.id === message.from) : null;
   const nameOfReactor = (id: string) =>
-    id === "user" ? "You" : (members.find((m) => m.id === id)?.name ?? "An agent");
+    id === "user" ? t("roomView.you") : (members.find((m) => m.id === id)?.name ?? t("common.anAgent"));
   // where nothing hovers, a tap on the words shows the row
   const tap = useTapToShow();
 
@@ -437,7 +521,7 @@ function RoomMessage({
     return (
       <div className={cn("flex", message.role === "user" ? "justify-end" : "justify-start pl-9")}>
         <div className="rounded-2xl border border-dashed px-3 py-1.5 text-body italic text-muted-foreground">
-          Message taken back
+          {t("roomView.messageTakenBack")}
         </div>
       </div>
     );
@@ -445,7 +529,7 @@ function RoomMessage({
 
   // somebody else in the room: on the left, named, with their face
   if (message.role === "user" && message.author) {
-    const who = memberName?.(message.author) ?? people.find((p) => p.id === message.author)?.name ?? "A former member";
+    const who = memberName?.(message.author) ?? people.find((p) => p.id === message.author)?.name ?? t("roomView.aFormerMember");
     return (
       <GroupMessage
         mine={false}
@@ -500,7 +584,7 @@ function RoomMessage({
             )}
           </>
         }
-        actions={verbs("You")}
+        actions={verbs(t("roomView.you"))}
         receipts={receipts}
       />
     );
@@ -702,7 +786,7 @@ export function RoomView({ blok }: { blok: Blok }) {
   // everyone by the name the room calls them, guests included, told apart
   // where two share a first name (src/lib/names.ts)
   const nameOf = useNamer(roomPeople);
-  const personName = (id: string) => nameOf(id, "A former member");
+  const personName = (id: string) => nameOf(id, t("roomView.aFormerMember"));
   const isBubble = (m: Message) =>
     !m.deleted && (m.role === "user" || (Boolean(m.from) && (m.kind === "text" || m.kind === "component")));
   const roomRuns = useMemo(() => runs(said, isBubble), [said]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -714,6 +798,8 @@ export function RoomView({ blok }: { blok: Blok }) {
       .then((r: { reads?: unknown }) => seedReads(blok.id, r.reads))
       .catch(() => {});
   }, [withPeople, blok.id]);
+  // on screen here, so an answer that lands in it is no news for the phone
+  useViewingReport(blok.id, (body) => api("/api/viewing", { method: "POST", body: JSON.stringify(body) }));
   useReadPosition({
     threadId: withPeople ? blok.id : null,
     scroller: scrollRef,
@@ -726,7 +812,7 @@ export function RoomView({ blok }: { blok: Blok }) {
     [withPeople, said, roomRuns, reads],
   );
   const readerName = (id: string) =>
-    id === "owner" ? (ownerName ?? roster.owner ?? "You") : personName(id);
+    id === "owner" ? (ownerName ?? roster.owner ?? t("roomView.you")) : personName(id);
   const receiptsFor = (id: string) => {
     const who = receiptRows.get(id);
     return who?.length ? <SeenBy people={who.map((p) => ({ id: p, name: readerName(p) }))} /> : undefined;
@@ -841,8 +927,8 @@ export function RoomView({ blok }: { blok: Blok }) {
   const handoffLine = (handoff: Handoff) => (
     <HandoffLine
       key={`handoff:${handoff.sourceId}:${handoff.toId}`}
-      from={members.find((b) => b.id === handoff.fromId)?.name ?? "An agent"}
-      to={members.find((b) => b.id === handoff.toId)?.name ?? "an agent"}
+      from={members.find((b) => b.id === handoff.fromId)?.name ?? t("common.anAgent")}
+      to={members.find((b) => b.id === handoff.toId)?.name ?? t("roomView.anAgentLower")}
       ask={handoff.ask}
       onOpen={() => openHandoff(handoff)}
     />
@@ -928,21 +1014,13 @@ export function RoomView({ blok }: { blok: Blok }) {
   };
 
   const exportManifest = () => {
-    // The manifest is the room's roles as a file, for handing to someone
-    // else. It downloads rather than opens: the point is to leave with it.
-    // A Markdown team file (server/team-file.ts): readable, editable, and
-    // what the gallery on bloks.dev is made of.
-    fetch(`/api/bloks/${blok.id}/team.md`)
-      .then((res) => (res.ok ? res.text() : Promise.reject(new Error(String(res.status)))))
-      .then((text) => {
-        const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${blok.name.replace(/[^\w-]+/g, "-").toLowerCase() || "team"}.team.md`;
-        a.click();
-        URL.revokeObjectURL(url);
-      })
-      .catch(() => {});
+    // The room's roles as a file, for handing to someone else or to the
+    // catalogue: a Markdown team file in the catalogue's own format
+    // (server/catalog.ts), with this workspace's secrets, addresses and
+    // the hire's project brief taken out by the server.
+    shareAsFile(`/api/bloks/${blok.id}/team.md`, teamFilename(blok.name))
+      .then(() => toast(t("roomView.savedTeamFile"), { description: t("roomView.savedTeamFileHint") }))
+      .catch((e: Error) => toast.error(e.message));
   };
 
   // Seniority is the agent's in every room; the crown is this room's own.
@@ -954,11 +1032,13 @@ export function RoomView({ blok }: { blok: Blok }) {
     }).catch((e: Error) => dispatch({ type: "error", message: e.message }));
   };
 
-  const toggleLeadOnly = () => {
+  const answers = answersOf(blok);
+  const setAnswers = (next: RoomAnswers) => {
+    if (next === answers) return;
     api(`/api/bloks/${blok.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ leadOnly: !blok.leadOnly }),
-    }).catch(() => {});
+      body: JSON.stringify({ answers: next }),
+    }).catch((e: Error) => dispatch({ type: "error", message: e.message }));
   };
 
   // Shown at once in the header and the sidebar, and taken back with the
@@ -1006,37 +1086,58 @@ export function RoomView({ blok }: { blok: Blok }) {
           if (next.kind !== "activity" || next.from !== m.from || next.deleted || !next.tool) break;
           run.push(next);
         }
-        return [...handoffsBefore(indices[i]), <ToolRun key={m.id} messages={run} className="pl-9" />];
+        return [
+          ...handoffsBefore(indices[i]),
+          <MessageGuard key={m.id} id={m.id} resetKey={m} className="ml-9" render={() => <ToolRun messages={run} className="pl-9" />} />,
+        ];
       }
       const showSpeaker = !prev || prev.from !== m.from || prev.role !== m.role;
       const answers = replyLabel(counts.get(m.id) ?? 0);
       const lit = flashId === m.id;
+      // each message is drawn inside its own guard, so one that cannot be
+      // drawn costs that message and not the room (src/lib/rowGuard.ts)
       return [
         ...handoffsBefore(indices[i]),
-        <div key={m.id} data-room-msg={m.id} className={cn("relative isolate", roomRuns.get(m.id)?.first === false && "-mt-1.5")}>
-          <LandMark on={lit} />
-          <RoomMessage
-            message={m}
-            members={members}
-            people={roomPeople}
-            ownerName={blok.sharing ? ownerName : undefined}
-            showSpeaker={showSpeaker}
-            place={roomRuns.get(m.id) ?? { first: showSpeaker, last: true }}
-            receipts={receiptsFor(m.id)}
-            memberName={personName}
-            roomId={blok.id}
-            onReply={setReplyTo}
-            onForward={(message, author) => setForwarding({ message, author })}
-          />
-          {answers && (
-            <button
-              onClick={() => setLensAnd("forum")}
-              className="ml-9 mt-0.5 rounded-md px-1.5 py-0.5 text-small text-brand-ink transition-colors duration-150 hover:bg-accent"
-            >
-              {answers}
-            </button>
+        <MessageGuard
+          key={m.id}
+          id={m.id}
+          resetKey={m}
+          className="ml-9"
+          render={() => (
+            <div data-room-msg={m.id} className={cn("relative isolate", roomRuns.get(m.id)?.first === false && "-mt-1.5")}>
+              <LandMark on={lit} />
+              <RoomMessage
+                message={m}
+                members={members}
+                people={roomPeople}
+                ownerName={blok.sharing ? ownerName : undefined}
+                showSpeaker={showSpeaker}
+                place={roomRuns.get(m.id) ?? { first: showSpeaker, last: true }}
+                receipts={receiptsFor(m.id)}
+                memberName={personName}
+                roomId={blok.id}
+                onReply={setReplyTo}
+                onForward={(message, author) => setForwarding({ message, author })}
+              />
+              {m.route && !m.deleted && (
+                <RouteLine
+                  route={m.route}
+                  nameOf={(id) => members.find((b) => b.id === id)?.name ?? t("common.anAgent")}
+                  others={answering.filter((b) => !m.route!.to.includes(b.id))}
+                  onMention={mention}
+                />
+              )}
+              {answers && (
+                <button
+                  onClick={() => setLensAnd("forum")}
+                  className="ml-9 mt-0.5 rounded-md px-1.5 py-0.5 text-small text-brand-ink transition-colors duration-150 hover:bg-accent"
+                >
+                  {answers}
+                </button>
+              )}
+            </div>
           )}
-        </div>,
+        />,
       ];
     });
 
@@ -1056,24 +1157,24 @@ export function RoomView({ blok }: { blok: Blok }) {
             {/* the lead first, crowned, so a phone without the faces on
                 the right still says who has the final call */}
             <span className="flex min-w-0 items-center gap-1 text-small text-muted-foreground">
-              {lead && answering.length > 1 && <Crown size={11} className="shrink-0 text-brand-ink" aria-label="Lead" />}
+              {lead && answering.length > 1 && <Crown size={11} className="shrink-0 text-brand-ink" aria-label={t("roomView.lead")} />}
               <span className="truncate">
-                {byLead(answering, lead).map((m) => m.name).join(", ")}
+                {formatList(byLead(answering, lead).map((m) => m.name), { type: "unit" })}
                 {answering.length < members.length &&
-                  ` · ${members.length - answering.length} archived`}
+                  ` · ${t("roomView.archivedCount", { count: members.length - answering.length })}`}
               </span>
             </span>
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <RoomPresence members={answering} lead={lead} working={working} leadOnly={Boolean(blok.leadOnly)} />
+          <RoomPresence members={answering} lead={lead} working={working} answers={answers} />
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setSharingOpen(true)}
             className={cn("relative", blok.sharing && "text-foreground")}
-            title={blok.sharing ? `Shared with ${roomPeople.length} ${roomPeople.length === 1 ? "person" : "people"}` : "Share room"}
-            aria-label={blok.sharing ? `Shared with ${roomPeople.length} ${roomPeople.length === 1 ? "person" : "people"}` : "Share room"}
+            title={blok.sharing ? t("roomView.sharedWith", { count: roomPeople.length }) : t("roomView.shareRoom")}
+            aria-label={blok.sharing ? t("roomView.sharedWith", { count: roomPeople.length }) : t("roomView.shareRoom")}
           >
             <UserPlus size={16} />
             {knocking > 0 && (
@@ -1097,8 +1198,8 @@ export function RoomView({ blok }: { blok: Blok }) {
             className={cn(lens === "forum" && "bg-accent text-foreground")}
             title={
               lens === "stream"
-                ? "View as topics"
-                : "View in order"
+                ? t("roomView.viewAsTopics")
+                : t("roomView.viewInOrder")
             }
           >
             {lens === "stream" ? <MessagesSquare size={16} /> : <Rows3 size={16} />}
@@ -1112,7 +1213,8 @@ export function RoomView({ blok }: { blok: Blok }) {
             onRoutines={() => setShowRoutines(true)}
             onSave={saveToLibrary}
             onExport={exportManifest}
-            onLeadOnly={toggleLeadOnly}
+            answers={answers}
+            onAnswers={setAnswers}
             members={answering}
             lead={lead}
             onLead={makeLead}
@@ -1133,10 +1235,10 @@ export function RoomView({ blok }: { blok: Blok }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="text-lead font-semibold text-foreground">
-              Close {blok.name}?
+              {t("roomView.closeRoom", { name: blok.name })}
             </div>
             <p className="mt-1 text-body leading-relaxed text-muted-foreground">
-              Archiving keeps everything, and you can restore it later. Deleting cannot be undone.
+              {t("roomView.archivingKeepsEverythingAndYou")}
             </p>
             <div className="mt-4 flex flex-col gap-2">
               <Button
@@ -1145,7 +1247,7 @@ export function RoomView({ blok }: { blok: Blok }) {
                   setClosing(false);
                 }}
               >
-                Archive room
+                {t("roomView.archiveRoom")}
               </Button>
               <Button
                 variant="secondary"
@@ -1153,17 +1255,17 @@ export function RoomView({ blok }: { blok: Blok }) {
                 onClick={() => {
                   // the second decision, in its own words, naming the room
                   void confirm({
-                    title: `Delete ${blok.name} and its whole transcript?`,
-                    body: "This cannot be undone. Archive it instead to keep it.",
-                    confirmLabel: "Delete",
+                    title: t("roomView.deleteConfirm.title", { name: blok.name }),
+                    body: t("roomView.deleteConfirm.body"),
+                    confirmLabel: t("common.delete"),
                     destructive: true,
                   }).then((yes) => yes && dispatch({ type: "deleteRoom", blokId: blok.id }));
                 }}
               >
-                Delete permanently
+                {t("roomView.deletePermanently")}
               </Button>
               <Button variant="ghost" onClick={() => setClosing(false)}>
-                Cancel
+                {t("common.cancel")}
               </Button>
             </div>
           </div>
@@ -1194,7 +1296,7 @@ export function RoomView({ blok }: { blok: Blok }) {
             name={blok.name}
             members={byLead(answering, lead)}
             lead={answering.length > 1 ? lead : null}
-            leadOnly={Boolean(blok.leadOnly)}
+            answers={answers}
             onMention={mention}
           />
         ) : (
@@ -1206,7 +1308,7 @@ export function RoomView({ blok }: { blok: Blok }) {
               className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-small text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground disabled:opacity-60"
             >
               {earlier.loading && <Loader2 size={12} className="animate-spin" />}
-              Show earlier messages ({start + earlier.remaining} more)
+              {t("roomView.showEarlier", { count: start + earlier.remaining })}
             </button>
           )}
           {visibleRows.flatMap((row) =>
@@ -1249,7 +1351,7 @@ export function RoomView({ blok }: { blok: Blok }) {
           {typingNow && (
             <div className="flex items-center gap-2.5 pl-9 text-small text-muted-foreground">
               <span className="size-1.5 rounded-full bg-muted-foreground motion-safe:animate-pulse" />
-              {typingNow} is typing
+              {t("roomView.isTyping", { name: typingNow })}
             </div>
           )}
         </div>
@@ -1271,11 +1373,11 @@ export function RoomView({ blok }: { blok: Blok }) {
         waiting={waiting}
         senderOf={(m) =>
           m.role === "bot"
-            ? (members.find((b) => b.id === m.from)?.name ?? "An agent")
+            ? (members.find((b) => b.id === m.from)?.name ?? t("common.anAgent"))
             : m.author
               ? personName(m.author)
               : m.via
-                ? (CHANNEL_NAMES[m.via] ?? "the linked chat")
+                ? (CHANNEL_NAMES[m.via] ?? t("roomView.theLinkedChat"))
                 : null
         }
         replyTo={replyTo}
@@ -1332,33 +1434,33 @@ function RoomFolderButton({ blok }: { blok: Blok }) {
         variant="ghost"
         size="icon"
         onClick={() => setOpen(!open)}
-        title={shown ? `Shared folder: ${shown}` : "Shared working folder"}
+        title={shown ? t("roomView.sharedFolderIs", { path: shown }) : t("roomView.sharedWorkingFolder")}
       >
         <FolderOpen size={16} className={shown ? "text-brand-ink" : undefined} />
       </Button>
       {open && (
         <div className="absolute right-0 top-11 z-30 w-[320px] max-w-[92vw] animate-pop-in rounded-2xl border bg-popover p-3.5 shadow-xl shadow-(color:--shadow-color)">
-          <div className="text-body font-semibold text-foreground">Shared working folder</div>
+          <div className="text-body font-semibold text-foreground">{t("roomView.sharedWorkingFolder")}</div>
           {pinned ? (
             <>
               <div className="mt-1 break-all text-body text-muted-foreground">
-                {blok.pinnedCwd ?? "Each member uses its own folder."}
+                {blok.pinnedCwd ?? t("roomView.eachMemberUsesItsOwn")}
               </div>
               <div className="mt-1.5 text-small text-muted-foreground/70">
-                Set when the room started. Make a new room to use another folder.
+                {t("roomView.setWhenTheRoomStarted")}
               </div>
             </>
           ) : (
             <>
               <div className="mt-1 text-small text-muted-foreground">
-                Where members work in this room. Set it before the first task.
+                {t("roomView.whereMembersWorkInThis")}
               </div>
               <div className="mt-2 flex gap-1.5">
                 <input
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && save()}
-                  placeholder="/Users/you/Projects/launch  (empty = own folders)"
+                  placeholder={t("roomView.folderPlaceholder", { path: "/Users/you/Projects/launch" })}
                   className="w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-body text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-ring/60"
                 />
                 <BrowseFolderButton onPick={setDraft} />
@@ -1366,10 +1468,10 @@ function RoomFolderButton({ blok }: { blok: Blok }) {
               {error && <div className="mt-1.5 text-small text-destructive">{error}</div>}
               <div className="mt-2 flex justify-end gap-1.5">
                 <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button size="sm" onClick={save}>
-                  Save
+                  {t("common.save")}
                 </Button>
               </div>
             </>
@@ -1396,7 +1498,8 @@ function RoomMenu({
   onRoutines,
   onSave,
   onExport,
-  onLeadOnly,
+  answers,
+  onAnswers,
   members,
   lead,
   onLead,
@@ -1412,7 +1515,9 @@ function RoomMenu({
   onRoutines: () => void;
   onSave: () => void;
   onExport: () => void;
-  onLeadOnly: () => void;
+  /** Who answers a message naming nobody, and the way to change it. */
+  answers: RoomAnswers;
+  onAnswers: (next: RoomAnswers) => void;
   /** Those who can answer, the only ones a crown means anything on. */
   members: Bot[];
   lead: Bot | null;
@@ -1426,7 +1531,7 @@ function RoomMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" title="More" aria-label="More room actions">
+        <Button variant="ghost" size="icon" title={t("roomView.more")} aria-label={t("roomView.moreRoomActions")}>
           <MoreHorizontal size={16} />
         </Button>
       </DropdownMenuTrigger>
@@ -1442,37 +1547,62 @@ function RoomMenu({
       >
         <DropdownMenuItem onClick={() => (renameNext.current = true)}>
           <Pencil size={15} />
-          Rename…
+          {t("roomView.rename")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onAgents}>
           <Users size={15} />
-          Agents…
+          {t("roomView.agents")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onFreshStart}>
           <Plus size={15} />
-          New room with these agents…
+          {t("roomView.newRoomWithTheseAgents")}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onRoutines}>
           <CalendarClock size={15} />
-          Routines
+          {t("common.routines")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onSave}>
           {justSaved ? <Check size={15} className="text-success" /> : <BookmarkPlus size={15} />}
-          Save this team
+          {t("roomView.saveThisTeam")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onExport}>
           <Download size={15} />
-          Export team file
+          {t("roomView.shareAsFile")}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={onLeadOnly}>
-          <Crown size={15} />
-          {blok.leadOnly ? "Let everyone answer" : "Only the lead answers"}
-        </DropdownMenuItem>
+        {members.length > 1 && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger icon={<Crown size={15} />} value={answersWords(answers, null).label}>
+              {t("roomView.whoAnswers")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-[260px] max-w-[calc(100vw-24px)]">
+              {ROOM_ANSWERS.map((value) => {
+                const words = answersWords(value, lead?.name ?? null);
+                return (
+                  <DropdownMenuItem
+                    key={value}
+                    role="menuitemradio"
+                    aria-checked={answers === value}
+                    onClick={() => onAnswers(value)}
+                    className="items-start gap-2.5 py-2 [&_svg]:text-inherit"
+                  >
+                    <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center text-brand-ink">
+                      {answers === value && <Check size={14} />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium text-foreground">{words.label}</span>
+                      <span className="block text-pretty text-small leading-snug text-muted-foreground">{words.hint}</span>
+                    </span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
         {members.length > 1 && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel>Lead</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("roomView.lead")}</DropdownMenuLabel>
             {members.map((m) => (
               <DropdownMenuItem
                 key={m.id}
@@ -1484,13 +1614,13 @@ function RoomMenu({
                 {m.id === lead?.id ? (
                   <Crown size={13} className="shrink-0 text-brand-ink" />
                 ) : (
-                  <span className="shrink-0 text-small text-muted-foreground">Make lead</span>
+                  <span className="shrink-0 text-small text-muted-foreground">{t("roomView.makeLead")}</span>
                 )}
               </DropdownMenuItem>
             ))}
             {blok.leadId && lead?.id === blok.leadId && (
               <DropdownMenuItem onClick={() => onLead(null)} className="text-muted-foreground">
-                Most senior leads
+                {t("roomView.mostSeniorLeads")}
               </DropdownMenuItem>
             )}
           </>
@@ -1498,7 +1628,7 @@ function RoomMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onClose} className="text-destructive focus:text-destructive">
           <Trash2 size={15} />
-          Archive or delete
+          {t("roomView.archiveOrDelete")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

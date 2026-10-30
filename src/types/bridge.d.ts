@@ -29,6 +29,21 @@ export interface CuaPermissions {
   reason?: string;
 }
 
+/** Where the notch is and how big the island's window is
+ * (electron/notch.mjs), in points. */
+export interface NotchGeometry {
+  /** False on a display without one: the island hangs from the top
+   * centre of the screen as the same black shape. */
+  hasNotch: boolean;
+  notchWidth: number;
+  /** The menu bar's height: the island's band is the notch's own. */
+  menuBar: number;
+  /** The island at rest, ears and all. */
+  compact: { width: number; height: number };
+  /** The clear window it is drawn in. */
+  frame: { width: number; height: number };
+}
+
 /** A workspace's mark: a colour and nine blocks, row by row. */
 export interface WorkspaceMarkValue {
   color: string;
@@ -157,6 +172,9 @@ export type WorkspacesState =
       plan?: "cloud" | "team" | null;
       /** "Same accent in every workspace". */
       sameAccent?: boolean;
+      /** "Show working agents in the notch"; absent off macOS, where
+       * there is no notch to show them in. */
+      notch?: boolean;
       /** What the person is called in their own workspaces, once they
        * have said; null until then. Absent from an older app. */
       ownerName?: string | null;
@@ -250,6 +268,11 @@ declare global {
       hostingMovePreview?(id: string): Promise<WorkspaceAnswer & { counts?: HostingMoveCounts | null; keys?: HostingMoveKey[] }>;
       /** The theme is the person's, kept across every workspace. */
       prefsTheme?(theme: "light" | "dark" | "system"): Promise<void>;
+      /** The language is the person's too ("system" or a language's code);
+       * the menu bar is rebuilt in it. */
+      prefsLanguage?(language: string): Promise<void>;
+      /** A language chosen in another workspace's window. */
+      onLanguage?(handler: (language: string) => void): () => void;
       /** The accent is this workspace's own. */
       prefsAccent?(accent: string): Promise<void>;
       /** Turns the one accent for every workspace on or off; answers the
@@ -257,6 +280,15 @@ declare global {
       prefsSameAccent?(on: boolean, showing: string): Promise<string | null>;
       /** What a banner clicked before this page loaded was about. */
       pendingNotifyTarget?(): Promise<string | null>;
+      /** Shows the working agents in the notch, or takes the island away. */
+      prefsNotch?(on: boolean): Promise<void>;
+      /** The island's page: the pointer is over the island, or has left
+       * it, so its window takes the mouse or lets it through. */
+      notchHover?(over: boolean): Promise<void>;
+      /** Brings the app forward on that conversation. */
+      notchOpen?(target: { botId: string; taskId: string }): Promise<void>;
+      notchGeometry?(): Promise<NotchGeometry | null>;
+      onNotchGeometry?(handler: (geometry: NotchGeometry) => void): () => void;
 
       /** Dictation, handled by a native helper rather than the web speech
        * APIs, which are not available offline. */
@@ -285,8 +317,8 @@ declare global {
       ): () => void;
       onMeetingEnd?(handler: (payload: { code: number }) => void): () => void;
       /** bloks:// links from the website (electron/main.mjs). */
-      onLink?(handler: (link: { kind: "team"; slug: string } | { kind: "join"; fragment: string } | { kind: "plan" }) => void): () => void;
-      pendingLink?(): Promise<{ kind: "team"; slug: string } | { kind: "join"; fragment: string } | { kind: "plan" } | null>;
+      onLink?(handler: (link: { kind: "team"; slug: string } | { kind: "join"; fragment: string } | { kind: "plan" } | { kind: "install"; url: string }) => void): () => void;
+      pendingLink?(): Promise<{ kind: "team"; slug: string } | { kind: "join"; fragment: string } | { kind: "plan" } | { kind: "install"; url: string } | null>;
       /** Opens one of bloks.dev's offers in the browser, the licence added
        * in the fragment by the main process for bloks.dev alone; false for
        * a link it will not open. */
@@ -298,8 +330,19 @@ declare global {
       shareLink?(url: string): Promise<boolean>;
       /** A choice from the macOS menu bar for this window to carry out
        * (electron/app-menu.mjs), and one made while no window was
-       * listening yet. */
-      onMenuCommand?(handler: (command: "settings" | "shortcuts") => void): () => void;
+       * listening yet. The conversation ones are played to the page as
+       * their keys (src/lib/conversationKeys.ts) and never wait. */
+      onMenuCommand?(
+        handler: (
+          command:
+            | "settings"
+            | "shortcuts"
+            | "newConversation"
+            | "closeConversation"
+            | "previousConversation"
+            | "nextConversation",
+        ) => void,
+      ): () => void;
       pendingMenuCommand?(): Promise<"settings" | "shortcuts" | null>;
       /** Puts a number on the Dock icon; 0 clears it. */
       badgeSet(count: number): Promise<void>;
@@ -354,6 +397,15 @@ declare global {
       /** An agent's terminal in a window of its own, or the one already
        * open brought forward. Absent in an app older than tabs. */
       terminalWindow?(botId: string): Promise<void>;
+      /** The Bloks browser beside the chat (electron/app-browser.mjs):
+       * what it shows, where its panel is (null when off screen, and the
+       * tab hides), what the person does in it, and the app asking for
+       * the panel when an agent starts browsing. Absent in an older app. */
+      browserState?(): Promise<import("../lib/appBrowser").AppBrowserState | null>;
+      browserBounds?(rect: { x: number; y: number; width: number; height: number } | null): Promise<import("../lib/appBrowser").AppBrowserState | null>;
+      browserDo?(action: import("../lib/appBrowser").BrowserDo, arg?: string): Promise<{ ok?: boolean; error?: string; url?: string }>;
+      onBrowserState?(handler: (state: import("../lib/appBrowser").AppBrowserState) => void): () => void;
+      onBrowserReveal?(handler: (payload: { by?: string }) => void): () => void;
       onQuickOpened(handler: () => void): () => void;
       /** Whether this Mac can prove who is at the keyboard: "biometry",
        * "password", or "unavailable". */

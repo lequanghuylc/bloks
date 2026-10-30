@@ -45,6 +45,7 @@ import { BeatHeading, BeatLabel, PreviewCard, Stepper, beat, settleEase } from "
 import { Input } from "@/components/ui/input";
 import { firstName } from "@/lib/names";
 import { readYourName, saveYourName } from "@/lib/yourName";
+import { formatList, t, tr, useLanguage, type MessageKey } from "@/lib/i18n";
 
 type InstanceRow = {
   instanceId: string;
@@ -78,62 +79,77 @@ const ENGINES: Array<{
   command?: string;
   /** Connected by pasting a key in Settings, not by installing a CLI. */
   byKey?: boolean;
-  have: string;
-  want: string;
+  /** What the card says once it is ready, and before. Keys, read where
+   * the card draws. */
+  have: MessageKey;
+  want: MessageKey;
 }> = [
   {
     kind: "claudeAgent",
     name: "Claude Code",
     command: "curl -fsSL https://claude.ai/install.sh | bash",
-    have: "Installed and ready.",
-    want: "Not installed yet. Install it here.",
+    have: "onboarding.engine.claudeAgent.have",
+    want: "onboarding.engine.claudeAgent.want",
   },
   {
     kind: "codex",
     name: "Codex",
     command: "npm i -g --prefix ~/.local @openai/codex",
-    have: "Installed. Agents can run on Codex too.",
-    want: "Optional. Another engine for your agents.",
+    have: "onboarding.engine.codex.have",
+    want: "onboarding.engine.codex.want",
+  },
+  {
+    kind: "cursor",
+    name: "Cursor",
+    command: "curl https://cursor.com/install -fsS | bash",
+    have: "onboarding.engine.cursor.have",
+    want: "onboarding.engine.cursor.want",
   },
   {
     kind: "pi",
     name: "Pi",
     command: "npm i -g --prefix ~/.local --ignore-scripts @earendil-works/pi-coding-agent pi-acp",
-    have: "Installed. Agents can run on Pi too.",
-    want: "Optional. Installs Pi and pi-acp.",
+    have: "onboarding.engine.pi.have",
+    want: "onboarding.engine.pi.want",
   },
   {
     kind: "antigravity",
     name: "Antigravity",
     command: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-    have: "Installed. Signs in with your Google account.",
-    want: "Optional. Google's agent CLI, free with a Google account.",
+    have: "onboarding.engine.antigravity.have",
+    want: "onboarding.engine.antigravity.want",
   },
   {
     kind: "grokCli",
     name: "Grok CLI",
     command: "curl -fsSL https://x.ai/cli/install.sh | bash",
-    have: "Installed. Uses your grok.com subscription.",
-    want: "Optional. Runs on an existing Grok subscription.",
+    have: "onboarding.engine.grokCli.have",
+    want: "onboarding.engine.grokCli.want",
   },
   {
-    kind: "cursorCli",
-    name: "Cursor",
-    command: "curl -fsSL https://cursor.com/install | bash",
-    have: "Installed. Agents can run on Cursor too.",
-    want: "Optional. Cursor's agent CLI, on your Cursor account.",
+    kind: "cline",
+    name: "Cline",
+    command: "npm i -g --prefix ~/.local cline",
+    have: "onboarding.engine.cline.have",
+    want: "onboarding.engine.cline.want",
   },
   {
     kind: "kimi",
     name: "Kimi",
     byKey: true,
-    have: "Connected and ready.",
-    want: "Optional. Add a Kimi key in Settings.",
+    have: "onboarding.engine.kimi.have",
+    want: "onboarding.engine.kimi.want",
   },
 ];
 
 /** Someone to stand in for "your agent" before there is one. */
-const STAND_IN: { name: string; color: BlokColor; shape: BlokShape } = { name: "Your agent", color: "blue", shape: "star" };
+const STAND_IN: { readonly name: string; color: BlokColor; shape: BlokShape } = {
+  get name() {
+    return t("onboarding.yourAgent");
+  },
+  color: "blue",
+  shape: "star",
+};
 
 /**
  * The engines on this machine as the workspace sees them, asked again on
@@ -208,7 +224,7 @@ export function useAgentHiring() {
           ),
         ),
       )
-      .catch(() => setHireNote(`Couldn't add ${template.name}. Try again.`))
+      .catch(() => setHireNote(t("onboarding.couldNotAdd", { name: template.name })))
       .finally(() => setHiring((current) => current.filter((id) => id !== template.id)));
   };
   return { hiring, hired, hireNote, hire };
@@ -270,22 +286,23 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     };
   }, []);
 
+  const language = useLanguage();
   const steps = useMemo(() => {
     const list: Array<{ id: StepId; label: string }> = [
-      { id: "engines", label: "Engines" },
-      { id: "agents", label: "Your agents" },
-      ...(offerName ? [{ id: "name" as const, label: "Your name" }] : []),
-      { id: "approvals", label: "Approvals" },
+      { id: "engines", label: t("onboarding.step.engines") },
+      { id: "agents", label: t("onboarding.step.agents") },
+      ...(offerName ? [{ id: "name" as const, label: t("common.yourName") }] : []),
+      { id: "approvals", label: t("onboarding.step.approvals") },
     ];
     // Last of the agent steps, so the agents just added can be chosen as
     // where an imported memory goes.
-    if (offerSetup) list.push({ id: "setup", label: "Your setup" });
+    if (offerSetup) list.push({ id: "setup", label: t("onboarding.step.setup") });
     // after it, so the agents made by now can be where conversations go
-    if (offerHistory) list.push({ id: "history", label: "Your history" });
+    if (offerHistory) list.push({ id: "history", label: t("onboarding.step.history") });
     // only the desktop app can ask the Mac for these
-    if (isElectron) list.push({ id: "permissions", label: "Permissions" });
+    if (isElectron) list.push({ id: "permissions", label: t("onboarding.step.permissions") });
     return list;
-  }, [offerSetup, offerHistory, offerName]);
+  }, [offerSetup, offerHistory, offerName, language]);
   const at = stage === "team" ? steps.length : steps.findIndex((s) => s.id === stage);
   const next = () => setStage(steps[at + 1]?.id ?? "team");
   const back = () => {
@@ -313,8 +330,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   /** Where every agent starts, the ones just added included. */
   const chooseApprovals = async () => {
     setApprovalsNote(null);
-    if (!(await confirmWidening("ask", approvals, "your agents"))) {
-      setApprovalsNote("Not confirmed. Pick again, or continue with Ask first.");
+    if (!(await confirmWidening("ask", approvals, t("onboarding.yourAgents")))) {
+      setApprovalsNote(t("onboarding.approvalsNotConfirmed"));
       setApprovals("ask");
       return;
     }
@@ -349,9 +366,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     // Nothing is deleted, so it is not drawn as destructive, but Bloks
     // restarts, which is reason enough to ask
     const yes = await confirm({
-      title: "Start fresh?",
-      body: "Your agents, rooms and conversations move to a dated folder beside this one. Nothing is deleted. Keys, engines and Bloks Cloud stay set up.\n\nBloks will restart.",
-      confirmLabel: "Start fresh",
+      title: t("onboarding.startFreshTitle"),
+      body: t("onboarding.startFreshBody"),
+      confirmLabel: t("onboarding.startFresh"),
     });
     if (!yes) return;
     setResetting(true);
@@ -364,7 +381,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     if (!res?.ok) {
       const body = await res?.json().catch(() => null);
       setResetting(false);
-      setResetNote(`That didn't work: ${body?.error ?? "Bloks could not move the workspace aside"}. Nothing was changed.`);
+      // the server's reason as it gave it, inside our own sentence
+      setResetNote(t("onboarding.resetFailed", { reason: body?.error ?? t("onboarding.resetFailedReason") }));
       return;
     }
     // what this browser remembered about the old workspace goes with it
@@ -397,7 +415,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         return;
       }
     }
-    setResetNote("Your old workspace is moved aside. Restart Bloks to open the fresh one.");
+    setResetNote(t("onboarding.resetRestart"));
   };
 
   // a new beat starts at its top
@@ -452,7 +470,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   }, [state.bots, hired]);
   // who the approvals sample is about: the first one added, else whoever
   // is already here
-  const firstHired = AGENT_TEMPLATES.find((t) => t.id === hired[0]?.template);
+  const firstHired = AGENT_TEMPLATES.find((role) => role.id === hired[0]?.template);
   const sampleAgent = firstHired ?? team[0] ?? STAND_IN;
 
   // A first boot seeds one agent that says hello, so "is anything here"
@@ -484,9 +502,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       >
         <div className="justify-self-start">
           {at > 0 && stage !== "team" ? (
-            <Button variant="ghost" onClick={back} aria-label="Back" className="max-sm:px-2">
+            <Button variant="ghost" onClick={back} aria-label={t("common.back")} className="max-sm:px-2">
               <ArrowLeft size={15} />
-              <span className="max-sm:hidden">Back</span>
+              <span className="max-sm:hidden">{t("common.back")}</span>
             </Button>
           ) : returning ? null : (
             <span className="flex h-8 items-center px-2">
@@ -511,8 +529,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <div className="justify-self-end">
           {stage !== "team" && !returning && (
             <Button variant="ghost" onClick={() => finish("app")} className="max-sm:px-2">
-              <span className="max-sm:hidden">Skip for now</span>
-              <span className="sm:hidden">Skip</span>
+              <span className="max-sm:hidden">{t("common.skipForNow")}</span>
+              <span className="sm:hidden">{t("onboarding.skip")}</span>
             </Button>
           )}
         </div>
@@ -560,10 +578,15 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <motion.div key="setup" {...beat}>
               <Column>
                 <BeatHeading
-                  title="Bring your setup"
-                  says={`Found in ${setup.review.sources.map((s) => s.name).join(", ")}. Tick what to bring over, now or later in Settings.`}
+                  title={t("onboarding.bringYourSetup")}
+                  says={(() => {
+                    const sources = formatList(setup.review.sources.map((source) => source.name), { type: "unit", style: "short" });
+                    return setup.where && !setup.where.here
+                      ? t("onboarding.foundOn", { computer: setup.where.computer, sources })
+                      : t("onboarding.found", { sources });
+                  })()}
                 />
-                <SetupPrivacyLine />
+                <SetupPrivacyLine where={setup.where} />
                 <div className="mt-6">
                   <SetupReviewList
                     review={setup.review}
@@ -580,8 +603,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <motion.div key="history" {...beat}>
               <Column>
                 <BeatHeading
-                  title="Bring your past conversations"
-                  says={`Your ${[places?.claude && "Claude Code", places?.codex && "Codex"].filter(Boolean).join(" and ")} conversations, by project. Pick any to carry on here, now or later in Settings.`}
+                  title={t("onboarding.bringYourPastConversations")}
+                  says={t("onboarding.historySays", {
+                    tools: formatList([places?.claude ? "Claude Code" : "", places?.codex ? "Codex" : ""].filter(Boolean)),
+                  })}
                 />
                 <PastSessionsPrivacyLine />
                 <div className="mt-6">
@@ -617,18 +642,18 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   <ReadyDot state={!instances ? "checking" : ready ? "ready" : "missing"} />
                   <span className={cn("truncate", instances && !ready ? "text-warning" : "text-muted-foreground")}>
                     {!instances
-                      ? "Looking for engines"
+                      ? t("onboarding.lookingForEngines")
                       : readyEngine
-                        ? `${readyEngine.name} is ready`
-                        : "No engine ready yet, agents can't reply"}
+                        ? t("onboarding.nameIsReady", { name: readyEngine.name })
+                        : t("onboarding.noEngineReadyYetAgents")}
                   </span>
                 </span>
-                <Button variant="ghost" size="lg" onClick={() => void checkEngines()} className="max-sm:px-3" aria-label="Check again">
+                <Button variant="ghost" size="lg" onClick={() => void checkEngines()} className="max-sm:px-3" aria-label={t("common.checkAgain")}>
                   <RefreshCw size={14} className={cn(checking && "animate-spin")} />
-                  <span className="max-sm:hidden">Check again</span>
+                  <span className="max-sm:hidden">{t("common.checkAgain")}</span>
                 </Button>
                 <Button size="lg" onClick={next}>
-                  {ready || !instances ? "Continue" : "Continue anyway"}
+                  {ready || !instances ? t("common.continue") : t("onboarding.continueAnyway")}
                   <ArrowRight size={15} />
                 </Button>
               </>
@@ -639,8 +664,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   {hired.length > 0 && !hireNote && (
                     <span className="flex shrink-0 items-center">
                       {hired.map((h, i) => {
-                        const t = AGENT_TEMPLATES.find((x) => x.id === h.template);
-                        return t ? (
+                        const role = AGENT_TEMPLATES.find((x) => x.id === h.template);
+                        return role ? (
                           <motion.span
                             key={h.bot}
                             initial={{ scale: 0.6, opacity: 0 }}
@@ -648,7 +673,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                             transition={{ type: "spring", duration: 0.3, bounce: 0.35 }}
                             className={cn("rounded-[8px] ring-2 ring-background", i > 0 && "-ml-1.5")}
                           >
-                            <BlokAvatar color={t.color} shape={t.shape} expression="friendly" size={24} />
+                            <BlokAvatar color={role.color} shape={role.shape} expression="friendly" size={24} />
                           </motion.span>
                         ) : null;
                       })}
@@ -657,12 +682,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                   <span className={cn("truncate", !hireNote && !hired.length && "max-sm:invisible")}>
                     {hireNote ??
                       (hired.length
-                        ? `${namesOf(hired.map((h) => AGENT_TEMPLATES.find((t) => t.id === h.template)?.name ?? "An agent"))} added`
-                        : "Add any that fit. You can make your own later.")}
+                        ? t("onboarding.namesAdded", {
+                            names: namesOf(hired.map((h) => AGENT_TEMPLATES.find((role) => role.id === h.template)?.name ?? t("common.anAgent"))),
+                          })
+                        : t("onboarding.addAnyThatFitYou"))}
                   </span>
                 </span>
                 <Button size="lg" onClick={next} disabled={hiring.length > 0}>
-                  Continue
+                  {t("common.continue")}
                   <ArrowRight size={15} />
                 </Button>
               </>
@@ -670,14 +697,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {stage === "name" && (
               <>
                 <span className={cn("mr-auto min-w-0 truncate text-body", nameNote ? "text-destructive" : "text-muted-foreground max-sm:invisible")}>
-                  {nameNote ?? "Optional. Change it any time in Settings."}
+                  {nameNote ?? t("onboarding.optionalChangeItAnyTime")}
                 </span>
                 <Button variant="ghost" size="lg" onClick={next} disabled={savingName}>
-                  Skip this
+                  {t("onboarding.skipThis")}
                 </Button>
                 <Button size="lg" disabled={savingName} onClick={() => void chooseName()}>
                   {savingName && <Loader2 size={15} className="animate-spin" />}
-                  Continue
+                  {t("common.continue")}
                   <ArrowRight size={15} />
                 </Button>
               </>
@@ -685,11 +712,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {stage === "approvals" && (
               <>
                 <span className={cn("mr-auto min-w-0 truncate text-body", approvalsNote ? "text-warning" : "text-muted-foreground max-sm:invisible")}>
-                  {approvalsNote ?? "You can change this any time in Settings."}
+                  {approvalsNote ?? t("onboarding.youCanChangeThisAny")}
                 </span>
                 <Button size="lg" disabled={savingApprovals} onClick={() => void chooseApprovals()}>
                   {savingApprovals && <Loader2 size={15} className="animate-spin" />}
-                  Continue
+                  {t("common.continue")}
                   <ArrowRight size={15} />
                 </Button>
               </>
@@ -697,16 +724,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {stage === "setup" && (
               <>
                 <span className="mr-auto min-w-0 truncate text-body text-muted-foreground max-sm:invisible">
-                  Everything here is in Settings too.
+                  {t("onboarding.everythingHereIsInSettings")}
                 </span>
                 {brought ? (
                   <Button size="lg" onClick={next}>
-                    Continue
+                    {t("common.continue")}
                     <ArrowRight size={15} />
                   </Button>
                 ) : (
                   <Button variant="ghost" size="lg" onClick={next}>
-                    Skip this
+                    {t("onboarding.skipThis")}
                   </Button>
                 )}
               </>
@@ -714,16 +741,16 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {stage === "history" && (
               <>
                 <span className="mr-auto min-w-0 truncate text-body text-muted-foreground max-sm:invisible">
-                  This is in Settings too, under Past conversations.
+                  {t("onboarding.thisIsInSettingsToo")}
                 </span>
                 {broughtHistory ? (
                   <Button size="lg" onClick={next}>
-                    Continue
+                    {t("common.continue")}
                     <ArrowRight size={15} />
                   </Button>
                 ) : (
                   <Button variant="ghost" size="lg" onClick={next}>
-                    Skip this
+                    {t("onboarding.skipThis")}
                   </Button>
                 )}
               </>
@@ -731,10 +758,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             {stage === "permissions" && (
               <>
                 <span className="mr-auto min-w-0 truncate text-body text-muted-foreground max-sm:invisible">
-                  All optional. Nothing is used until you need it.
+                  {t("onboarding.allOptionalNothingIsUsed")}
                 </span>
                 <Button size="lg" onClick={next}>
-                  Continue
+                  {t("common.continue")}
                   <ArrowRight size={15} />
                 </Button>
               </>
@@ -748,10 +775,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
 
 // ---------------------------------------------------------------------------
 
-/** "A", "A and B", "A, B and C". */
+/** "A", "A and B", "A, B, and C", with the reader's own "and". */
 export function namesOf(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return formatList(names);
 }
 
 /** A single column, for the beats that have nothing to show beside them. */
@@ -803,25 +829,30 @@ function WelcomeBack({
   return (
     <div className="mx-auto flex w-full max-w-[460px] flex-col items-center px-5 pb-12 pt-[12vh] text-center">
       <BloksLogo />
-      <h1 className="mt-8 text-balance text-display font-semibold text-foreground">Welcome back</h1>
+      <h1 className="mt-8 text-balance text-display font-semibold text-foreground">{t("onboarding.welcomeBack")}</h1>
       <p className="mt-2 text-pretty text-ui text-muted-foreground">
-        {ThisComputer()} already has a Bloks workspace: {prior.agents} {prior.agents === 1 ? "agent" : "agents"}
-        {prior.rooms > 0 && `, ${prior.rooms} ${prior.rooms === 1 ? "room" : "rooms"}`} and {prior.messages.toLocaleString()}{" "}
-        {prior.messages === 1 ? "message" : "messages"}.
+        {t("onboarding.priorWorkspace", {
+          computer: ThisComputer(),
+          contents: formatList([
+            t("onboarding.prior.agents", { count: prior.agents }),
+            ...(prior.rooms > 0 ? [t("onboarding.prior.rooms", { count: prior.rooms })] : []),
+            t("onboarding.prior.messages", { count: prior.messages }),
+          ]),
+        })}
       </p>
       <div className="mt-8 flex w-full flex-col gap-2">
         <Button size="lg" onClick={onContinue} disabled={resetting}>
-          Continue where I left off
+          {t("onboarding.continueWhereILeftOff")}
         </Button>
         <Button size="lg" variant="secondary" onClick={onStartFresh} disabled={resetting}>
-          {resetting ? "Starting fresh…" : "Start fresh"}
+          {resetting ? t("onboarding.startingFresh") : t("onboarding.startFresh")}
         </Button>
       </div>
       {resetNote ? (
         <p className="mt-4 text-small leading-relaxed text-warning">{resetNote}</p>
       ) : (
         <p className="mt-4 text-small leading-relaxed text-muted-foreground">
-          Starting fresh moves the old workspace to a dated folder. Nothing is deleted, and keys and engines stay set up.
+          {t("onboarding.startingFreshMovesTheOld")}
         </p>
       )}
     </div>
@@ -857,13 +888,13 @@ export function EnginesBeat({
   return (
     <Column>
       <BeatHeading
-        title="Let's check your engines"
-        says={`Agents run on the AI tools already on ${thisComputer()}. Everything stays local.`}
+        title={t("onboarding.letsCheckYourEngines")}
+        says={t("onboarding.enginesSays", { computer: thisComputer() })}
       />
       <EngineCard engine={lead} state={readiness(lead.kind)} version={versionOf(lead.kind)} onChanged={onChanged} large />
 
       <section className="mt-10">
-        <BeatLabel aside={<span className="text-small text-muted-foreground">Optional</span>}>More engines</BeatLabel>
+        <BeatLabel aside={<span className="text-small text-muted-foreground">{t("onboarding.optional")}</span>}>{t("onboarding.moreEngines")}</BeatLabel>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {more.map((engine, i) => (
             <motion.div
@@ -883,8 +914,7 @@ export function EnginesBeat({
         // a CLI is the best engine, not the only one: without any of them
         // there is still a way in
         <p className="mt-6 text-pretty text-body leading-relaxed text-muted-foreground">
-          None of these? Continue and connect Gemini, Grok, Kimi, Llama or OpenRouter in Settings. They can chat but not
-          run commands.
+          {t("onboarding.noneOfTheseContinueAnd")}
         </p>
       )}
     </Column>
@@ -908,12 +938,12 @@ function EngineCard({
   const lit = state === "ready";
   const detail =
     state === "checking"
-      ? "Looking on this computer"
+      ? t("onboarding.lookingOnThisComputer")
       : state === "ready"
-        ? engine.have
+        ? t(engine.have)
         : state === "signed-out"
-          ? "Installed. Sign in to finish."
-          : engine.want;
+          ? t("onboarding.installedSignIn")
+          : t(engine.want);
   return (
     <div
       className={cn(
@@ -975,7 +1005,14 @@ function EngineMark({ kind, size }: { kind: string; size: number }) {
 }
 
 function StatusPill({ state, large }: { state: Readiness; large?: boolean }) {
-  const label = state === "ready" ? "Ready" : state === "signed-out" ? "Sign in" : state === "checking" ? "Checking" : "Not installed";
+  const label =
+    state === "ready"
+      ? t("onboarding.status.ready")
+      : state === "signed-out"
+        ? t("onboarding.status.signIn")
+        : state === "checking"
+          ? t("onboarding.status.checking")
+          : t("onboarding.status.notInstalled");
   return (
     <AnimatePresence initial={false} mode="popLayout">
       <motion.span
@@ -1017,8 +1054,8 @@ export function AgentsBeat({
   hired,
   hiring,
   onHire,
-  title = "What do you spend your time on?",
-  says = "Pick any that fit. Agents for that work appear below.",
+  title = t("onboarding.agentsTitle"),
+  says = t("onboarding.agentsSays"),
 }: {
   work: string[];
   setWork: (update: (current: string[]) => string[]) => void;
@@ -1030,14 +1067,14 @@ export function AgentsBeat({
   says?: string;
 }) {
   const suggested = recommendedFor(work, 3)
-    .map((id) => AGENT_TEMPLATES.find((t) => t.id === id))
-    .filter((t): t is AgentTemplate => Boolean(t));
+    .map((id) => AGENT_TEMPLATES.find((role) => role.id === id))
+    .filter((role): role is AgentTemplate => Boolean(role));
   return (
     <div className="mx-auto w-full max-w-[1080px] px-5 pb-12 pt-4 sm:px-8 lg:pt-10">
       <div className="max-w-[720px]">
         <BeatHeading title={title} says={says} />
       </div>
-      <div role="group" aria-label="Kinds of work" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div role="group" aria-label={t("onboarding.kindsOfWork")} className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {WORK_TYPES.map((option) => {
           const on = work.includes(option.id);
           return (
@@ -1066,8 +1103,8 @@ export function AgentsBeat({
       </div>
 
       <section className="mt-10">
-        <BeatLabel aside={<span className="text-small text-muted-foreground max-sm:hidden">Each comes with its role written</span>}>
-          {work.length ? "Suggested for you" : "A good place to start"}
+        <BeatLabel aside={<span className="text-small text-muted-foreground max-sm:hidden">{t("onboarding.eachComesWithItsRole")}</span>}>
+          {work.length ? t("onboarding.suggestedForYou") : t("onboarding.aGoodPlaceToStart")}
         </BeatLabel>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -1095,12 +1132,12 @@ export function AgentsBeat({
                       added ? (
                         <div className="flex h-10 items-center justify-center gap-2 rounded-xl bg-brand-soft text-ui font-medium text-brand-ink">
                           <Check size={15} strokeWidth={2.5} />
-                          Added
+                          {t("onboarding.added")}
                         </div>
                       ) : (
                         <Button variant="secondary" size="lg" className="w-full" disabled={adding} onClick={() => onHire(template)}>
                           {adding ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                          {adding ? "Adding" : `Add ${template.name}`}
+                          {adding ? t("onboarding.adding") : t("onboarding.addName", { name: template.name })}
                         </Button>
                       )
                     }
@@ -1145,8 +1182,8 @@ function NameBeat({
     <div className="mx-auto grid w-full max-w-[1080px] grid-cols-1 gap-8 px-5 pb-12 pt-4 sm:px-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-14 lg:pt-10">
       <div className="min-w-0">
         <BeatHeading
-          title="What should your agents call you?"
-          says="They use it when they talk to you. Anyone you invite later sees it too."
+          title={t("onboarding.whatShouldYourAgentsCall")}
+          says={t("onboarding.theyUseItWhenThey")}
         />
         <form
           onSubmit={(e) => {
@@ -1155,33 +1192,31 @@ function NameBeat({
           }}
         >
           <label className="flex max-w-[420px] flex-col gap-2">
-            <span className="text-small font-medium text-muted-foreground">Your name</span>
+            <span className="text-small font-medium text-muted-foreground">{t("common.yourName")}</span>
             <Input
               ref={field}
               value={name}
               maxLength={40}
               autoComplete="name"
-              placeholder="Your name"
+              placeholder={t("common.yourName")}
               onChange={(e) => onChange(e.target.value)}
               className="h-11 rounded-[12px] text-lead"
             />
           </label>
         </form>
       </div>
-      <aside aria-label="How it will read">
+      <aside aria-label={t("onboarding.howItWillRead")}>
         <div className="lg:sticky lg:top-6">
           <div className="overflow-hidden rounded-3xl border bg-card shadow-[0_12px_40px_-16px_var(--shadow-color)]">
             <div className="px-5 pb-5 pt-5">
-              <div className="text-small font-medium text-muted-foreground">How it will read</div>
+              <div className="text-small font-medium text-muted-foreground">{t("onboarding.howItWillRead")}</div>
               <div className="mt-3 flex items-end gap-2">
                 <BlokAvatar color={agent.color} shape={agent.shape ?? "star"} expression="friendly" size={22} />
                 <div className="min-w-0 rounded-2xl rounded-bl-md bg-muted px-3 py-2 text-body leading-relaxed text-foreground">
                   {first ? (
-                    <>
-                      Good to meet you, <span className="font-semibold">{first}</span>. Tell me what you're working on.
-                    </>
+                    tr("onboarding.goodToMeetYouName", { name: <span className="font-semibold">{first}</span> })
                   ) : (
-                    "Good to meet you. Tell me what you're working on."
+                    t("onboarding.goodToMeetYouTell")
                   )}
                 </div>
               </div>
@@ -1200,20 +1235,21 @@ function NameBeat({
 // with it. Every agent starts on the choice, so it is shown landing on a
 // small task rather than described in the abstract.
 
-type SampleStep = { id: string; asks: string; did: string; when: ApprovalMode[] };
+type SampleStep = { id: string; asks: MessageKey; did: MessageKey; when: ApprovalMode[] };
 
-/** One small job, and which of its steps stop to ask in each mode. */
+/** One small job, and which of its steps stop to ask in each mode. The
+ * words are keys, read where the sample draws. */
 const SAMPLE: SampleStep[] = [
-  { id: "read", asks: "Read 3 files", did: "Read 3 files", when: [] },
-  { id: "edit", asks: "Edit notes.md", did: "Edited notes.md", when: ["ask"] },
-  { id: "run", asks: "Run the tests", did: "Ran the tests", when: ["ask", "edits"] },
+  { id: "read", asks: "onboarding.sample.readFiles", did: "onboarding.sample.readFiles", when: [] },
+  { id: "edit", asks: "onboarding.sample.editNotes", did: "onboarding.sample.editedNotes", when: ["ask"] },
+  { id: "run", asks: "onboarding.sample.runTests", did: "onboarding.sample.ranTests", when: ["ask", "edits"] },
 ];
 
-const SAMPLE_SAYS: Record<ApprovalMode, string> = {
-  ask: "You approve every change and every command.",
-  edits: "File changes go ahead. Commands wait for you.",
-  auto: "Nothing waits, but your rules can still stop it and the sandbox stays on.",
-  full: "Nothing waits and nothing is sandboxed. Your rules can't stop it.",
+const SAMPLE_SAYS: Record<ApprovalMode, MessageKey> = {
+  ask: "onboarding.sample.says.ask",
+  edits: "onboarding.sample.says.edits",
+  auto: "onboarding.sample.says.auto",
+  full: "onboarding.sample.says.full",
 };
 
 function ApprovalsBeat({
@@ -1228,10 +1264,10 @@ function ApprovalsBeat({
   return (
     <div className="mx-auto grid w-full max-w-[1080px] grid-cols-1 gap-8 px-5 pb-12 pt-4 sm:px-8 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-14 lg:pt-10">
       <div className="min-w-0">
-        <BeatHeading title="How much should your agents ask?" says="Where every agent starts. Change it for one agent, or for all, any time." />
+        <BeatHeading title={t("onboarding.howMuchShouldYourAgents")} says={t("onboarding.whereEveryAgentStartsChange")} />
         <ApprovalsChooser value={value} onChange={onChange} />
       </div>
-      <aside aria-label="What you would see">
+      <aside aria-label={t("onboarding.whatYouWouldSee")}>
         <div className="lg:sticky lg:top-6">
           <ApprovalSample mode={value} agent={agent} />
         </div>
@@ -1246,11 +1282,11 @@ function ApprovalSample({ mode, agent }: { mode: ApprovalMode; agent: { name: st
   return (
     <div className="overflow-hidden rounded-3xl border bg-card shadow-[0_12px_40px_-16px_var(--shadow-color)]">
       <div className="px-5 pb-5 pt-5">
-        <div className="text-small font-medium text-muted-foreground">What you would see</div>
+        <div className="text-small font-medium text-muted-foreground">{t("onboarding.whatYouWouldSee")}</div>
         <div className="mt-3 flex items-end gap-2">
           <BlokAvatar color={agent.color} shape={agent.shape ?? "star"} expression="friendly" size={22} />
           <div className="min-w-0 rounded-2xl rounded-bl-md bg-muted px-3 py-2 text-body leading-relaxed text-foreground">
-            I'll tidy notes.md and check the tests still pass.
+            {t("onboarding.illTidyNotesMdAnd")}
           </div>
         </div>
         <div className="mt-1 pl-[30px] text-caption text-muted-foreground">{agent.name}</div>
@@ -1272,10 +1308,10 @@ function ApprovalSample({ mode, agent }: { mode: ApprovalMode; agent: { name: st
                     // drawn like the approval card in the chat, without
                     // the buttons doing anything: this is a picture of it
                     <div className="rounded-2xl border bg-card p-3 shadow-[0_1px_3px_var(--shadow-color)]">
-                      <div className="text-caption font-semibold uppercase tracking-[0.1em] text-warning">Approval</div>
-                      <div className="mt-0.5 text-ui font-semibold text-foreground">{step.asks}</div>
+                      <div className="text-caption font-semibold uppercase tracking-[0.1em] text-warning">{t("onboarding.approval")}</div>
+                      <div className="mt-0.5 text-ui font-semibold text-foreground">{t(step.asks)}</div>
                       <div aria-hidden className="mt-2 flex gap-1.5">
-                        {["Allow", "Deny"].map((option, i) => (
+                        {[t("onboarding.sample.allow"), t("onboarding.sample.deny")].map((option, i) => (
                           <span key={option} className="flex flex-1 items-center gap-2 rounded-lg bg-muted/70 px-2 py-1 text-small text-foreground">
                             <span className="flex size-4 items-center justify-center rounded bg-background text-micro font-semibold text-muted-foreground">
                               {i === 0 ? "A" : "B"}
@@ -1290,8 +1326,8 @@ function ApprovalSample({ mode, agent }: { mode: ApprovalMode; agent: { name: st
                       <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-success/10 text-success">
                         <Check size={10} strokeWidth={3} />
                       </span>
-                      {step.did}
-                      {step.id === "run" && mode === "auto" && <span className="text-small text-muted-foreground/80">in the sandbox</span>}
+                      {t(step.did)}
+                      {step.id === "run" && mode === "auto" && <span className="text-small text-muted-foreground/80">{t("onboarding.inTheSandbox")}</span>}
                     </div>
                   )}
                 </motion.li>
@@ -1307,7 +1343,7 @@ function ApprovalSample({ mode, agent }: { mode: ApprovalMode; agent: { name: st
         )}
         aria-live="polite"
       >
-        {SAMPLE_SAYS[mode]}
+        {t(SAMPLE_SAYS[mode])}
       </div>
     </div>
   );
@@ -1325,25 +1361,25 @@ function PermissionsBeat({
 }) {
   return (
     <Column>
-      <BeatHeading title="Two permissions" says="All optional. Nothing is used until you need it." />
+      <BeatHeading title={t("onboarding.twoPermissions")} says={t("onboarding.allOptionalNothingIsUsed")} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <PermissionCard
           icon={<Mic size={20} />}
-          title="Microphone and speech"
-          detail="Dictate messages, transcribed on device."
+          title={t("onboarding.microphoneAndSpeech")}
+          detail={t("onboarding.dictateMessagesTranscribedOnDevice")}
           status={perms?.mic}
           onEnable={() => window.bloks?.permRequestMic?.().then(() => window.bloks?.permStatus?.().then(setPerms))}
           onOpenSettings={() => window.bloks?.permOpenSettings?.("mic")}
         />
         <PermissionCard
           icon={<Monitor size={20} />}
-          title="Screen preview"
-          detail={`Shows ${thisComputer()}'s screen in the Computer panel when an agent works locally.`}
+          title={t("onboarding.screenPreview")}
+          detail={t("onboarding.screenPreviewDetail", { computer: thisComputer() })}
           status={perms?.screen}
           onEnable={() =>
             navigator.mediaDevices
               .getDisplayMedia({ video: true })
-              .then((stream) => stream.getTracks().forEach((t) => t.stop()))
+              .then((stream) => stream.getTracks().forEach((track) => track.stop()))
               .catch(() => {})
               .then(() => window.bloks?.permStatus?.().then(setPerms))
           }
@@ -1381,15 +1417,15 @@ function PermissionCard({
         {granted ? (
           <span className="inline-flex h-7 items-center gap-1.5 text-body font-medium text-success">
             <Check size={14} strokeWidth={2.5} />
-            Allowed
+            {t("onboarding.allowed")}
           </span>
         ) : status === "denied" || status === "restricted" ? (
           <Button variant="secondary" size="sm" onClick={onOpenSettings}>
-            Open Settings
+            {t("onboarding.openSettings")}
           </Button>
         ) : (
           <Button variant="secondary" size="sm" onClick={onEnable}>
-            Enable
+            {t("onboarding.enable")}
           </Button>
         )}
       </div>
@@ -1455,32 +1491,32 @@ function TeamBeat({
         className="flex w-full flex-col items-center"
       >
         <h1 className="mt-10 text-balance text-display font-semibold text-foreground">
-          {first ? "Meet your team" : nova ? `${nova.name} is ready` : "You're all set"}
+          {first ? t("onboarding.meetYourTeam") : nova ? t("onboarding.nameIsReady", { name: nova.name }) : t("onboarding.youreAllSet")}
         </h1>
         <p className="mt-2 max-w-[460px] text-pretty text-ui text-muted-foreground">
           {first
             ? made.length === 1
-              ? `${first.name} is ready, with a hello waiting for you.`
-              : `${namesOf(made.map((b) => b.name))} are ready. Each has a hello waiting for you.`
+              ? t("onboarding.oneReady", { name: first.name })
+              : t("onboarding.manyReady", { names: namesOf(made.map((b) => b.name)) })
             : nova
-              ? `Give an agent a job of its own. ${nova.name} can help in the meantime.`
-              : "Give an agent a job of its own."}
+              ? t("onboarding.novaCanHelp", { name: nova.name })
+              : t("onboarding.giveAnAgentAJob")}
         </p>
         <div className="mt-8 flex w-full max-w-[320px] flex-col gap-2">
           {first ? (
             <Button ref={go} size="lg" variant="brand" onClick={() => onFinish({ select: first.id })}>
-              Say hi to {first.name}
+              {t("onboarding.sayHiTo", { name: first.name })}
               <ArrowRight size={15} />
             </Button>
           ) : (
             <>
               <Button ref={go} size="lg" variant="brand" onClick={() => onFinish("picker")}>
-                Make your first agent
+                {t("onboarding.makeYourFirstAgent")}
                 <ArrowRight size={15} />
               </Button>
               {nova && (
                 <Button size="lg" variant="ghost" onClick={() => onFinish({ select: nova.id })}>
-                  Start with {nova.name}
+                  {t("onboarding.startWith", { name: nova.name })}
                 </Button>
               )}
             </>

@@ -12,9 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import type { PlanUsage } from "../src/lib/contextCard.ts";
 import {
-  ACCOUNT_WIDE,
   DEFAULT_VIEW,
-  PRICES_NOTE,
+  accountWide,
   axisMoney,
   deltaLine,
   estimatedMoney,
@@ -26,6 +25,7 @@ import {
   noPlanReading,
   onPlan,
   perMillionText,
+  pricesNote,
   niceTicks,
   planTitle,
   planUses,
@@ -71,7 +71,7 @@ test("an estimate is written as one, and never as a bill", () => {
   assert.equal(perMillionText(3), "$3");
   assert.equal(perMillionText(0.15), "$0.15");
   assert.equal(perMillionText(1.25), "$1.25");
-  assert.doesNotMatch(PRICES_NOTE, /[\u2013\u2014]/);
+  assert.doesNotMatch(pricesNote(), /[\u2013\u2014]/);
 });
 
 test("each metric reads its own number from a tally", () => {
@@ -211,9 +211,9 @@ test("the words for a plan say what is missing, and keep the account apart from 
   assert.match(line, /^Codex /);
   assert.match(line, /no dollar figure/);
   assert.match(line, /no current reading/);
-  assert.match(ACCOUNT_WIDE, /outside this workspace/);
+  assert.match(accountWide(), /outside this workspace/);
   assert.match(seePlanTitle("Codex"), /in Limits/);
-  for (const words of [line, ACCOUNT_WIDE, seePlanTitle("Codex"), planTitle("Pro"), planTitle(null)]) {
+  for (const words of [line, accountWide(), seePlanTitle("Codex"), planTitle("Pro"), planTitle(null)]) {
     assert.doesNotMatch(words, /[\u2013\u2014]/);
   }
 });
@@ -222,7 +222,7 @@ test("the page's links to a plan land on the Plans group", () => {
   const source = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
   const limits = source("../src/components/usage/UsageLimits.tsx");
   const page = source("../src/components/UsagePage.tsx");
-  assert.match(limits, /<Group id=\{PLANS_ID\} title="Plans"/, "the Plans group lost its anchor");
+  assert.match(limits, /<Group id=\{PLANS_ID\} title=\{t\("usageLimits.plans"\)\}/, "the Plans group lost its anchor");
   assert.match(page, /getElementById\(PLANS_ID\)/, "the page no longer scrolls to the Plans group");
   // one reading for the page, so the headline and Limits never disagree
   assert.equal((limits.match(/"\/api\/plan-usage"/g) ?? []).length, 1);

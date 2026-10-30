@@ -22,15 +22,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { CheckInHold, NoticeDelivery, noticeFor, settlesReplies } from "@/lib/notify";
+import { BRIEF_TARGET, CONVERSATION_TARGET, conversationOf, briefNoticeFor, CheckInHold, NoticeDelivery, noticeFor, settlesReplies } from "@/lib/notify";
 import { itemProgress, isProgressText } from "@/lib/codexProgress";
 import { sendBotArchive } from "@/lib/botArchive";
 import { sendCardAnswer } from "@/lib/cardAnswer";
 import { sendMessage } from "@/lib/sendMessage";
 import { sendRoomPatch } from "@/lib/roomPatch";
 import { keepTrying } from "@/lib/retry";
+import { snapshotOrder, type SnapshotLoad } from "./snapshotOrder";
 import { sendHeld, takeWake, wakeFetch, wakeGaveUp } from "@/lib/waking";
 import { placeRow, type Listed } from "@/lib/sections";
+import { askLaneFocus, dropLaneFocus } from "@/lib/drafts";
+import { followMenuKeys } from "@/lib/conversationKeys";
+import { platformOf } from "@/lib/shortcuts";
 import { maybeAutoSpeak } from "@/components/Voice";
 import {
   configFromFrame,
@@ -53,6 +57,8 @@ import {
 import { toast } from "@/components/ui/toast";
 import { openJoinDialog, workspaceFrame } from "@/lib/members";
 import { loadPlan } from "@/lib/planClient";
+import { hasOwnBrowser, noteBrowserState } from "@/lib/appBrowser";
+import { formatDate, t } from "../lib/i18n.ts";
 
 export * from "./reducer";
 
@@ -149,6 +155,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * rename from elsewhere undone by a slow answer), so only its
    * conversation's messages are taken. */
   const botSeq = useRef(new Map<string, number>());
+  /** The frames that touch the agents, kept while the agent list is being
+   * asked for, so a list made before them cannot undo them (GitHub 398). */
+  const listOrder = useRef(snapshotOrder<Action>());
+  /** The agent list, and over it what the stream said after it was made.
+   * `seq` is where the server says it made the list; a server too old to
+   * say gets everything since the request went out. */
+  const hydrateFrom = (bots: Bot[], seq?: unknown, load?: SnapshotLoad<Action>) => {
+    const made = typeof seq === "number" ? seq : undefined;
+    rawDispatch({ type: "hydrate", bots, after: load?.settle(made) });
+    // a conversation action's answer made before the list is older than it
+    // too, and is taken the way adoptAnswer takes any older answer
+    if (made !== undefined) for (const b of bots) botSeq.current.set(b.id, Math.max(botSeq.current.get(b.id) ?? 0, made));
+  };
   const adoptAnswer = (r: { bot?: Bot; seq?: number }) => {
     if (!r?.bot) return;
     const seen = botSeq.current.get(r.bot.id);
@@ -363,17 +382,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             api,
             action.botId,
             action.forget ? "forget" : "archive",
-            (bots) => rawDispatch({ type: "hydrate", bots }),
+            hydrateFrom,
             (error) => {
               // the "Archived" toast went up on the click; a refusal takes
               // it back down so it never sits beside the error saying why
               toast.dismiss(`archive-${action.botId}`);
               showError(error);
             },
+            listOrder.current.begin,
           );
           break;
         case "restoreBot":
-          void sendBotArchive(api, action.botId, "restore", (bots) => rawDispatch({ type: "hydrate", bots }), showError);
+          void sendBotArchive(api, action.botId, "restore", hydrateFrom, showError, listOrder.current.begin);
           break;
         case "createRoom":
           api("/api/bloks", {
@@ -398,7 +418,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 settings.push(
                   api(`/api/bloks/${blok.id}`, { method: "PATCH", body: JSON.stringify(body) }).catch(showError),
                 );
-              if (action.leadOnly) patch({ leadOnly: true });
+              if (action.answers && action.answers !== "everyone") patch({ answers: action.answers });
               if (action.cwd?.trim()) patch({ cwd: action.cwd.trim() });
               return Promise.all(settings)
                 .then(() => api("/api/bloks"))
@@ -439,9 +459,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             .then(() => rawDispatch({ type: "blokDeleted", blokId: action.blokId }))
             .catch(showError);
           break;
-        case "newTask":
-          switchLane(action.botId, api(`/api/bots/${action.botId}/tasks`, { method: "POST", body: "{}" }));
+        case "newTask": {
+          // The new conversation's box takes the keyboard once it shows
+          // (drafts.ts), on a computer: on a phone that would be the
+          // keyboard sliding up over the conversation it just opened.
+          const bot = stateRef.current.bots.find((b) => b.id === action.botId);
+          const had = document.activeElement === document.body ? null : document.activeElement;
+          const asked =
+            bot && window.matchMedia?.("(pointer: fine)").matches
+              ? askLaneFocus(bot.id, bot.activeTaskId ?? bot.threadId, had)
+              : null;
+          const made = api(`/api/bots/${action.botId}/tasks`, { method: "POST", body: "{}" });
+          // refused, or answered with nothing to open: no box is coming
+          if (asked) made.then((r) => !r?.bot && dropLaneFocus(asked), () => dropLaneFocus(asked));
+          switchLane(action.botId, made);
           break;
+        }
         case "selectTask":
           keptUnread.current = null;
           switchLane(action.botId, api(`/api/bots/${action.botId}/tasks/${action.taskId}/activate`, { method: "POST" }));
@@ -692,8 +725,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const bridge = window.bloks;
     if (!bridge?.onLink) return;
-    const open = (link: { kind?: string; slug?: string; fragment?: string } | null) => {
+    const open = (link: { kind?: string; slug?: string; fragment?: string; url?: string } | null) => {
       if (link?.kind === "team" && link.slug) rawDispatch({ type: "openTeamLink", slug: link.slug });
+      // bloks://install?url=: the catalogue's review of whatever it points
+      // at, fetched and checked by the server; nothing installs from it
+      if (link?.kind === "install" && link.url) rawDispatch({ type: "openInstallLink", url: link.url });
       // a workspace invite from bloks.dev or a scanned QR: the join dialog,
       // filled in (src/components/members/JoinWorkspaceDialog.tsx)
       if (link?.kind === "join" && link.fragment) openJoinDialog(`bloks://join#${link.fragment}`);
@@ -710,7 +746,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // The macOS menu bar's own items (electron/app-menu.mjs): Settings…,
   // and Keyboard Shortcuts under Help. One chosen while no window was
-  // open is waiting for this one.
+  // open is waiting for this one. The conversation tabs' items are their
+  // keys, heard where those are (conversationKeys.ts).
   useEffect(() => {
     const bridge = window.bloks;
     if (!bridge?.onMenuCommand) return;
@@ -719,7 +756,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (command === "shortcuts") rawDispatch({ type: "toggleShortcuts", open: true });
     };
     void bridge.pendingMenuCommand?.().then(run).catch(() => {});
-    return bridge.onMenuCommand(run);
+    const stopRun = bridge.onMenuCommand(run);
+    const stopKeys = followMenuKeys(platformOf(), (handler) => bridge.onMenuCommand!(handler));
+    return () => {
+      stopRun();
+      stopKeys();
+    };
   }, []);
 
   // Clicking a banner opens what it was about. A banner from another
@@ -732,10 +774,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const open = (target: string | null | undefined) => {
       if (!target) return;
       if (target === "workspace:members") rawDispatch({ type: "toggleAppSettings", open: true, page: "workspace:members" });
+      // the morning brief's notification opens that brief on Overview
+      else if (target.startsWith(BRIEF_TARGET)) rawDispatch({ type: "openBrief", id: target.slice(BRIEF_TARGET.length) });
       // a page of Settings by name: a pairing made from another
       // workspace's phone opens this one's Phone and devices
       else if (target.startsWith("settings:")) rawDispatch({ type: "toggleAppSettings", open: true, page: target.slice("settings:".length) });
-      else rawDispatch({ type: "select", id: target });
+      // one conversation by name, from a row in the notch: picked the way
+      // the sidebar picks it, so it is activated as well as shown
+      else if (target.startsWith(CONVERSATION_TARGET)) {
+        const to = conversationOf(target);
+        if (to) dispatch({ type: "select", id: to.id, lane: to.lane });
+      } else rawDispatch({ type: "select", id: target });
     };
     void bridge.pendingNotifyTarget?.().then(open).catch(() => {});
     return bridge.onNotifyActivate(({ target }) => open(target));
@@ -744,13 +793,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     let stopBots: (() => void) | null = null;
+    let botsLoad: SnapshotLoad<Action> | null = null;
     const loadAll = () => {
       // The agent list is what ends the loading screen, so it is asked
-      // again until it comes; the rest can wait for the next reload.
+      // again until it comes; the rest can wait for the next reload. A
+      // newer load takes over from one still out, whose answer is older.
       stopBots?.();
+      botsLoad?.drop();
+      const load = (botsLoad = listOrder.current.begin());
       stopBots = keepTrying(() =>
-        api("/api/bots").then(({ bots }) => {
-          if (alive) rawDispatch({ type: "hydrate", bots });
+        api("/api/bots").then(({ bots, seq }) => {
+          if (!alive || botsLoad !== load) return;
+          botsLoad = null;
+          hydrateFrom(bots, seq, load);
         }),
       );
       api("/api/bloks")
@@ -826,6 +881,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // workspace's, so it is never folded into state (src/lib/waking.ts)
       if (frame?.kind === "remote.wake") return takeWake(frame);
       if (typeof frame._seq === "number") lastSeq = frame._seq;
+      // what touches the agents is applied now and kept for a list still
+      // on its way, which is older than it when made before it
+      const applyFrame = (action: Action) => {
+        rawDispatch(action);
+        listOrder.current.note(typeof frame._seq === "number" ? frame._seq : undefined, action);
+      };
       // the workspace's people go to their own small bus (src/lib/members.ts)
       if (typeof frame.kind === "string" && frame.kind.startsWith("workspace.")) {
         workspaceFrame(frame, typeof frame._seq !== "number" || frame._seq > replayUntil.current);
@@ -859,7 +920,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message": {
-          rawDispatch({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
+          applyFrame({ type: "messageAdded", threadId: frame.threadId, message: frame.message });
           const msg = frame.message;
           const news = typeof frame._seq !== "number" || frame._seq > replayUntil.current;
           // a check-in's replies are spoken when its turn ends, if it was
@@ -876,6 +937,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (news && msg?.kind === "text" && !settledReplies.current) announceLanded(frame.threadId, msg);
           break;
         }
+        case "brief.ready":
+          // The morning's one notification (src/lib/notify.ts). Caught up
+          // on after a sleep, it is not said again: the brief is on
+          // Overview, and the server's own frame is already in the past.
+          if (noticeDelivery.current.take(frame._seq, `brief:${frame.id}`)) {
+            const notice = briefNoticeFor(frame, {
+              focused: document.hasFocus() && document.visibilityState === "visible",
+              onOverview: stateRef.current.page === "overview",
+            });
+            if (notice && window.bloks) void window.bloks.notifyShow(notice).catch(() => {});
+          }
+          break;
         case "reply.settled":
           // Saved-content snapshot only: no history insertion or speech.
           if (noticeDelivery.current.take(frame._seq, `reply:${frame.threadId}:${frame.botId}:${frame.turnId}`)) {
@@ -883,7 +956,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           break;
         case "message.patch": {
-          rawDispatch({ type: "messagePatched", threadId: frame.threadId, message: frame.message, moved: frame.moved === true });
+          applyFrame({ type: "messagePatched", threadId: frame.threadId, message: frame.message, moved: frame.moved === true });
           // A failure's own notice turned into the person's card arrives
           // as a patch (server/incidents.ts). Said once per incident, as
           // a new card would be; its later updates are not news again.
@@ -912,6 +985,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         case "routines":
         case "incidents":
         case "secrets":
+        case "connections":
           rawDispatch({ type: "tick", key: frame.kind });
           break;
         // a rule changed, or an approval was answered: what is offered as
@@ -938,7 +1012,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }).catch(() => {});
           }
           if (typeof frame._seq === "number") botSeq.current.set(bot.id, frame._seq);
-          rawDispatch({ type: "botPatched", bot: withoutEdits(bot, editing(bot.id)) });
+          applyFrame({ type: "botPatched", bot: withoutEdits(bot, editing(bot.id)) });
           break;
         }
         case "runtime": {
@@ -948,13 +1022,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           } else if (event.type === "content.delta" && event.streamKind === "assistant_text") {
             if (!isProgressText(event.codexText)) rawDispatch({ type: "streamDelta", threadId: event.threadId, delta: event.delta });
           } else if (event.type === "turn.started") {
-            rawDispatch({ type: "turnStarted", threadId: event.threadId });
+            applyFrame({ type: "turnStarted", threadId: event.threadId, turnId: typeof event.turnId === "string" ? event.turnId : undefined });
           } else if (event.type === "turn.completed") {
             // The streamed text stays until its message lands and takes its
             // place: through the relay the message can come after the end
             // of the turn, and clearing now left a gap where the reply was.
             // A turn that ended with no message of its own lets go shortly.
-            rawDispatch({ type: "turnSettled", threadId: event.threadId });
+            applyFrame({ type: "turnSettled", threadId: event.threadId, turnId: typeof event.turnId === "string" ? event.turnId : undefined });
             const threadId = event.threadId;
             setTimeout(() => rawDispatch({ type: "streamClear", threadId, onlyIfSettled: true }), STREAM_LINGER_MS);
             // a check-in that had something to say says it now
@@ -977,6 +1051,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "computer":
           rawDispatch({ type: "computerState", botId: frame.botId, state: String(frame.state ?? "") });
+          break;
+        case "browser.app":
+          // the Mac's browser, for a page that is not on the Mac; the
+          // desktop app hears its own browser first-hand (src/lib/appBrowser.ts)
+          if (!hasOwnBrowser()) noteBrowserState(frame.state);
           break;
         case "blok":
           rawDispatch({ type: "blokPatched", blok: frame.blok });
@@ -1018,7 +1097,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // only ever a delete for good (an archive arrives as a bot frame),
         // so it leaves the drawer too rather than staying there as a ghost
         case "bot.deleted":
-          rawDispatch({ type: "deleteBot", botId: frame.botId, forget: true });
+          applyFrame({ type: "deleteBot", botId: frame.botId, forget: true });
           break;
         // credentials changed and the engines were rebuilt, so the
         // picker needs to hear that something became usable
@@ -1040,6 +1119,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
       stopBots?.();
+      botsLoad?.drop();
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
@@ -1062,7 +1142,7 @@ export function useStore() {
 }
 
 export function formatTime(at: number) {
-  return new Date(at).toLocaleTimeString([], {
+  return formatDate(at, {
     hour: "numeric",
     minute: "2-digit",
   });
@@ -1078,7 +1158,7 @@ export function formatWhen(at: number) {
   const now = new Date();
   const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   if (at >= midnight) return formatTime(at);
-  if (at >= midnight - 86_400_000) return "Yesterday";
-  if (at >= midnight - 6 * 86_400_000) return then.toLocaleDateString([], { weekday: "short" });
-  return then.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (at >= midnight - 86_400_000) return t("store.yesterday");
+  if (at >= midnight - 6 * 86_400_000) return formatDate(then, { weekday: "short" });
+  return formatDate(then, { month: "short", day: "numeric" });
 }

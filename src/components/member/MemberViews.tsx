@@ -26,6 +26,7 @@ import { seedReads } from "@/lib/readReceipts";
 import { distinctNames } from "@/lib/names";
 import { ownerOrNull } from "@/lib/yourName";
 import { AgentFace, MemberComposer, OnlyYou, PersonFace, Transcript } from "./MemberParts";
+import { formatList, t } from "@/lib/i18n";
 
 /** A list of messages with one more folded in: added, or put in place of
  * the one with its id. */
@@ -114,8 +115,8 @@ export function AgentView({
   const streaming = useStreaming(data?.threadId ?? null);
 
   const lanes = [
-    ...(agent.team && !agent.solo ? [{ value: "team" as const, label: <><Users size={13} />Team</> }] : []),
-    ...(agent.private && !agent.solo ? [{ value: "private" as const, label: "Private" }] : []),
+    ...(agent.team && !agent.solo ? [{ value: "team" as const, label: <><Users size={13} />{t("memberViews.team")}</> }] : []),
+    ...(agent.private && !agent.solo ? [{ value: "private" as const, label: t("memberViews.private") }] : []),
   ];
   const team = lane === "team" && !agent.solo;
   const told = useTold(data?.people, owner, known);
@@ -124,17 +125,17 @@ export function AgentView({
       <p className="mx-auto max-w-[520px] text-balance text-center text-small text-muted-foreground">{data.privacy}</p>
     ) : team ? (
       <p className="mx-auto max-w-[520px] text-balance text-center text-small text-muted-foreground">
-        Everyone on {agent.name}'s team list reads and writes here, {owner} included.
+        {t("memberViews.header.team", { agent: agent.name, owner })}
       </p>
     ) : agent.solo ? (
       <p className="mx-auto max-w-[520px] text-balance text-center text-small text-muted-foreground">
-        Only you talk with {agent.name}. It is kept on {owner}'s computer.
+        {t("memberViews.header.solo", { agent: agent.name, owner })}
       </p>
     ) : null;
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-5">
+      <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b px-5 py-2 sm:h-14 sm:flex-nowrap sm:py-0">
         <AgentFace agent={agent} size={28} />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h1 className="truncate text-ui font-semibold text-foreground">{agent.name}</h1>
@@ -142,20 +143,20 @@ export function AgentView({
           {agent.solo && <OnlyYou className="self-center" />}
         </div>
         {lanes.length > 1 && (
-          <Segmented aria-label="Conversation" size="sm" value={lane} onChange={(v) => onLane(v)} options={lanes} className="w-[190px]" />
+          <Segmented aria-label={t("memberViews.conversation")} size="sm" value={lane} onChange={(v) => onLane(v)} options={lanes} className="w-full sm:w-[190px]" />
         )}
-        {lanes.length === 1 && !agent.solo && <span className="text-body text-muted-foreground">{lane === "team" ? "Team" : "Private"}</span>}
+        {lanes.length === 1 && !agent.solo && <span className="text-body text-muted-foreground">{lane === "team" ? t("memberViews.team") : t("memberViews.private")}</span>}
         {agent.solo && agent.mine && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`More for ${agent.name}`}>
+              <Button variant="ghost" size="icon-sm" aria-label={t("memberViews.moreFor", { agent: agent.name })}>
                 <MoreHorizontal size={16} />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem variant="destructive" onSelect={onDelete}>
                 <Trash2 />
-                Delete {agent.name}
+                {t("memberViews.deleteAgent", { agent: agent.name })}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -180,7 +181,7 @@ export function AgentView({
             <div className="mt-[18vh] flex flex-col items-center gap-3 text-center">
               <AgentFace agent={agent} size={48} />
               <p className="max-w-[340px] text-pretty text-ui text-muted-foreground">
-                {team ? `Nothing in ${agent.name}'s team conversation yet. Say hello.` : `Ask ${agent.name} anything. This conversation is yours.`}
+                {team ? t("memberViews.empty.team", { agent: agent.name }) : t("memberViews.empty.private", { agent: agent.name })}
               </p>
             </div>
           }
@@ -203,7 +204,7 @@ export function AgentView({
       )}
       <MemberComposer
         autoFocusKey={`${agent.id}:${lane}`}
-        placeholder={team ? `Message the team and ${agent.name}` : `Message ${agent.name}`}
+        placeholder={team ? t("memberViews.placeholder.team", { agent: agent.name }) : t("memberViews.placeholder.agent", { agent: agent.name })}
         notice={usageNotice(usage)}
         onSend={async (text) => {
           const said = await memberApi.say(agent.id, lane, text);
@@ -256,15 +257,15 @@ export function RoomView({
   );
   const people = useMemo(() => Object.fromEntries((data?.room.people ?? []).map((p) => [p.id, p.name])), [data]);
   const told = useTold(people, data?.room.owner.name ?? "", known);
-  const agentName = (id: string | undefined) => data?.room.agents.find((a) => a.id === id)?.name ?? "An agent";
+  const agentName = (id: string | undefined) => data?.room.agents.find((a) => a.id === id)?.name ?? t("memberViews.anAgent");
   const busy = Boolean(data?.room.agents.some((a) => a.busy));
   const viewer = data?.room.role === "viewer";
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b px-5">
-        <h1 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{data?.room.name ?? "Room"}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-ui font-semibold text-foreground">{data?.room.name ?? t("memberViews.room")}</h1>
         {data && (
-          <div className="flex items-center -space-x-1" aria-label={`${data.room.agents.length} agents and ${data.room.people.length + 1} people`}>
+          <div className="flex items-center -space-x-1" aria-label={t("memberViews.roomFaces", { agents: data.room.agents.length, people: data.room.people.length + 1 })}>
             {data.room.agents.slice(0, 4).map((a) => (
               <span key={a.id} className="rounded-[9px] ring-2 ring-background">
                 <AgentFace agent={a} size={22} />
@@ -291,13 +292,13 @@ export function RoomView({
             const a = data.room.agents.find((x) => x.id === id);
             return a ? <AgentFace agent={a} size={28} /> : null;
           }}
-          nameOf={(id) => told.people[id] ?? nameOf?.(id) ?? "Someone"}
+          nameOf={(id) => told.people[id] ?? nameOf?.(id) ?? t("memberViews.someone")}
           onRead={memberApi.read}
           streaming=""
           busy={busy}
           header={
             <p className="mx-auto max-w-[520px] text-balance text-center text-small text-muted-foreground">
-              {data.room.agents.map((a) => a.name).join(", ")} and {data.room.people.length + 1} people. Everyone here reads every line.
+              {t("memberViews.header.room", { agents: formatList(data.room.agents.map((a) => a.name), { type: "unit", style: "short" }), count: data.room.people.length + 1 })}
             </p>
           }
           onAnswer={async (messageId, answer) => {
@@ -311,8 +312,8 @@ export function RoomView({
       )}
       <MemberComposer
         autoFocusKey={roomId}
-        placeholder={`Message ${data?.room.name ?? "the room"}`}
-        disabled={viewer ? "You can read this room. Writing in it is for its collaborators." : null}
+        placeholder={data?.room.name ? t("memberViews.placeholder.room", { room: data.room.name }) : t("memberViews.placeholder.theRoom")}
+        disabled={viewer ? t("memberViews.viewerOnly") : null}
         notice={usageNotice(usage)}
         onSend={async (text) => {
           const said = await memberApi.post(roomId, text);

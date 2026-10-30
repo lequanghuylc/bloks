@@ -16,6 +16,8 @@ import {
   desktopRequest,
   hostedComputer,
   hostedRefusal,
+  noComputerLine,
+  ownScreenWorks,
   publicDoor,
   viewerUrl,
   vncTarget,
@@ -24,13 +26,74 @@ import { startHarness } from "./helpers/server.ts";
 
 test("hosted offers this machine and off, and refuses a box or a VM", () => {
   assert.deepEqual(computerChoices(true).map((c) => c.id), ["local", "off"]);
-  assert.deepEqual(computerChoices(false).map((c) => c.id), ["cloud", "sandbox", "local", "off"]);
+  assert.deepEqual(computerChoices(false, "darwin").map((c) => c.id), ["cloud", "sandbox", "local", "off"]);
   assert.match(computerRefusal("cloud", true) ?? "", /agents' computer already/);
   assert.match(computerRefusal("sandbox", true) ?? "", /Local VM/);
   assert.equal(computerRefusal("local", true), null);
   assert.equal(computerRefusal(null, true), null);
   assert.equal(computerRefusal("cloud", false), null, "on a Mac nothing changes");
+  assert.equal(computerRefusal("local", false), null);
   assert.ok(computerRefusal("moon", true), "and nonsense is refused on a hosted workspace");
+});
+
+// GitHub 377: on Windows "This computer" was offered, and Automatic fell
+// back on it, but nothing there can work the PC's own screen (cua-driver
+// ships for macOS only), so the agent quietly had no computer at all.
+// GitHub 388: refusing it as well broke what 3.0.8 had saved there, and
+// any save that carried it. It is not offered, and still accepted.
+test("off a Mac this computer's own screen is not offered, is still accepted, and the Local VM still is", () => {
+  for (const platform of ["win32", "linux"]) {
+    assert.deepEqual(computerChoices(false, platform).map((c) => c.id), ["cloud", "sandbox", "off"], platform);
+  }
+  for (const value of ["local", "sandbox", "cloud", "off", null]) {
+    assert.equal(computerRefusal(value, false), null, `${value} was refused off a hosted workspace`);
+  }
+  assert.equal(ownScreenWorks("darwin"), true);
+  assert.equal(ownScreenWorks("win32"), false);
+  assert.deepEqual(computerChoices(true, "linux").map((c) => c.id), ["local", "off"], "a hosted machine is still its own computer");
+});
+
+test("an agent with no computer is told so, and how the person gives it one", () => {
+  const pc = noComputerLine("none", { hosted: false, platform: "win32" });
+  assert.match(pc, /no screen to see or click on this turn/);
+  assert.match(pc, /in your settings, under Computer/);
+  assert.match(pc, /Local VM/);
+  assert.match(pc, /Cloud box/);
+  assert.match(pc, /Windows PC's screen needs Bloks running on a Mac/);
+  assert.doesNotMatch(pc, /This computer \(/, "a PC is not offered its own screen");
+
+  const mac = noComputerLine("none", { hosted: false, platform: "darwin" });
+  assert.match(mac, /This computer \(their own Mac/);
+  assert.match(mac, /Local VM/);
+  assert.doesNotMatch(mac, /needs Bloks running on a Mac/);
+
+  assert.match(noComputerLine("off", { hosted: false, platform: "win32" }), /switched off in your settings/);
+  assert.match(noComputerLine("withheld", { hosted: false, platform: "darwin" }), /your owner did not start it/);
+  assert.doesNotMatch(noComputerLine("withheld", { hosted: false }), /under Computer/, "someone else's turn is not told to change the owner's settings");
+  assert.equal(noComputerLine("none", { hosted: true }), "", "a hosted machine is the computer");
+  assert.match(noComputerLine("off", { hosted: true }), /switched off/);
+  const vm = noComputerLine("vm", { hosted: false, platform: "win32", vm: "No container runtime found. Install Docker or Podman." });
+  assert.match(vm, /set to use the Local VM, but it is not there this turn \(No container runtime found\. Install Docker or Podman\)/);
+});
+
+// GitHub 388: "You have no computer" read to an OpenCode agent as "you
+// cannot run anything", and its hourly routine stopped running scripts.
+// Computer is a screen; whatever line an agent gets, it is told its
+// commands and files are untouched, and never that it has no computer.
+test("no line about a missing screen says or implies the agent cannot run commands", () => {
+  const lines = [
+    ...(["off", "withheld", "vm", "none"] as const).flatMap((why) =>
+      ["darwin", "win32", "linux"].map((platform) => noComputerLine(why, { hosted: false, platform, vm: "it is in use by Ada right now" })),
+    ),
+    noComputerLine("off", { hosted: true }),
+    noComputerLine("withheld", { hosted: true }),
+  ];
+  for (const line of lines) {
+    assert.doesNotMatch(line, /no computer/i, line);
+    assert.doesNotMatch(line, /cannot (run|act|execute)|can't (run|act|execute)|not act/i, line);
+    assert.match(line, /commands and files are not affected/, line);
+    assert.doesNotMatch(line, /[\u2013\u2014]/, "no dashes");
+  }
 });
 
 test("a box or a VM chosen on a Mac becomes this machine once hosted, and off stays off", () => {

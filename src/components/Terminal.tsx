@@ -32,8 +32,10 @@ import { cn } from "@/lib/cn";
 import { chordLabel, platformOf } from "@/lib/shortcuts";
 import { arrangeTerminal } from "@/lib/terminalLayout";
 import { activeAfterClose, stepTab, terminalChord } from "@/lib/terminalTabs";
+import { keysOwner, keysWhere } from "@/lib/conversationKeys";
 import { useTerminalLayout, useTerminalPrefs } from "@/lib/useTerminalSettings";
 import { terminalApi, useTerminalStream, type TerminalInfo, type TerminalScreen } from "@/lib/useTerminalStream";
+import { t } from "@/lib/i18n";
 
 const MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace';
 /** As many as the server allows one agent (MAX_PER_AGENT). */
@@ -337,14 +339,14 @@ function TerminalView({
       {exited && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-muted/60 px-3 py-1.5 text-small text-muted-foreground">
           <span className="min-w-0 truncate">
-            The shell exited{info?.exitCode ? ` with ${info.exitCode}` : ""}.
+            {info?.exitCode ? t("terminal.exitedWith", { code: String(info.exitCode) }) : t("terminal.shellExited")}
           </span>
           <button
             type="button"
             onClick={onRestart}
             className="shrink-0 font-medium text-foreground underline underline-offset-2"
           >
-            Start a new one
+            {t("terminal.startANewOne")}
           </button>
         </div>
       )}
@@ -373,8 +375,8 @@ function ScrollToBottom({ show, onClick }: { show: boolean; onClick: () => void 
               onClick={onClick}
               // keep the terminal's focus: a click here is not leaving it
               onMouseDown={(e) => e.preventDefault()}
-              aria-label="Scroll to the bottom"
-              title="Scroll to the bottom"
+              aria-label={t("terminal.scrollToTheBottom")}
+              title={t("terminal.scrollToTheBottom")}
               className="flex size-8 items-center justify-center rounded-full border border-foreground/10 bg-background text-foreground transition-[background-color,scale] duration-150 ease-out hover:bg-accent active:scale-[0.96]"
             >
               <ArrowDown size={14} strokeWidth={2.25} />
@@ -436,8 +438,8 @@ export function TerminalPanel({
   const platform = platformOf();
 
   const tabs = list ?? [];
-  const current = tabs.find((t) => t.id === active) ?? tabs[0] ?? null;
-  const ids = tabs.map((t) => t.id);
+  const current = tabs.find((tab) => tab.id === active) ?? tabs[0] ?? null;
+  const ids = tabs.map((tab) => tab.id);
 
   const setActive = useCallback(
     (id: string | null) => {
@@ -495,7 +497,7 @@ export function TerminalPanel({
 
   const newTab = useCallback(async () => {
     if (tabs.length >= MAX_TABS) {
-      toast(`${MAX_TABS} terminals is the most one agent can have open.`);
+      toast(t("terminal.tooMany", { count: MAX_TABS }));
       return;
     }
     const { cols, rows } = size.current ?? { cols: 80, rows: 24 };
@@ -510,14 +512,14 @@ export function TerminalPanel({
 
   const closeTab = useCallback(
     async (id: string) => {
-      const tab = tabs.find((t) => t.id === id);
+      const tab = tabs.find((tab) => tab.id === id);
       if (!tab) return;
       const busy = await terminalApi.busy(botId, id).catch(() => ({ running: false, command: undefined }));
       if (busy.running) {
         const yes = await confirm({
-          title: `Close ${tab.title}?`,
-          body: `${busy.command ? `${busy.command} is` : "Something is"} still running in it, and closing the tab ends it.`,
-          confirmLabel: "Close",
+          title: t("terminal.closeQuestion", { title: tab.title }),
+          body: busy.command ? t("terminal.commandStillRunning", { command: busy.command }) : t("terminal.somethingStillRunning"),
+          confirmLabel: t("common.close"),
           destructive: true,
         });
         if (!yes) return focusTab(current?.id ?? null);
@@ -542,7 +544,7 @@ export function TerminalPanel({
   const rename = useCallback(
     (id: string, title: string) => {
       setRenaming(null);
-      const before = tabs.find((t) => t.id === id)?.title;
+      const before = tabs.find((tab) => tab.id === id)?.title;
       if (!title.trim() || title.trim() === before) return focusTab(id);
       terminalApi.rename(botId, id, title).catch((e: Error) => toast.error(e.message));
       focusTab(id);
@@ -591,6 +593,12 @@ export function TerminalPanel({
       // closing is the one that ends something, so it is only heard from
       // inside the terminal
       if (chord === "close" && !inside) return;
+      // ⌘⇧[ and ⌘⇧] step the conversation's tabs too: the terminal's
+      // while it has the keyboard or the window, theirs otherwise
+      // (conversationKeys.ts)
+      const step = chord === "next" || chord === "previous";
+      const where = { inTerminal: inside, terminalCovers: k.mode !== "docked", inDialog: keysWhere().inDialog };
+      if (step && keysOwner(where) !== "terminal") return;
       if (chord === "fill" && k.mode === "window") return;
       e.preventDefault();
       if (chord === "new") void k.newTab();
@@ -623,7 +631,7 @@ export function TerminalPanel({
   // the title of a window that is only this terminal
   useEffect(() => {
     if (mode !== "window") return;
-    document.title = current ? `${current.title} · ${botName}` : `Terminal · ${botName}`;
+    document.title = current ? `${current.title} · ${botName}` : t("terminal.windowTitle", { name: botName });
   }, [mode, current, botName]);
 
   const fill = mode === "fill";
@@ -638,7 +646,9 @@ export function TerminalPanel({
     <div
       ref={root}
       role="region"
-      aria-label={`Terminal for ${botName}`}
+      aria-label={t("terminal.regionLabel", { name: botName })}
+      // where the conversation looks to tell whose ⌘⇧] it is
+      data-terminal-panel={mode}
       className="flex h-full min-h-0 w-full min-w-0 flex-col bg-card"
     >
       <div
@@ -650,7 +660,7 @@ export function TerminalPanel({
       >
         <div
           role="tablist"
-          aria-label="Terminal tabs"
+          aria-label={t("terminal.terminalTabs")}
           aria-orientation="horizontal"
           className="flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
           onKeyDown={(e) => {
@@ -691,7 +701,7 @@ export function TerminalPanel({
                   tabIndex={open ? 0 : -1}
                   onClick={() => select(tab.id)}
                   onDoubleClick={() => setRenaming(tab.id)}
-                  title={`${tab.title}\n${tab.cwd}\nDouble-click to rename. ${stepKeys} to switch.`}
+                  title={`${tab.title}\n${tab.cwd}\n${t("terminal.tabHint", { keys: stepKeys })}`}
                   className={cn(
                     "flex h-7 max-w-[176px] items-center gap-1.5 rounded-md pl-2.5 pr-7 text-body outline-none transition-colors duration-150",
                     open ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -701,15 +711,15 @@ export function TerminalPanel({
                     <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50" />
                   )}
                   <span className="truncate">{tab.title}</span>
-                  {tab.exitedAt && <span className="sr-only">(exited)</span>}
+                  {tab.exitedAt && <span className="sr-only">{t("terminal.exited")}</span>}
                 </button>
                 <button
                   type="button"
                   // the keyboard closes a tab with ⌃⇧W or from the menu,
                   // so these stay out of the tab order
                   tabIndex={-1}
-                  aria-label={`Close ${tab.title}`}
-                  title={`Close ${tab.title}`}
+                  aria-label={t("terminal.closeNamed", { title: tab.title })}
+                  title={t("terminal.closeNamed", { title: tab.title })}
                   onClick={() => void closeTab(tab.id)}
                   className={cn(
                     "absolute right-1 flex size-5 items-center justify-center rounded text-muted-foreground transition-[opacity,background-color,color] duration-150 hover:bg-foreground/10 hover:text-foreground",
@@ -722,16 +732,16 @@ export function TerminalPanel({
             );
           })}
         </div>
-        <HeaderButton label="New terminal tab" onClick={() => void newTab()} disabled={!loaded || tabs.length >= MAX_TABS}>
+        <HeaderButton label={t("terminal.newTerminalTab")} onClick={() => void newTab()} disabled={!loaded || tabs.length >= MAX_TABS}>
           <Plus size={16} />
         </HeaderButton>
         <div className="min-w-2 flex-1 self-stretch" />
         {current && !current.pty && (
           <span
-            title="Full screen programs won't work here."
+            title={t("terminal.fullScreenProgramsWontWork")}
             className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground"
           >
-            limited
+            {t("terminal.limited")}
           </span>
         )}
         <MoreMenu
@@ -753,12 +763,12 @@ export function TerminalPanel({
           />
         )}
         {fill && (
-          <HeaderButton label="Leave the full window" onClick={() => setLayout((l) => arrangeTerminal(l, "fill"))}>
+          <HeaderButton label={t("terminal.leaveTheFullWindow")} onClick={() => setLayout((l) => arrangeTerminal(l, "fill"))}>
             <Minimize2 size={15} />
           </HeaderButton>
         )}
         {mode !== "window" && (
-          <HeaderButton label="Hide the terminal (its shells keep running)" onClick={onClose}>
+          <HeaderButton label={t("terminal.hideTheTerminalItsShells")} onClick={onClose}>
             <X size={16} />
           </HeaderButton>
         )}
@@ -766,7 +776,7 @@ export function TerminalPanel({
 
       {lost && (
         <div role="status" className="shrink-0 border-t bg-destructive/10 px-3 py-1.5 text-small text-destructive">
-          Lost the connection to the shells. Trying again.
+          {t("terminal.lostTheConnectionToThe")}
         </div>
       )}
 
@@ -812,7 +822,7 @@ function RenameField({ title, onDone }: { title: string; onDone: (title: string)
     <input
       autoFocus
       defaultValue={title}
-      aria-label="Tab name"
+      aria-label={t("terminal.tabName")}
       maxLength={40}
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => finish(e.currentTarget.value)}

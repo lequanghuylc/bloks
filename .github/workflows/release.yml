@@ -21,10 +21,11 @@ jobs:
   macos:
     name: Build, sign and notarize
     # arm64, with an Xcode that can cross-compile the x86_64 slice of the
-    # Swift helpers. Notarization is a network round trip to Apple and is
-    # usually the slowest step by a wide margin.
+    # Swift helpers. The tests run here first and now take close to fifty
+    # minutes, then notarization is a network round trip to Apple, so an
+    # hour stopped being enough with 3.1.1.
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v7
@@ -149,8 +150,18 @@ jobs:
       # bloks-server, the same server with no desktop around it, for a
       # computer that never sleeps. Built from what the step above
       # already compiled, so it is the release's server byte for byte.
+      # Its sha256 is written beside it, and a server updating itself from
+      # the app installs nothing that does not match it, so both files go
+      # up, and this step fails the release if the checksum is missing or
+      # is not of the tarball beside it.
       - name: Pack bloks-server
-        run: node scripts/pack-server.mjs
+        run: |
+          node scripts/pack-server.mjs
+          cd release
+          for f in bloks-server-*.tar.gz; do
+            [ -f "$f.sha256" ] || { echo "no checksum beside $f"; exit 1; }
+            shasum -a 256 -c "$f.sha256"
+          done
 
       # Verified, so now it can be attached. By id, to the one draft this
       # job opened, for the reason written above that step.
@@ -165,7 +176,7 @@ jobs:
             echo "The draft this job opened is gone."
             exit 1
           fi
-          for f in release/*.dmg release/*.zip release/latest*.yml release/*.blockmap release/bloks-server-*.tar.gz; do
+          for f in release/*.dmg release/*.zip release/latest*.yml release/*.blockmap release/bloks-server-*.tar.gz release/bloks-server-*.tar.gz.sha256; do
             [ -f "$f" ] || continue
             name=$(basename "$f")
             # Skip what is already there. Nothing races this step:
@@ -176,7 +187,16 @@ jobs:
             if gh api "repos/$GITHUB_REPOSITORY/releases/$id/assets" \
                  --jq "map(select(.name == \"$name\")) | length" | grep -qv '^0$'; then
               echo "  already there: $name"
+              case "$name" in bloks-server-*.tar.gz) kept_server="$name" ;; esac
               continue
+            fi
+            # A re-run packs the server again, and gzip makes new bytes,
+            # so a checksum from this run is not of a tarball an earlier
+            # run left on the draft. They go up together or not at all.
+            if [ -n "${kept_server:-}" ] && [ "$name" = "$kept_server.sha256" ]; then
+              echo "$kept_server is on the draft from an earlier run, so this run's checksum is not of it."
+              echo "Delete the bloks-server assets from the draft and run this again."
+              exit 1
             fi
             gh api --method POST \
               -H "Content-Type: application/octet-stream" \
@@ -197,4 +217,5 @@ jobs:
             release/latest*.yml
             release/*.blockmap
             release/bloks-server-*.tar.gz
+            release/bloks-server-*.tar.gz.sha256
           retention-days: 7

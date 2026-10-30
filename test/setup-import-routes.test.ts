@@ -1,16 +1,23 @@
-// Bring your setup, through the real server: the look answers only this
-// computer and never an agent, nothing is written until an import, and
-// each ticked item lands where the person would have put it by hand.
+// Bring your setup, through the real server: the look answers the owner,
+// at this computer or on one of their own paired devices, and never an
+// agent or a member; nothing is written until an import, and each ticked
+// item lands where the person would have put it by hand. What is read is
+// always the server's own computer, which `where` names (GitHub 397).
 //
 // The harness runs with HOME set to a throwaway folder, and the other
 // tools' files are written into that folder, never read from a real home.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 
 import { allows, NEVER } from "../server/agent-cli.ts";
+import { JoinClient } from "../server/join-client.ts";
 import { startHarness, type Harness } from "./helpers/server.ts";
+import { teamPlan } from "./helpers/team-plan.ts";
 
 const SECRETS = ["sk-ant-api03-ROUTESROUTESROUTES0123456789", "ghp" + "_routesroutesroutesroutes0123456789", "sk-ant-oat01-NEVERREADNEVERREAD999"];
 
@@ -64,11 +71,17 @@ describe("bring your setup, over HTTP", () => {
     for (const method of ["GET", "POST"]) assert.equal(allows("some-agent", method, "/api/setup-import").ok, false);
   });
 
-  test("nothing from the network may look or import", async () => {
-    for (const method of ["GET", "POST"]) {
-      const remote = await h.fetchRemote("/api/setup-import", { method, body: method === "POST" ? "{}" : undefined });
-      assert.ok(remote.status === 401 || remote.status === 403, `${method} answered ${remote.status}`);
+  test("nothing unpaired from the network may look or import", async () => {
+    for (const [method, path] of [["GET", "/api/setup-import"], ["POST", "/api/setup-import"], ["GET", "/api/setup-import/where"]]) {
+      const remote = await h.fetchRemote(path, { method, body: method === "POST" ? "{}" : undefined });
+      assert.ok(remote.status === 401 || remote.status === 403, `${method} ${path} answered ${remote.status}`);
     }
+  });
+
+  test("at this computer, it says the setup is read here", async () => {
+    const where = await h.json("/api/setup-import/where");
+    assert.equal(where.here, true);
+    assert.equal(typeof where.computer, "string");
   });
 
   test("looking finds what is there, shows no secrets, and writes nothing", async () => {
@@ -171,5 +184,180 @@ describe("bring your setup, over HTTP", () => {
     const review = (await h.json("/api/setup-import")) as Review;
     await h.json("/api/setup-import", { method: "POST", body: JSON.stringify({ picks: picksOf(review, () => true) }) });
     assert.deepEqual((await h.json("/api/mcp-servers")).servers[0].needs, []);
+  });
+});
+
+// A workspace on a server with no screen is reached only from the owner's
+// paired devices, so that is where its setup is brought over from: read on
+// the server, reviewed on the device, written on the server. A member's
+// device and a member's credential are refused, as an agent's is above.
+test("the owner's own device brings a setup over from the server's computer; a member cannot", { timeout: 120_000 }, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "bloks-setup-remote-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const licence = await teamPlan();
+  t.after(() => licence.close());
+  fixture(home);
+  mkdirSync(join(home, ".bloks"));
+  writeFileSync(join(home, ".bloks", "config.json"), JSON.stringify({ remote: { enabled: true }, profile: { name: "Owner" }, ...licence.config }));
+  const h = await startHarness({ HOME: home, ...licence.env, BLOKS_COMPUTER_NAME: "Fixture Server" });
+  t.after(() => h.stop());
+
+  // the owner's phone or laptop, paired
+  await h.fetch("/api/pair", { method: "PUT", body: JSON.stringify({ enabled: true }) });
+  const started = await h.json("/api/pair/start", { method: "POST" });
+  const paired = await h.fetchRemote("/api/pair/claim", { method: "POST", body: JSON.stringify({ code: started.code, device: "Owner's MacBook" }) });
+  const owner = paired.body?.token as string;
+  assert.ok(owner, "the fixture device did not pair");
+
+  // named before anything is read, and named as not the device asking
+  const where = await h.fetchRemote("/api/setup-import/where", { token: owner });
+  assert.equal(where.status, 200);
+  assert.deepEqual(where.body, { computer: "Fixture Server", here: false });
+
+  // the same review as at the server itself, scrubbed the same way
+  const look = await h.fetchRemote("/api/setup-import", { token: owner });
+  assert.equal(look.status, 200);
+  const review = look.body as Review;
+  assert.deepEqual(review.sources.map((s) => s.id), ["claude", "openclaw"]);
+  for (const secret of SECRETS) assert.equal(JSON.stringify(review).includes(secret), false, `${secret} reached the device`);
+  assert.deepEqual(review, await h.json("/api/setup-import"));
+  assert.equal(existsSync(join(home, ".bloks", "setup-import.json")), false, "looking wrote something");
+
+  // a member: their device never reaches the owner's route, and their
+  // credential on this computer is taken at its word
+  const lan = new URL(h.url).host;
+  const made = await h.json("/api/workspace/invites", { method: "POST", body: JSON.stringify({ role: "admin", name: "Sam" }) });
+  const client = new JoinClient(() => "http://127.0.0.1:9");
+  const found = (await client.lookup(`${made.invite.link}~${lan}`)) as any;
+  assert.ok(found.ok, JSON.stringify(found));
+  await client.claim(found.session, { name: "Sam" });
+  assert.equal((await h.fetch(`/api/workspace/requests/${made.invite.id}/approve`, { method: "POST" })).status, 200);
+  const sam = ((await client.status(found.session)) as any).credentials as { deviceToken: string };
+  for (const [method, path] of [["GET", "/api/setup-import/where"], ["GET", "/api/setup-import"], ["POST", "/api/setup-import"]]) {
+    const body = method === "POST" ? JSON.stringify({ picks: picksOf(review) }) : undefined;
+    const there = await h.fetchRemote(path, { method, token: sam.deviceToken, body });
+    assert.notEqual(there.status, 200, `a member's device reached ${method} ${path}`);
+    const here = await h.fetch(path, { method, headers: { authorization: `Bearer ${sam.deviceToken}` }, body });
+    assert.equal(here.status, 403, `a member's credential on this computer reached ${method} ${path}`);
+  }
+  assert.equal(existsSync(join(home, ".bloks", "setup-import.json")), false, "a member's import wrote something");
+
+  // the owner's import, from the device: written on the server
+  const picks = picksOf(review);
+  const brought = await h.fetchRemote("/api/setup-import", { method: "POST", token: owner, body: JSON.stringify({ picks }) });
+  assert.equal(brought.status, 200, JSON.stringify(brought.body));
+  assert.deepEqual(brought.body.results.filter((r: { ok: boolean }) => !r.ok), []);
+  assert.ok(brought.body.results.length > 0);
+  assert.ok(existsSync(join(home, ".bloks", "setup-import.json")), "the import was not recorded on the server");
+  const { skills } = await h.json("/api/skills");
+  assert.ok(skills.some((s: { id: string }) => s.id === "standup"), "the skill did not land on the server");
+});
+
+// The newer sources through the real server: a subagent, a server whose
+// key the person says to copy, and a Telegram bot from OpenClaw, against
+// a stand-in for Telegram that answers on loopback. Then the undo route
+// takes all of it back.
+describe("bringing agents, keys and a chat app over, and taking them back", () => {
+  const TOKEN = "777000:AAH-fixture-telegram-token-routes";
+  const GITHUB = "ghp" + "_copiedcopiedcopiedcopied0123456789";
+  let h: Harness;
+  let telegram: Server;
+  before(async () => {
+    // getMe for the one token it knows; anything else is refused, as Telegram would
+    telegram = createServer((req, res) => {
+      const ok = req.url === `/bot${TOKEN}/getMe`;
+      res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+      res.end(JSON.stringify(ok ? { ok: true, result: { id: 777000, username: "claw_fixture_bot", is_bot: true } } : { ok: false }));
+    });
+    await new Promise<void>((done) => telegram.listen(0, "127.0.0.1", done));
+    const port = (telegram.address() as AddressInfo).port;
+    h = await startHarness({ BLOKS_TELEGRAM_API: `http://127.0.0.1:${port}` });
+    write(h.home, ".claude/agents/reviewer.md", "---\nname: Reviewer\ndescription: Reviews code.\ntools: Read, Grep\n---\n\nReview carefully.\n");
+    write(h.home, ".claude.json", JSON.stringify({ mcpServers: { github: { command: "npx", args: ["server-github"], env: { GITHUB_TOKEN: GITHUB } } } }));
+    write(h.home, ".openclaw/openclaw.json", `// JSON5\n{ channels: { telegram: { botToken: '${TOKEN}', }, }, }`);
+    write(h.home, ".openclaw/workspace/SOUL.md", "Calm.\n");
+  });
+  after(async () => {
+    await h?.stop();
+    await new Promise((done) => telegram?.close(done));
+  });
+
+  type Item = { key: string; kind: string; digest: string; suggested: { to: string; botId?: string }; secrets?: Array<{ id: string; copyFrom?: string }> };
+  const all = (review: { sources: Array<{ items: Item[] }> }) => review.sources.flatMap((s) => s.items);
+
+  test("the values are named, never sent, and copied only where the person said", async () => {
+    const res = await h.fetch("/api/setup-import");
+    const text = await res.text();
+    assert.equal(text.includes(TOKEN), false);
+    assert.equal(text.includes(GITHUB), false);
+    const review = JSON.parse(text) as { sources: Array<{ items: Item[] }>; lastRun: unknown };
+    assert.equal(review.lastRun, null);
+    const item = (key: string) => all(review).find((i) => i.key === key)!;
+    assert.deepEqual(item("claude:mcp:github").secrets, [{ id: "env:GITHUB_TOKEN", name: "GITHUB_TOKEN", where: "env", copyFrom: "~/.claude.json" }]);
+    const picks = ["claude:agent:reviewer", "claude:mcp:github", "openclaw:channel:telegram"].map((key) => ({
+      key,
+      digest: item(key).digest,
+      to: item(key).suggested.to,
+      ...(item(key).suggested.botId ? { botId: item(key).suggested.botId } : {}),
+      ...(key.includes(":mcp:") ? { secrets: { "env:GITHUB_TOKEN": { copy: true } } } : {}),
+      ...(key.includes(":channel:") ? { secrets: { "token:botToken": { copy: true } } } : {}),
+    }));
+    const outcome = await h.json("/api/setup-import", { method: "POST", body: JSON.stringify({ picks }) });
+    assert.deepEqual(outcome.results.filter((r: { ok: boolean }) => !r.ok), []);
+    assert.ok(outcome.run?.id, "the import can be undone");
+    assert.equal(outcome.review.lastRun.id, outcome.run.id);
+
+    const { bots } = await h.json("/api/bots");
+    const reviewer = bots.find((b: { name: string }) => b.name === "Reviewer");
+    assert.equal(reviewer.title, "Reviews code.");
+    assert.equal(reviewer.description, "Review carefully.");
+    const { rules } = await h.json("/api/rules");
+    assert.ok(rules.length > 0 && rules.every((r: { botId?: string; effect: string }) => r.botId === reviewer.id && r.effect === "deny"));
+
+    // the key landed in the server list, and only there
+    const { servers } = await h.json("/api/mcp-servers");
+    assert.deepEqual(servers[0].needs, []);
+    const listed = await h.fetch("/api/mcp-servers").then((r) => r.text());
+    assert.equal(listed.includes(GITHUB), false);
+    const config = readFileSync(join(h.home, ".bloks", "config.json"), "utf8");
+    assert.ok(config.includes(GITHUB), "the copied value is saved where keys are");
+    for (const file of ["setup-import.json", "setup-import-runs.json"]) {
+      const kept = readFileSync(join(h.home, ".bloks", file), "utf8");
+      assert.equal(kept.includes(GITHUB) || kept.includes(TOKEN), false, `a value reached ${file}`);
+    }
+    assert.equal(h.logs().includes(GITHUB) || h.logs().includes(TOKEN), false, "a value was logged");
+
+    // the bot is saved for the agent made for OpenClaw, switched off
+    const claw = bots.find((b: { name: string }) => b.name === "OpenClaw agent");
+    const status = await h.json(`/api/bots/${claw.id}/telegram`);
+    assert.equal(status.configured, true);
+    assert.equal(status.enabled, false);
+    assert.equal(status.username, "claw_fixture_bot");
+    assert.equal(JSON.stringify(status).includes(TOKEN), false);
+  });
+
+  test("an agent can never undo one, and the owner's undo takes it all back", async () => {
+    assert.equal(allows("some-agent", "POST", "/api/setup-import/undo").ok, false);
+    const { lastRun } = await h.json("/api/setup-import");
+    const remote = await h.fetchRemote("/api/setup-import/undo", { method: "POST", body: JSON.stringify({ runId: lastRun.id }) });
+    assert.ok(remote.status === 401 || remote.status === 403);
+
+    const res = await h.fetch("/api/setup-import/undo", { method: "POST", body: JSON.stringify({ runId: lastRun.id }) });
+    assert.equal(res.status, 200);
+    const out = await res.json();
+    assert.deepEqual(out.kept, []);
+    assert.equal(out.review.lastRun, null);
+    const { bots } = await h.json("/api/bots");
+    const live = bots.filter((b: { archivedAt?: number; hidden?: boolean }) => !b.archivedAt && !b.hidden).map((b: { name: string }) => b.name);
+    assert.equal(live.includes("Reviewer") || live.includes("OpenClaw agent"), false, "the agents it made are archived");
+    assert.deepEqual((await h.json("/api/mcp-servers")).servers, []);
+    assert.deepEqual((await h.json("/api/rules")).rules, []);
+    const config = readFileSync(join(h.home, ".bloks", "config.json"), "utf8");
+    assert.equal(config.includes(TOKEN), false, "the bot's token is gone with it");
+    assert.equal(config.includes(GITHUB), false);
+
+    const twice = await h.fetch("/api/setup-import/undo", { method: "POST", body: JSON.stringify({ runId: lastRun.id }) });
+    assert.equal(twice.status, 409);
+    assert.equal((await h.fetch("/api/setup-import/undo", { method: "POST", body: JSON.stringify({ runId: "nope" }) })).status, 404);
   });
 });

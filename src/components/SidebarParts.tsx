@@ -22,6 +22,8 @@ import { confirm } from "@/components/ui/confirm";
 import { toast } from "@/components/ui/toast";
 import { ContextRing, RING_FROM, type TaskChipData } from "./TaskStrip";
 import { contextTitle, measuredContext } from "@/lib/contextCard";
+import { rovingTo } from "@/lib/conversationKeys";
+import { t } from "@/lib/i18n";
 
 /** The one spring for things that open in place: quick, and no bounce,
  * because a list that overshoots reads as unsure of its own height. */
@@ -33,7 +35,7 @@ export const OPEN = { type: "spring", duration: 0.3, bounce: 0 } as const;
  * and a dot that pulses reads as one more notification. */
 export function LaneMark({ state, unread }: { state: string; unread?: boolean }) {
   if (state === "working") {
-    return <Loader2 size={11} className="shrink-0 animate-spin text-brand motion-reduce:animate-none" aria-label="working" />;
+    return <Loader2 size={11} className="shrink-0 animate-spin text-brand motion-reduce:animate-none" aria-label={t("sidebarParts.working")} />;
   }
   if (state === "needs-you") return <span className="mx-[2.5px] size-1.5 shrink-0 rounded-full bg-warning" />;
   if (unread) return <span className="mx-[2.5px] size-1.5 shrink-0 rounded-full bg-brand" />;
@@ -53,6 +55,19 @@ export function LaneRing({ lane }: { lane: Pick<TaskChipData, "context"> }) {
       <ContextRing fraction={measuredContext(c) ? c.fraction : 0} summarised={c.summarised} size={12} />
     </span>
   );
+}
+
+/** ↑ and ↓, Home and End, on a focused conversation in the list move the
+ * keyboard along that agent's conversations, General's row first, as the
+ * arrows do along the strip's tabs. ⌥ with them walks the agents instead
+ * (Shortcuts.tsx). */
+export function laneRowKeys(e: React.KeyboardEvent<HTMLElement>, botId: string) {
+  if (e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  const rows = [...document.querySelectorAll<HTMLElement>(`[data-lane-of="${CSS.escape(botId)}"]`)];
+  const to = rovingTo(e.key, rows.indexOf(e.currentTarget), rows.length, "vertical");
+  if (to === null) return;
+  e.preventDefault();
+  rows[to].focus();
 }
 
 interface LaneMenuState {
@@ -89,7 +104,7 @@ function LaneMenu({
       window.removeEventListener("blur", onClose);
     };
   }, [onClose]);
-  const lane = bot.tasks?.find((t) => t.id === menu.laneId);
+  const lane = bot.tasks?.find((task) => task.id === menu.laneId);
   if (!lane) return null;
   const top = Math.min(menu.y, window.innerHeight - 222);
   const left = Math.min(menu.x, window.innerWidth - 220);
@@ -117,27 +132,27 @@ function LaneMenu({
       style={{ top, left }}
       className="fixed z-40 w-[208px] animate-pop-in rounded-xl border bg-popover p-1 shadow-lg shadow-(color:--shadow-color)"
     >
-      {item(<Pencil size={15} className="text-muted-foreground" />, "Rename", () => onRename(lane.id))}
-      {item(<BellDot size={15} className="text-muted-foreground" />, "Mark as unread", () =>
+      {item(<Pencil size={15} className="text-muted-foreground" />, t("sidebarParts.rename"), () => onRename(lane.id))}
+      {item(<BellDot size={15} className="text-muted-foreground" />, t("sidebarParts.markAsUnread"), () =>
         dispatch({ type: "markLaneUnread", botId: bot.id, taskId: lane.id }),
       )}
-      {item(<ClipboardCopy size={15} className="text-muted-foreground" />, "Copy conversation ID", () => {
+      {item(<ClipboardCopy size={15} className="text-muted-foreground" />, t("sidebarParts.copyConversationId"), () => {
         // the menu closes on the click, so the toast is the only sign it worked
-        void navigator.clipboard?.writeText(lane.id).then(() => toast.success("Copied conversation ID"));
+        void navigator.clipboard?.writeText(lane.id).then(() => toast.success(t("sidebarParts.copiedConversationId")));
       })}
       {/* opened in this conversation, so the goal it sets is plainly its own */}
       {!lane.noGoals &&
-        item(<Target size={15} className="text-muted-foreground" />, lane.goal ? "Set a new goal" : "Set a goal", () => {
+        item(<Target size={15} className="text-muted-foreground" />, lane.goal ? t("sidebarParts.setANewGoal") : t("sidebarParts.setAGoal"), () => {
           dispatch({ type: "select", id: bot.id, lane: lane.id });
           dispatch({ type: "openGoal", botId: bot.id, taskId: lane.id });
         })}
       <div className="mx-2 my-1 h-px bg-border" />
       {busy ? (
-        <div className="px-2.5 py-1.5 text-small text-muted-foreground">Stop it before closing</div>
+        <div className="px-2.5 py-1.5 text-small text-muted-foreground">{t("sidebarParts.stopItBeforeClosing")}</div>
       ) : (
         item(
           <X size={15} />,
-          "Close conversation",
+          t("sidebarParts.closeConversation"),
           () => {
             // The same rule as a tab's ×: closing deletes the transcript, so
             // one with anything in it names what goes first; an empty one
@@ -145,9 +160,9 @@ function LaneMenu({
             const close = () => dispatch({ type: "closeTask", botId: bot.id, taskId: lane.id });
             if (!laneHasMessages(lane)) return close();
             void confirm({
-              title: `Close "${lane.title}"?`,
-              body: "Its messages are deleted.",
-              confirmLabel: "Close",
+              title: t("sidebarParts.closeNamed", { title: lane.title }),
+              body: t("sidebarParts.itsMessagesAreDeleted"),
+              confirmLabel: t("common.close"),
               destructive: true,
             }).then((yes) => yes && close());
           },
@@ -173,7 +188,7 @@ function LaneRename({ title, onDone }: { title: string; onDone: (next: string | 
       autoFocus
       value={value}
       maxLength={40}
-      aria-label="Rename this conversation"
+      aria-label={t("sidebarParts.renameThisConversation")}
       onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => {
@@ -238,6 +253,8 @@ export function ConversationRows({ bot, open }: { bot: Bot; open: boolean }) {
                 return (
                   <button
                     key={lane.id}
+                    data-lane-of={bot.id}
+                    onKeyDown={(e) => laneRowKeys(e, bot.id)}
                     onClick={() => dispatch({ type: "select", id: bot.id, lane: lane.id })}
                     onDoubleClick={() => setRenaming(lane.id)}
                     onContextMenu={(e) => {
@@ -263,7 +280,7 @@ export function ConversationRows({ bot, open }: { bot: Bot; open: boolean }) {
                         waiting ? "text-warning" : "text-muted-foreground/80",
                       )}
                     >
-                      {waiting ? "waiting" : lane.state === "working" ? "working" : formatWhen(lane.lastAt ?? lane.createdAt)}
+                      {waiting ? t("sidebarParts.waiting") : lane.state === "working" ? t("sidebarParts.working") : formatWhen(lane.lastAt ?? lane.createdAt)}
                     </span>
                   </button>
                 );
@@ -284,7 +301,7 @@ export function useWaiting(): Array<{ bot: Bot; laneId: string }> {
   const { state } = useStore();
   return state.bots
     .filter((b) => !b.hidden && !b.archivedAt)
-    .flatMap((bot) => (bot.tasks ?? []).filter((t) => t.state === "needs-you").map((t) => ({ bot, laneId: t.id })));
+    .flatMap((bot) => (bot.tasks ?? []).filter((task) => task.state === "needs-you").map((task) => ({ bot, laneId: task.id })));
 }
 
 /** The first thing in the list when something needs an answer, because
@@ -297,7 +314,7 @@ export function WaitingRow() {
     if (waiting.length === 1) dispatch({ type: "select", id: waiting[0].bot.id, lane: waiting[0].laneId });
     else dispatch({ type: "openPage", page: "overview" });
   };
-  const label = `${waiting.length} waiting on you`;
+  const label = t("sidebarParts.waitingOnYou", { count: waiting.length });
   return (
     <AnimatePresence initial={false}>
       {waiting.length > 0 && (

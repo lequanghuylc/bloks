@@ -40,6 +40,7 @@ import { BLOKS_AI_NAME, CREDITS_ENGINE } from "@/lib/credits";
 import { EFFORT_LABELS, effortChoice, isEffort } from "@/lib/effort";
 import { quietButton, useDismiss } from "./composer/Shell";
 import { SettingsSelect } from "./SettingsLayout";
+import { t, tr } from "@/lib/i18n";
 
 /** Catalogs this long or shorter are read at a glance, not searched. */
 const SEARCH_ABOVE = 8;
@@ -287,10 +288,10 @@ export function ModelPicker({
     rows[next].focus();
   };
 
-  const full = active || !custom ? modelLabel(active, effectiveModel(active, selection.model)) : (noneLabel ?? "None");
+  const full = active || !custom ? modelLabel(active, effectiveModel(active, selection.model)) : (noneLabel ?? t("modelPicker.none"));
   const name = composer ? shortName(active, full) : full;
   const portalled = (panel: ReactNode) => (composer ? panel : createPortal(panel, document.body));
-  const described = active ? `${active.displayName}, ${full}` : full;
+  const described = active ? t("modelPicker.described", { engine: active.displayName, model: full }) : full;
 
   return (
     // Under the composer the list hangs from the row, not from the name,
@@ -307,7 +308,7 @@ export function ModelPicker({
         aria-expanded={open}
         aria-haspopup="dialog"
         title={described}
-        aria-label={`Model: ${described}${effortLabel ? `, ${effortLabel} effort` : ""}`}
+        aria-label={effortLabel ? t("modelPicker.labelWithEffort", { model: described, effort: effortLabel }) : t("modelPicker.label", { model: described })}
         className={
           composer
             ? cn(quietButton, "max-w-full")
@@ -318,7 +319,7 @@ export function ModelPicker({
           <span className="relative flex">
             <ProviderMark driverKind={active.driverKind} size={13} />
             {state.engineUpdates[active.driverKind] && (
-              <span className="absolute -right-1 -top-1 size-1.5 rounded-full bg-brand ring-2 ring-background" aria-label="update available" />
+              <span className="absolute -right-1 -top-1 size-1.5 rounded-full bg-brand ring-2 ring-background" aria-label={t("modelPicker.updateAvailableDot")} />
             )}
           </span>
         )}
@@ -332,7 +333,7 @@ export function ModelPicker({
           ref={panelRef}
           data-model-picker-content
           role="dialog"
-          aria-label="Choose a model"
+          aria-label={t("modelPicker.chooseAModel")}
           onKeyDown={walk}
           style={place ?? undefined}
           // capped to the window, so a long list scrolls instead of running
@@ -345,7 +346,7 @@ export function ModelPicker({
           )}
         >
           <div className="flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-2.5">
-            <span className="text-small font-medium text-muted-foreground">Model</span>
+            <span className="text-small font-medium text-muted-foreground">{t("modelPicker.model")}</span>
             {/* the way to everything this list cannot do: connect an
                 engine, sign in, update, add a key */}
             {!custom && (
@@ -355,7 +356,7 @@ export function ModelPicker({
                 className="-mr-1 flex h-6 items-center gap-1 rounded-md px-1.5 text-small text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-95"
               >
                 <SettingsIcon size={13} />
-                Engines
+                {t("modelPicker.engines")}
               </button>
             )}
           </div>
@@ -378,8 +379,8 @@ export function ModelPicker({
                       if (id) pick(first.instance, id);
                     }
                   }}
-                  placeholder={instances.some((i) => i.models.acceptsAnyId) ? "Search, or type a model id" : "Search models"}
-                  aria-label="Search models"
+                  placeholder={instances.some((i) => i.models.acceptsAnyId) ? t("modelPicker.searchOrTypeAModel") : t("modelPicker.searchModels")}
+                  aria-label={t("modelPicker.searchModels")}
                   className="w-full bg-transparent text-body text-foreground outline-none placeholder:text-muted-foreground"
                 />
               </div>
@@ -397,12 +398,12 @@ export function ModelPicker({
                 }}
                 className={cn(optionRow, "mt-1 text-muted-foreground hover:bg-accent hover:text-foreground")}
               >
-                {noneLabel ?? "None"}
+                {noneLabel ?? t("modelPicker.none")}
               </button>
             )}
             {visible.length === 0 && (
               <div className="px-2 py-3 text-body text-muted-foreground">
-                {instances.length ? "No models match." : "No engines found. Is Bloks running?"}
+                {instances.length ? t("modelPicker.noModelsMatch") : t("modelPicker.noEnginesFoundIsBloks")}
               </div>
             )}
             {visible.map(({ instance, shown, matching, unlisted, typedId, folds, runs, isActive, closed }) => {
@@ -442,7 +443,7 @@ export function ModelPicker({
                     {/* an agent on a chat-only engine cannot run commands
                         or touch files, and that is worth knowing here */}
                     {provider && !provider.agentic && (
-                      <span className="shrink-0 text-caption text-muted-foreground">Chat only</span>
+                      <span className="shrink-0 text-caption text-muted-foreground">{t("modelPicker.chatOnly")}</span>
                     )}
                     {/* how this engine's list was made is a footnote, not
                         something to read on the way to picking a model */}
@@ -450,7 +451,7 @@ export function ModelPicker({
                     {/* the whole update note is for the engine in use, where
                         a missing model is being looked for; elsewhere a dot */}
                     {update && !isActive && !off && (
-                      <span title="Update available" aria-label="Update available" className="size-1.5 shrink-0 rounded-full bg-brand" />
+                      <span title={t("modelPicker.updateAvailable")} aria-label={t("modelPicker.updateAvailable")} className="size-1.5 shrink-0 rounded-full bg-brand" />
                     )}
                     {off && !custom && (
                       <button
@@ -458,13 +459,13 @@ export function ModelPicker({
                         onClick={openSettings}
                         className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-caption font-medium text-brand-ink transition-colors duration-150 hover:bg-brand-soft"
                       >
-                        Set up
+                        {t("modelPicker.setUp")}
                       </button>
                     )}
                   </div>
                   {off ? (
                     <div className="px-2 pb-1.5 pl-[30px] text-caption leading-snug text-muted-foreground">
-                      {instance.snapshot.reason ?? "Not available"}
+                      {instance.snapshot.reason ?? t("modelPicker.notAvailable")}
                     </div>
                   ) : closed ? null : (
                     <>
@@ -476,12 +477,12 @@ export function ModelPicker({
                       {unlisted && (
                         <div
                           aria-current="true"
-                          title={`${unlisted}\nNot listed, but still in use`}
+                          title={`${unlisted}\n${t("modelPicker.notListed")}`}
                           className={cn(optionRow, "bg-accent text-foreground")}
                         >
                           <span className="flex min-w-0 items-center gap-2">
                             <span className="line-clamp-2 [overflow-wrap:anywhere]">{readableId(unlisted)}</span>
-                            <span className="shrink-0 text-caption text-muted-foreground">Custom</span>
+                            <span className="shrink-0 text-caption text-muted-foreground">{t("modelPicker.custom")}</span>
                           </span>
                           <Check size={14} className="shrink-0 text-brand-ink" />
                         </div>
@@ -494,7 +495,7 @@ export function ModelPicker({
                           className={cn(optionRow, "text-foreground hover:bg-accent")}
                         >
                           <span className="min-w-0 [overflow-wrap:anywhere]">
-                            Use <span className="font-mono text-small">{typedId}</span>
+                            {tr("modelPicker.useId", { id: <span className="font-mono text-small">{typedId}</span> })}
                           </span>
                         </button>
                       )}
@@ -522,7 +523,7 @@ export function ModelPicker({
                                 {shortName(instance, option.label === option.id ? readableId(option.id) : option.label)}
                               </span>
                               {option.id === instance.models.default && (
-                                <span className="shrink-0 text-caption text-muted-foreground">Default</span>
+                                <span className="shrink-0 text-caption text-muted-foreground">{t("modelPicker.default")}</span>
                               )}
                             </span>
                             {current && <Check size={14} className="shrink-0 text-brand-ink" />}
@@ -536,7 +537,7 @@ export function ModelPicker({
                           onClick={() => setUnfolded((u) => [...u, instance.instanceId])}
                           className={cn(optionRow, "text-small text-muted-foreground hover:bg-accent hover:text-foreground")}
                         >
-                          Show all {matching.length}
+                          {t("modelPicker.showAll", { count: matching.length })}
                           <ChevronDown size={13} className="shrink-0" />
                         </button>
                       )}
@@ -553,11 +554,11 @@ export function ModelPicker({
               {effort.levels.length > 0 && (
                 <div className="flex items-center gap-2.5">
                   <label htmlFor={`effort-${bot.id}`} className="text-small text-muted-foreground">
-                    Effort
+                    {t("modelPicker.effort")}
                   </label>
                   <SettingsSelect
                     id={`effort-${bot.id}`}
-                    aria-label="Reasoning effort"
+                    aria-label={t("modelPicker.reasoningEffort")}
                     className="flex-1"
                     value={effort.value ?? ""}
                     // null, not left out, so the saved level is cleared

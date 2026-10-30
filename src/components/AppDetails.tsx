@@ -19,6 +19,7 @@ import { ServiceIcon } from "./Customize";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cn";
 import { useState } from "react";
+import { t } from "@/lib/i18n";
 
 const pill =
   "flex h-10 items-center gap-2 rounded-full px-4 text-ui font-medium outline-none transition-[background-color,opacity,scale] duration-150 ease-out active:scale-[0.97] disabled:opacity-40";
@@ -36,10 +37,10 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
         <div className="mt-10 flex items-center gap-2 text-ui text-muted-foreground">
           {connectors.cards === null ? (
             <>
-              <Loader2 size={15} className="animate-spin" /> Loading
+              <Loader2 size={15} className="animate-spin" /> {t("common.loading2")}
             </>
           ) : (
-            "App not found."
+            t("appDetails.appNotFound")
           )}
         </div>
       </div>
@@ -52,8 +53,8 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
   const users = state.bots.filter((b) => !b.hidden && b.composio !== false).length;
   const send = (prompt: string) => {
     if (!connected) return connectors.connect(card.slug);
-    const bot = tryPrompt(state, dispatch, `Using ${card.label}: ${prompt}`);
-    if (!bot) setNote("No agent can use apps yet. Turn it on in an agent's settings.");
+    const bot = tryPrompt(state, dispatch, t("appDetails.usingApp", { app: card.label, prompt }));
+    if (!bot) setNote(t("appDetails.noAgentCanUseApps"));
   };
 
   return (
@@ -68,23 +69,23 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
             <ServiceIcon card={card} />
             {card.label}
           </h1>
-          <p className="mt-1 text-ui text-muted-foreground">Through Composio Connect</p>
+          <p className="mt-1 text-ui text-muted-foreground">{t("appDetails.throughComposioConnect")}</p>
         </div>
         <div className="flex items-center gap-2">
           {connected ? (
             <>
               <DropdownMenu>
                 <DropdownMenuTrigger
-                  aria-label={`${card.label} options`}
+                  aria-label={t("appDetails.appOptions", { app: card.label })}
                   className="flex size-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent"
                 >
                   {busy ? <Loader2 size={17} className="animate-spin" /> : <MoreHorizontal size={18} />}
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[180px]">
-                  <DropdownMenuItem onClick={() => connectors.connect(card.slug)}>Sign in again</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => connectors.connect(card.slug)}>{t("appDetails.signInAgain")}</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => connectors.disconnect(card.slug)} className="text-destructive focus:text-destructive">
                     <Trash2 />
-                    Disconnect
+                    {t("common.disconnect")}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -93,11 +94,11 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
                 className={cn(pill, "border bg-card text-foreground hover:bg-accent")}
               >
                 <Settings size={16} />
-                Manage
+                {t("appDetails.manage")}
               </button>
               <button onClick={() => send(details.prompts[0])} className={cn(pill, "bg-foreground text-background hover:opacity-90")}>
                 <MessageSquare size={16} />
-                Try now
+                {t("appDetails.tryNow")}
               </button>
             </>
           ) : (
@@ -107,7 +108,7 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
               className={cn(pill, "bg-foreground text-background hover:opacity-90")}
             >
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-              Connect
+              {t("common.connect")}
             </button>
           )}
         </div>
@@ -116,20 +117,20 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
       <Hero card={card} accent={details.accent} prompts={details.prompts} connected={connected} onPick={send} />
       {note && <p className="mt-3 text-body text-destructive">{note}</p>}
       {!connected && (
-        <p className="mt-3 text-body text-muted-foreground">Connect {card.label} to try these.</p>
+        <p className="mt-3 text-body text-muted-foreground">{t("appDetails.connectToTry", { app: card.label })}</p>
       )}
 
       <p className="mt-8 text-pretty text-lead leading-relaxed text-foreground">{details.about}</p>
 
-      <h2 className="mt-10 border-b pb-3 text-title font-semibold text-foreground">Information</h2>
+      <h2 className="mt-10 border-b pb-3 text-title font-semibold text-foreground">{t("appDetails.information")}</h2>
       <dl className="mt-4 grid grid-cols-[160px_minmax(0,1fr)] gap-y-3.5 text-ui">
-        <dt className="text-muted-foreground">Category</dt>
+        <dt className="text-muted-foreground">{t("appDetails.category")}</dt>
         <dd className="text-foreground">{details.category}</dd>
-        <dt className="text-muted-foreground">Connects through</dt>
-        <dd className="text-foreground">Composio Connect</dd>
+        <dt className="text-muted-foreground">{t("appDetails.connectsThrough")}</dt>
+        <dd className="text-foreground">{t("appDetails.composioConnect")}</dd>
         {card.domain && (
           <>
-            <dt className="text-muted-foreground">Website</dt>
+            <dt className="text-muted-foreground">{t("appDetails.website")}</dt>
             <dd>
               <a href={`https://${card.domain}`} target="_blank" rel="noreferrer" className="text-foreground underline-offset-2 hover:underline">
                 {card.domain}
@@ -137,14 +138,14 @@ export function AppDetailsPage({ slug, connectors }: { slug: string; connectors:
             </dd>
           </>
         )}
-        <dt className="text-muted-foreground">Agents</dt>
+        <dt className="text-muted-foreground">{t("common.agents")}</dt>
         <dd className="text-foreground">
-          {users === 0 ? "None yet" : `${users} ${users === 1 ? "agent" : "agents"} can use apps`}
+          {users === 0 ? t("appDetails.noneYet") : t("appDetails.agentsCanUseApps", { count: users })}
         </dd>
-        <dt className="text-muted-foreground">Status</dt>
+        <dt className="text-muted-foreground">{t("appDetails.status")}</dt>
         <dd className="flex items-center gap-2 text-foreground">
           <span className={cn("size-2 rounded-full", connected ? "bg-success" : "bg-muted-foreground/50")} />
-          {connected ? "Connected" : "Not connected"}
+          {connected ? t("common.connected") : t("appDetails.notConnected")}
         </dd>
       </dl>
     </div>
@@ -155,7 +156,7 @@ function BackToPlugins({ onBack }: { onBack: () => void }) {
   return (
     <button onClick={onBack} className="flex items-center gap-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground">
       <ArrowLeft size={16} />
-      Plugins
+      {t("common.plugins")}
     </button>
   );
 }
@@ -216,7 +217,7 @@ function Hero({
           <button
             key={prompt}
             onClick={() => onPick(prompt)}
-            title={connected ? (to ? `Write this to ${to.name}` : undefined) : `Connect ${card.label} first`}
+            title={connected ? (to ? t("appDetails.writeThisTo", { agent: to.name }) : undefined) : t("appDetails.connectFirst", { app: card.label })}
             className="group flex items-center gap-4 rounded-2xl bg-white/80 px-5 py-4 text-left text-lead leading-relaxed text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.07] backdrop-blur-md transition-[background-color,scale] duration-150 ease-out hover:bg-white active:scale-[0.99] dark:bg-black/45 dark:text-white/90 dark:shadow-none dark:ring-white/10 dark:hover:bg-black/55"
           >
             <span className="min-w-0 flex-1">

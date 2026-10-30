@@ -8,6 +8,7 @@ import { ArrowUpRight, Lock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useOptionalStore } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 export const TEAM_UPGRADE_URL = "https://bloks.dev/cloud/upgrade/";
 
@@ -17,15 +18,16 @@ export function NeedsTeam({ className, what }: { className?: string; what?: stri
     <span className={cn("inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground", className)}>
       <span className="inline-flex items-center gap-1">
         <Lock size={12} strokeWidth={2} aria-hidden />
-        {what ?? "Needs Bloks Team"}
+        {what ?? t("teamLock.needsBloksTeam")}
       </span>
       <UpgradeLink />
     </span>
   );
 }
 
-export function UpgradeLink({ className, label = "Upgrade" }: { className?: string; label?: string }) {
+export function UpgradeLink({ className, label: given }: { className?: string; label?: string }) {
   const store = useOptionalStore();
+  const label = given ?? t("teamLock.upgrade");
   const look = cn(
     "inline-flex items-center gap-0.5 rounded font-medium text-brand-ink underline-offset-2 outline-none hover:underline",
     className,
@@ -52,8 +54,9 @@ export function UpgradeLink({ className, label = "Upgrade" }: { className?: stri
 
 /** The same way to Bloks Team as a button, for where it is the one thing
  * a screen offers rather than a note beside a choice. */
-export function UpgradeButton({ label = "Get Bloks Team" }: { label?: string }) {
+export function UpgradeButton({ label: given }: { label?: string }) {
   const store = useOptionalStore();
+  const label = given ?? t("teamLock.getBloksTeam");
   if (store) {
     return (
       <Button size="sm" className="shrink-0 gap-1.5" onClick={() => store.dispatch({ type: "toggleAppSettings", open: true, page: "plan" })}>

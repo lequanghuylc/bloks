@@ -2,6 +2,7 @@ import { useSettingsObservation } from "@/lib/useSettingsObservation";
 import { useNamer, useWorkspaceRoster } from "@/lib/members";
 import { isGroup, otherHumans, receiptsAt, runs, senderOf, speakers, teamHumans } from "@/lib/participants";
 import { seedReads, useReadPosition, useReads } from "@/lib/readReceipts";
+import { useViewingReport } from "@/lib/viewing";
 import { useEffect, useLayoutEffect, useRef, useState, useMemo } from "react";
 import { Search } from "@/components/icons";
 import { ChevronUp } from "@/components/icons";
@@ -17,15 +18,20 @@ import { MessageComponent } from "./Gallery";
 import { GenUiHost } from "./genui/host";
 import { Composer } from "./Composer";
 import { useTerminalDock } from "./terminal/TerminalDock";
-import { terminalChord } from "@/lib/terminalTabs";
+import { BrowserDock, BrowsingOnMac, useBrowserReveal, useBrowserState } from "./browser/BrowserPanel";
+import { hasOwnBrowser, setBrowserPanel, useBrowserPanel } from "@/lib/appBrowser";
+import { Globe } from "@/components/icons";
+import { stepTab, terminalChord } from "@/lib/terminalTabs";
+import { closeRefusal, conversationChord, keysOwner, keysWhere, type ConversationChord } from "@/lib/conversationKeys";
+import { toast } from "@/components/ui/toast";
 import { lastEditable, quietRunAt, splitWaiting } from "@/lib/transcript";
 import { useHistoryPaging } from "@/lib/useHistoryPaging";
 import { useLanesInSidebar } from "@/lib/conversationsView";
 import { findHits, stepHit } from "@/lib/find";
-import { isApproval } from "@/lib/cardAnswer";
+import { isApproval, waitingQuestions } from "@/lib/cardAnswer";
 import { AnimatePresence, motion } from "motion/react";
 import { dayLine, timeSaidBelow } from "@/lib/when";
-import { TaskStrip } from "./TaskStrip";
+import { MAX_TASKS, TaskStrip } from "./TaskStrip";
 import { GoalDialog } from "./Goal";
 import { AfterAgentLink, AgentExchangeDialog, AgentExchangeRow } from "./AgentExchange";
 import { CallButton } from "./Voice";
@@ -35,28 +41,34 @@ import { SecretCard } from "./SecretCard";
 import { ChangesCard } from "./ChangesCard";
 import { ToolRun } from "./ToolRun";
 import { TurnFoldLine } from "./TurnFold";
+import { TracePanel } from "./trace/TracePanel";
+import { askForFold, type TraceAsk } from "@/lib/traceView";
 import { MeetingPanel } from "./MeetingPanel";
 import { AudioLines } from "@/components/icons";
 import { ForwardDialog, type ReplyDraft } from "./MessageActions";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { placeLine, placeTrouble } from "@/lib/workplace";
 import { useStickToBottom } from "@/lib/useStickToBottom";
 import { useHoldPlace } from "@/lib/useHoldPlace";
 import { foldHolding, foldTurns, lastFoldKey, rowsFrom, turnRunning } from "@/lib/turnFold";
 import { type RedoPreview } from "@/lib/redo";
 
 import { Bubble, Notice, QuietCheckIns, Rewound, TakenBack } from "./chat/Bubble";
+import { MessageGuard } from "./chat/MessageGuard";
 import { GroupMessage, PersonAvatar, SeenBy } from "./chat/Group";
 import { Markdownish } from "./Markdown";
 import { LiveBrowser, ScreenFrame, StreamingBubble, WorkingClock, WorkingLine } from "./chat/Live";
 import { EmptyState } from "./chat/EmptyState";
 import { JumpToLatest } from "./chat/JumpToLatest";
 import { HeldSends } from "./chat/HeldSends";
+import { QuestionDock } from "./chat/QuestionDock";
 import { onAsk, peekAsk, takeAsk } from "@/lib/chatAsk";
 import { keysFor, platformOf } from "@/lib/shortcuts";
 import { confirm } from "@/components/ui/confirm";
 import { createPortal } from "react-dom";
 import { useTitlebarSlot } from "@/lib/titlebarSlot";
+import { t } from "@/lib/i18n";
 
 /**
  * Which messages should animate in: ones that arrive while you're
@@ -147,7 +159,7 @@ export function ChatView({ bot }: { bot: Bot }) {
   // people by the name a conversation calls them, told apart where two
   // share a first name (src/lib/names.ts)
   const nameOf = useNamer();
-  const personName = (id: string) => nameOf(id, "A former member");
+  const personName = (id: string) => nameOf(id, t("chatView.formerMember"));
   // On a desktop the conversation's tabs sit up in the title bar, in the
   // row with the window's own buttons; on a phone they stay under the header
   const titleSlot = useTitlebarSlot();
@@ -187,6 +199,8 @@ export function ChatView({ bot }: { bot: Bot }) {
       .then((r: { reads?: unknown }) => seedReads(bot.threadId, r.reads))
       .catch(() => {});
   }, [withPeople, bot.threadId]);
+  // on screen here, so an answer that lands in it is no news for the phone
+  useViewingReport(bot.threadId, (body) => api("/api/viewing", { method: "POST", body: JSON.stringify(body) }));
   useReadPosition({
     threadId: withPeople ? bot.threadId : null,
     scroller: scrollRef,
@@ -203,7 +217,7 @@ export function ChatView({ bot }: { bot: Bot }) {
     () => (withPeople ? receiptsAt(said.map((m) => m.id), new Set(groupRuns.keys()), reads, "owner", new Map(said.map((m) => [m.id, senderOf(m)]))) : new Map<string, string[]>()),
     [withPeople, said, groupRuns, reads],
   );
-  const readerName = (id: string) => (id === "owner" ? (roster.owner ?? "You") : personName(id));
+  const readerName = (id: string) => (id === "owner" ? (roster.owner ?? t("chatView.you")) : personName(id));
   const receiptsFor = (id: string) => {
     const who = receiptRows.get(id);
     return who?.length ? <SeenBy people={who.map((p) => ({ id: p, name: readerName(p) }))} /> : undefined;
@@ -214,7 +228,7 @@ export function ChatView({ bot }: { bot: Bot }) {
     ) : telegramSpeaker(m) ? (
       <PersonAvatar id={telegramSpeaker(m)!.personId} name={telegramSpeaker(m)!.name} />
     ) : (
-      <PersonAvatar id={m.author ?? "owner"} name={m.author ? personName(m.author) : (roster.owner ?? "You")} />
+      <PersonAvatar id={m.author ?? "owner"} name={m.author ? personName(m.author) : (roster.owner ?? t("chatView.you"))} />
     );
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   const [forwarding, setForwarding] = useState<{ message: Message; author: string } | null>(null);
@@ -266,7 +280,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       .then((r) => {
         if (r.sent === false) {
           setPrefill({ text: r.text ?? text, nonce: Date.now() });
-          dispatch({ type: "error", message: r.error ?? "Rewound, but your message wasn't sent." });
+          dispatch({ type: "error", message: r.error ?? t("chatView.rewoundNotSent") });
         }
         return null;
       })
@@ -353,6 +367,11 @@ export function ChatView({ bot }: { bot: Bot }) {
       ),
     [bot.messages],
   );
+  // Questions the agent is still owed an answer for wait above the
+  // composer, not up in the transcript where the work after them would
+  // push them out of view (chat/QuestionDock.tsx).
+  const questions = useMemo(() => waitingQuestions(said), [said]);
+  const docked = useMemo(() => new Set(questions.map((m) => m.id)), [questions]);
   const currentHit = hits.length ? hits[Math.min(hitAt, hits.length - 1)] : -1;
 
   useEffect(() => {
@@ -491,6 +510,9 @@ export function ChatView({ bot }: { bot: Bot }) {
     } else if (ask.kind === "terminal") {
       takeAsk(ask);
       setTerminalOpen(true);
+    } else if (ask.kind === "close") {
+      takeAsk(ask);
+      closeOpen();
     } else if (ask.threadId === bot.threadId) {
       if (said.some((m) => m.id === ask.messageId)) {
         takeAsk(ask);
@@ -500,6 +522,84 @@ export function ChatView({ bot }: { bot: Bot }) {
       }
     }
   }, [askTick, bot.id, bot.threadId, said, earlier.remaining, earlier.loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Closing deletes the transcript, and on a phone the X sits right
+  // where a thumb lands, so a lane with anything in it asks first,
+  // in the words the sidebar's Close uses. An empty one just goes.
+  // ⌘W and the palette close through here as well, so no key skips it.
+  const closeLane = (taskId: string) => {
+    const lane = bot.tasks?.find((t) => t.id === taskId);
+    const open = taskId === (bot.activeTaskId ?? bot.threadId);
+    const anything = laneHasMessages(lane) || (open && bot.messages.length > 0);
+    if (!anything) return dispatch({ type: "closeTask", botId: bot.id, taskId });
+    void confirm({
+      title: lane?.title ? t("chatView.closeNamed", { title: lane.title }) : t("chatView.closeThis"),
+      body: t("chatView.messagesDeleted"),
+      confirmLabel: t("common.close"),
+      destructive: true,
+    }).then((yes) => yes && dispatch({ type: "closeTask", botId: bot.id, taskId }));
+  };
+  // The open one, or the reason it stays, which the tab's × says by
+  // being a Clear, or by being greyed while it works.
+  const closeOpen = () => {
+    const open = bot.activeTaskId ?? bot.threadId;
+    const lane = bot.tasks?.find((t) => t.id === open);
+    const why = closeRefusal(bot.tasks ?? [], open);
+    if (why === "first") {
+      toast.info(t("chatView.staysOpen", { title: lane?.title ?? t("common.general") }), {
+        id: "close-first",
+        description: t("chatView.keepsFirst"),
+      });
+    } else if (why === "working") {
+      toast.info(t("chatView.stopBeforeClosing"), { id: "close-working", description: t("chatView.stillWorking", { title: lane?.title ?? "" }) });
+    } else closeLane(open);
+  };
+
+  // ⌘T, ⌘W, ⌘⇧[ and ⌘⇧] (conversationKeys.ts), on the conversation on
+  // screen. In a room, on a page, or with no agent, nothing here hears
+  // them and they do nothing: a ⌘W that closed the window whenever there
+  // was no tab to close would be the surprise this replaced.
+  const tabKey = (chord: ConversationChord) => {
+    const tasks = bot.tasks ?? [];
+    const open = bot.activeTaskId ?? bot.threadId;
+    if (chord === "close") return closeOpen();
+    if (chord === "new") {
+      // where the strip stops offering its +
+      if (tasks.length >= MAX_TASKS) {
+        toast.info(t("chatView.tooMany", { name: bot.name, count: MAX_TASKS }), {
+          id: "new-full",
+          description: t("chatView.closeOne"),
+        });
+        return;
+      }
+      return dispatch({ type: "newTask", botId: bot.id });
+    }
+    const next = stepTab(
+      tasks.map((t) => t.id),
+      open,
+      chord === "next" ? 1 : -1,
+    );
+    if (next && next !== open) dispatch({ type: "selectTask", botId: bot.id, taskId: next });
+  };
+  const tabKeyRef = useRef(tabKey);
+  tabKeyRef.current = tabKey;
+  useEffect(() => {
+    // a browser keeps these for its own tabs and never passes them on
+    if (!window.bloks) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const chord = conversationChord(e, platformOf());
+      if (!chord) return;
+      const owner = keysOwner(keysWhere());
+      if (owner === "terminal") return;
+      // taken with a dialog up as well, where it does nothing: the
+      // question on screen is answered before anything under it changes
+      e.preventDefault();
+      if (owner === "conversation") tabKeyRef.current(chord);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // A starter from the empty page goes into the message box, never out:
   // the words are there to read, change or finish, and the box has the
@@ -553,9 +653,23 @@ export function ChatView({ bot }: { bot: Bot }) {
     "terminal.position": { status: "observed", value: terminal.layout.position },
     "terminal.arrangement": { status: "observed", value: terminal.layout.arrangement },
   });
+  // The Bloks browser (browser/BrowserPanel.tsx): its panel in the desktop
+  // app, opened by the app too when an agent starts browsing, and news of
+  // the Mac's anywhere else.
+  useBrowserReveal();
+  const browserPanel = useBrowserPanel();
+  const browserState = useBrowserState();
+  const someoneBrowsing = browserState?.control.by === "agent";
+  const botNames = useMemo(() => Object.fromEntries(state.bots.map((b) => [b.id, b.name])), [state.bots]);
 
   // the two-agent exchange opened from one of its rows, if any
   const [exchange, setExchange] = useState<{ peerId: string; messageId: string; text: string } | null>(null);
+  // A turn's timeline beside the chat (trace/TracePanel.tsx), opened from
+  // the working line or a fold, for the conversation it was opened in:
+  // moving to another one puts it away.
+  const [traceAsk, setTraceAsk] = useState<{ key: string; ask: TraceAsk } | null>(null);
+  const traceShown = traceAsk?.key === threadKey ? traceAsk.ask : null;
+  const openTrace = (ask: TraceAsk) => setTraceAsk({ key: threadKey, ask });
   const lanesInSidebar = useLanesInSidebar();
   // One conversation is the usual agent (GitHub 237): with nothing to
   // switch to, the strip would only be a "+" inviting a second. New
@@ -570,6 +684,8 @@ export function ChatView({ bot }: { bot: Bot }) {
   const first = said[0];
   // this conversation, not the agent: another one may be the one working
   const working = openLaneWorking(bot);
+  // where it works, when that is not this computer (src/lib/workplace.ts)
+  const placeNow = placeLine(bot.workplaceStatus, working);
   // Nothing said, nothing on its way, and nothing still loading: a new
   // conversation, which shows who is here and a few ways to begin.
   const empty =
@@ -586,8 +702,13 @@ export function ChatView({ bot }: { bot: Bot }) {
   // or a fold's work once it is opened. A run (a rewind, quiet check-ins,
   // tool calls) is counted within its stretch, since rows with a fold
   // between them are not next to each other on the page.
+  // Each message is drawn inside its own guard, so one that cannot be
+  // drawn costs that message and not the conversation (src/lib/rowGuard.ts).
   const rowsOf = (list: readonly Message[], indexOf: (offset: number) => number) =>
-    list.map((m, offset) => {
+    list.map((m, offset) => (
+      <MessageGuard key={m.id} id={m.id} resetKey={m} className={group ? "ml-9" : undefined} render={() => rowOf(list, indexOf, m, offset)} />
+    ));
+  const rowOf = (list: readonly Message[], indexOf: (offset: number) => number, m: Message, offset: number) => {
       const fresh = arrivals.has(m.id);
       const absolute = indexOf(offset);
       if (m.deleted && m.rewound) {
@@ -632,7 +753,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           return (
             <div key={m.id} data-msg-index={absolute} data-message-id={m.id} className={cn("relative", group && "pl-9")}>
               <LandMark on={lit === m.id} />
-              <OptionCard botId={bot.id} message={m} />
+              <OptionCard botId={bot.id} message={m} dock={docked.has(m.id) ? "line" : undefined} />
             </div>
           );
         case "activity": {
@@ -701,10 +822,10 @@ export function ChatView({ bot }: { bot: Bot }) {
               <LandMark on={lit === m.id} />
             {/* in a group the bubble names its sender; with one agent, a
                 line over the words says whose they are */}
-            {!group && (m.telegramPerson || m.telegramGroup) && <div className="mb-1 text-small text-muted-foreground">Message from {telegramSpeaker(m)!.name} (Telegram)</div>}
-            {!group && m.telegramDelegate && <div className="mb-1 text-small text-muted-foreground">Message from {m.telegramDelegate.name} (Telegram, full access)</div>}
+            {!group && (m.telegramPerson || m.telegramGroup) && <div className="mb-1 text-small text-muted-foreground">{t("chatView.telegramFrom", { name: telegramSpeaker(m)!.name })}</div>}
+            {!group && m.telegramDelegate && <div className="mb-1 text-small text-muted-foreground">{t("chatView.telegramDelegate", { name: m.telegramDelegate.name })}</div>}
             {!group && m.role === "user" && m.author && <div className="mb-1 text-small font-medium text-muted-foreground">{personName(m.author)}</div>}
-            {m.telegramSent && <div className="mb-1 text-small text-muted-foreground">To {m.telegramSent.name} (Telegram): {m.telegramSent.state === "sent" ? "sent" : m.telegramSent.state === "sending" ? "sending" : m.telegramSent.state === "failed" ? "failed" : "delivery uncertain"}</div>}
+            {m.telegramSent && <div className="mb-1 text-small text-muted-foreground">{t(m.telegramSent.state === "sent" ? "chatView.telegramSent.sent" : m.telegramSent.state === "sending" ? "chatView.telegramSent.sending" : m.telegramSent.state === "failed" ? "chatView.telegramSent.failed" : "chatView.telegramSent.uncertain", { name: m.telegramSent.name })}</div>}
             {after && (
               <AfterAgentLink
                 peerId={after.peerId}
@@ -717,7 +838,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               // a folded check-in below says no time of its own
               hideTime={list[offset + 1]?.quiet ? false : timeSaidBelow(m, list[offset + 1])}
               fresh={fresh}
-              author={telegramSpeaker(m)?.name ?? (m.role === "user" ? (m.author ? personName(m.author) : "You") : bot.name)}
+              author={telegramSpeaker(m)?.name ?? (m.role === "user" ? (m.author ? personName(m.author) : t("chatView.you")) : bot.name)}
               onReply={setReplyTo}
               onForward={(message, author) => setForwarding({ message, author })}
               onReact={(messageId, emoji) => reactTo(bot.threadId, messageId, emoji)}
@@ -731,7 +852,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               highlight={finding ? query : ""}
               isHit={absolute === currentHit}
               editNow={editAsk?.id === m.id ? editAsk.nonce : undefined}
-              nameOf={(id) => (id === "user" ? "You" : (state.bots.find((b) => b.id === id)?.name ?? bot.name))}
+              nameOf={(id) => (id === "user" ? t("chatView.you") : (state.bots.find((b) => b.id === id)?.name ?? bot.name))}
               group={
                 group
                   ? {
@@ -748,7 +869,7 @@ export function ChatView({ bot }: { bot: Bot }) {
           );
         }
       }
-    });
+  };
 
   return (
     <main ref={mainRef} className="@container/chat relative flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -761,14 +882,24 @@ export function ChatView({ bot }: { bot: Bot }) {
           onClick={() => dispatch({ type: "toggleSettings" })}
           className="absolute left-1/2 flex min-w-0 -translate-x-1/2 items-center gap-2.5 rounded-lg px-1.5 py-1 transition-colors duration-150 hover:bg-accent"
           style={{ maxWidth: `calc(100% - ${headerSide * 2}px)` }}
-          title="Agent settings"
+          title={t("chatView.agentSettings")}
         >
           <AgentAvatar bot={bot} size={28} />
           <span className="flex min-w-0 items-baseline gap-2 text-left">
             <span className="truncate text-ui font-semibold text-foreground">{bot.name}</span>
-            {(working || bot.title) && (
-              <span className="hidden truncate text-small text-muted-foreground sm:block">
-                {working ? <WorkingClock threadKey={threadKey} working={working} messages={said} /> : bot.title}
+            {/* An agent that works elsewhere says where, in place of its
+                title: where its commands are running is the thing to know
+                about it, and a lost connection has to be seen. */}
+            {(working || bot.title || placeNow) && (
+              <span
+                className={cn("hidden truncate text-small sm:block", placeTrouble(bot.workplaceStatus) ? "text-warning" : "text-muted-foreground")}
+                title={bot.workplaceStatus?.detail}
+              >
+                {working && !placeTrouble(bot.workplaceStatus) ? (
+                  <WorkingClock threadKey={threadKey} working={working} messages={said} label={placeNow ?? t("chatView.working")} />
+                ) : (
+                  (placeNow ?? bot.title)
+                )}
               </span>
             )}
           </span>
@@ -783,8 +914,8 @@ export function ChatView({ bot }: { bot: Bot }) {
               variant="ghost"
               size="icon"
               onClick={() => dispatch({ type: "openMeeting", botId: bot.id })}
-              title="Take meeting notes"
-              aria-label="Meeting notes"
+              title={t("chatView.takeMeetingNotes")}
+              aria-label={t("chatView.meetingNotes")}
             >
               <AudioLines size={17} />
             </Button>
@@ -794,18 +925,34 @@ export function ChatView({ bot }: { bot: Bot }) {
             size="icon"
             onClick={() => setTerminalOpen((open) => !open)}
             className={cn(terminalOpen && "bg-accent text-foreground")}
-            title={`Terminal in ${bot.name}'s folder  ${keysFor("terminalToggle", platformOf())[0]}`}
-            aria-label="Terminal"
+            title={`${t("chatView.terminalIn", { name: bot.name })}  ${keysFor("terminalToggle", platformOf())[0]}`}
+            aria-label={t("chatView.terminal")}
             aria-pressed={terminalOpen}
           >
             <SquareTerminal size={17} />
           </Button>
+          {hasOwnBrowser() && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setBrowserPanel({ open: !browserPanel.open })}
+              className={cn("relative", browserPanel.open && "bg-accent text-foreground")}
+              title={someoneBrowsing && browserState?.control.by === "agent" ? t("chatView.browsing", { name: browserState.control.name }) : t("chatView.browser")}
+              aria-label={t("chatView.browser")}
+              aria-pressed={browserPanel.open}
+            >
+              <Globe size={17} />
+              {someoneBrowsing && !browserPanel.open && (
+                <span aria-hidden className="absolute right-1.5 top-1.5 size-1.5 animate-pulse rounded-full bg-brand" />
+              )}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
             onClick={() => dispatch({ type: "toggleComputer" })}
             className={cn(state.computerOpen && "bg-accent text-foreground")}
-            title="Agent computer"
+            title={t("chatView.agentComputer")}
           >
             <Monitor size={17} />
           </Button>
@@ -825,26 +972,12 @@ export function ChatView({ bot }: { bot: Bot }) {
         activeId={bot.activeTaskId ?? bot.threadId}
         onSelect={(taskId) => taskId !== bot.activeTaskId && dispatch({ type: "selectTask", botId: bot.id, taskId })}
         onNew={() => dispatch({ type: "newTask", botId: bot.id })}
-        onClose={(taskId) => {
-          // Closing deletes the transcript, and on a phone the X sits right
-          // where a thumb lands, so a lane with anything in it asks first,
-          // in the words the sidebar's Close uses. An empty one just goes.
-          const lane = bot.tasks?.find((t) => t.id === taskId);
-          const open = taskId === (bot.activeTaskId ?? bot.threadId);
-          const said = laneHasMessages(lane) || (open && bot.messages.length > 0);
-          if (!said) return dispatch({ type: "closeTask", botId: bot.id, taskId });
-          void confirm({
-            title: `Close "${lane?.title ?? "this conversation"}"?`,
-            body: "Its messages are deleted.",
-            confirmLabel: "Close",
-            destructive: true,
-          }).then((yes) => yes && dispatch({ type: "closeTask", botId: bot.id, taskId }));
-        }}
+        onClose={closeLane}
         onClear={(taskId) => {
           void confirm({
-            title: "Clear this conversation?",
-            body: "Its messages are deleted.",
-            confirmLabel: "Clear",
+            title: t("chatView.clearThis"),
+            body: t("chatView.messagesDeleted"),
+            confirmLabel: t("common.clear"),
             destructive: true,
           }).then((yes) => yes && dispatch({ type: "clearTask", botId: bot.id, taskId }));
         }}
@@ -874,23 +1007,23 @@ export function ChatView({ bot }: { bot: Bot }) {
                 setHitAt((at) => stepHit(at, hits.length, e.shiftKey ? -1 : 1));
               }
             }}
-            placeholder="Find in this conversation"
-            aria-label="Find in this conversation"
+            placeholder={t("chatView.findInThisConversation")}
+            aria-label={t("chatView.findInThisConversation")}
             className="min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
           />
           <span aria-live="polite" className="shrink-0 text-small tabular-nums text-muted-foreground">
             {query.trim().length < 2
               ? ""
               : hits.length === 0
-                ? "No matches"
-                : `${Math.min(hitAt, hits.length - 1) + 1} of ${hits.length}`}
+                ? t("chatView.noMatches")
+                : t("chatView.matchOf", { at: Math.min(hitAt, hits.length - 1) + 1, total: hits.length })}
           </span>
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               onClick={() => setHitAt((at) => stepHit(at, hits.length, -1))}
               disabled={hits.length === 0}
-              aria-label="Previous match"
-              title={`Previous match  ${keysFor("findStep", platformOf())[1]}`}
+              aria-label={t("chatView.previousMatch")}
+              title={`${t("chatView.previousMatch")}  ${keysFor("findStep", platformOf())[1]}`}
               className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
             >
               <ChevronUp size={15} />
@@ -898,16 +1031,16 @@ export function ChatView({ bot }: { bot: Bot }) {
             <button
               onClick={() => setHitAt((at) => stepHit(at, hits.length, 1))}
               disabled={hits.length === 0}
-              aria-label="Next match"
-              title={`Next match  ${keysFor("findStep", platformOf())[0]}`}
+              aria-label={t("chatView.nextMatch")}
+              title={`${t("chatView.nextMatch")}  ${keysFor("findStep", platformOf())[0]}`}
               className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
             >
               <ChevronDown size={15} />
             </button>
             <button
               onClick={closeFind}
-              aria-label="Close find"
-              title={`Close  ${keysFor("close", platformOf())[0]}`}
+              aria-label={t("chatView.closeFind")}
+              title={`${t("common.close")}  ${keysFor("close", platformOf())[0]}`}
               className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <X size={15} />
@@ -917,7 +1050,7 @@ export function ChatView({ bot }: { bot: Bot }) {
       )}
       {/* The conversation and the terminal, which can sit on any side of
           it (terminal/TerminalDock.tsx). */}
-      <div ref={terminal.body} className="flex min-h-0 min-w-0 flex-1">
+      <div ref={terminal.body} className="relative flex min-h-0 min-w-0 flex-1">
       {terminal.slot("left")}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {terminal.slot("top")}
@@ -940,7 +1073,7 @@ export function ChatView({ bot }: { bot: Bot }) {
               className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-small text-muted-foreground transition-colors duration-150 hover:border-foreground/25 hover:text-foreground disabled:opacity-60"
             >
               {earlier.loading && <Loader2 size={12} className="animate-spin" />}
-              Show earlier messages ({start + earlier.remaining} more)
+              {t("chatView.showEarlier", { count: start + earlier.remaining })}
             </button>
           ) : (
             first && (
@@ -967,6 +1100,7 @@ export function ChatView({ bot }: { bot: Bot }) {
                       onOpenExchange={(asker) =>
                         setExchange({ peerId: asker.peerId, messageId: asker.message.id, text: asker.message.text ?? "" })
                       }
+                      onOpenTrace={() => openTrace(askForFold(row.fold.messages))}
                     >
                       {openFolds.has(row.fold.key) && rowsOf(row.fold.messages, (offset) => row.fold.indices[offset])}
                     </TurnFoldLine>,
@@ -1003,14 +1137,17 @@ export function ChatView({ bot }: { bot: Bot }) {
             provisioning={provisioning}
             speed={openLane?.codexDispatch}
             onStop={() => dispatch({ type: "interrupt", botId: bot.id })}
+            onOpenTrace={() => openTrace({})}
           />
         </div>
       </div>
       <JumpToLatest show={away && !empty} fresh={freshBelow} onJump={toLatest} />
       </div>
 
+      <BrowsingOnMac botId={bot.id} name={bot.name} />
       {terminal.slot("bottom")}
       <GoalDialog />
+      <QuestionDock botId={bot.id} questions={questions} />
       {/* approvals, other conversations, the engine, what waits, guest
           mail and the goal all speak through the composer's one tray */}
       <Composer
@@ -1027,6 +1164,16 @@ export function ChatView({ bot }: { bot: Bot }) {
       />
       </div>
       {terminal.slot("right")}
+      {traceShown && (
+        <TracePanel
+          bot={bot}
+          taskId={bot.activeTaskId ?? bot.threadId}
+          ask={traceShown}
+          working={working}
+          onClose={() => setTraceAsk(null)}
+        />
+      )}
+      <BrowserDock botNames={botNames} />
       </div>
       {terminal.overlay}
       {terminal.panel}

@@ -1,7 +1,8 @@
 // How an agent sounds, and the call you have with it.
 //
 // VoiceCard is the picker in agent settings: every voice the configured
-// vendors offer, with a one-tap preview in the agent's own voice.
+// vendors offer, one vendor at a time, with a one-tap preview in the
+// agent's own voice.
 //
 // CallOverlay is the call itself: a loop of listen → think → speak.
 // Your words go through speech recognition and become an ordinary turn;
@@ -15,21 +16,33 @@ import { Mic } from "@/components/icons";
 import { Phone } from "@/components/icons";
 import { PhoneOff } from "@/components/icons";
 import { Volume2 } from "@/components/icons";
-import { api, useStore, type Bot, type Message } from "@/state/store";
+import { api, useStore, type Bot, type Message, type VoiceProvider } from "@/state/store";
 import { BLOK_COLORS, type BlokColor } from "@/lib/mascot";
 import { AgentAvatar } from "./Avatar";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { routeSpokenToRoom } from "@/lib/spokenRouting";
 import { thisComputer } from "@/lib/thisComputer";
+import { t } from "@/lib/i18n";
 
 interface VoiceOption {
-  provider: "elevenlabs" | "openai" | "system";
+  provider: VoiceProvider;
   id: string;
   name: string;
 }
 
-const PREVIEW_LINE = "Hi, this is how I sound. Ready when you are.";
+/** Each vendor as the picker names it, in the order the server lists
+ * them: the ones somebody set up first, the Mac's own last. Product
+ * names, the same in every language. */
+const PROVIDERS: Array<[VoiceProvider, string]> = [
+  ["elevenlabs", "ElevenLabs"],
+  ["openai", "OpenAI"],
+  ["fish", "Fish Audio"],
+  ["xai", "xAI"],
+  ["chatterbox", "Chatterbox"],
+  ["system", "Mac"],
+];
+
 
 async function fetchSpeech(botId: string, text?: string): Promise<HTMLAudioElement> {
   const res = await fetch(`/api/bots/${botId}/speak`, {
@@ -37,7 +50,7 @@ async function fetchSpeech(botId: string, text?: string): Promise<HTMLAudioEleme
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "speech failed");
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? t("voice.speechFailed"));
   const url = URL.createObjectURL(await res.blob());
   const audio = new Audio(url);
   audio.addEventListener("ended", () => URL.revokeObjectURL(url), { once: true });
@@ -107,7 +120,19 @@ export function VoiceCard({ bot }: { bot: Bot }) {
   const [voices, setVoices] = useState<VoiceOption[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const configured = state.config?.speech?.elevenlabs || state.config?.speech?.openai || state.config?.speech?.system;
+  const [shown, setShown] = useState<VoiceProvider | null>(null);
+  const speech = state.config?.speech;
+  const configured =
+    speech?.elevenlabs || speech?.openai || speech?.fish || speech?.xai || speech?.chatterbox || speech?.system;
+  // one vendor's voices at a time: a Fish Audio list alone can run to a
+  // hundred, and the others would scroll out of reach under it
+  const offered = PROVIDERS.filter(([provider]) => voices?.some((v) => v.provider === provider));
+  const current =
+    (shown && offered.some(([p]) => p === shown) ? shown : null) ??
+    (bot.voice && offered.some(([p]) => p === bot.voice!.provider) ? bot.voice.provider : null) ??
+    offered[0]?.[0] ??
+    null;
+  const listed = (voices ?? []).filter((v) => v.provider === current);
 
   useEffect(() => {
     if (!open || voices !== null) return;
@@ -126,7 +151,8 @@ export function VoiceCard({ bot }: { bot: Bot }) {
   const preview = () => {
     if (previewing) return;
     setPreviewing(true);
-    fetchSpeech(bot.id, PREVIEW_LINE)
+    // heard in the reader's own language, like everything else they read
+    fetchSpeech(bot.id, t("voice.previewLine"))
       .then((audio) => {
         audio.addEventListener("ended", () => setPreviewing(false), { once: true });
         return audio.play();
@@ -141,16 +167,16 @@ export function VoiceCard({ bot }: { bot: Bot }) {
     <div className="mt-4 rounded-2xl border bg-card p-4">
       <button className="flex w-full items-center justify-between text-left" onClick={() => setOpen(!open)}>
         <div>
-          <div className="text-ui font-semibold text-foreground">Voice</div>
+          <div className="text-ui font-semibold text-foreground">{t("voice.voice")}</div>
           <div className="mt-0.5 text-body text-muted-foreground">
             {!configured
-              ? "Add an ElevenLabs or OpenAI key in Settings, Voices first."
+              ? t("voice.addAVoiceKeyOr")
               : bot.voice
-                ? `Speaks as ${bot.voice.name ?? bot.voice.id} · calls enabled`
-                : "Pick a voice to call this agent."}
+                ? t("voice.speaksAs", { voice: bot.voice.name ?? bot.voice.id })
+                : t("voice.pickAVoiceToCall")}
           </div>
         </div>
-        <span className="text-small text-muted-foreground">{open ? "Hide" : "Choose"}</span>
+        <span className="text-small text-muted-foreground">{open ? t("common.hide") : t("voice.choose")}</span>
       </button>
 
       {open && (
@@ -159,10 +185,10 @@ export function VoiceCard({ bot }: { bot: Bot }) {
             <div className="mb-2 flex items-center gap-2">
               <Button size="sm" variant="secondary" onClick={preview} disabled={previewing}>
                 <Volume2 size={13} />
-                {previewing ? "Playing…" : "Preview"}
+                {previewing ? t("voice.playing") : t("common.preview")}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => choose(null)}>
-                Remove voice
+                {t("voice.removeVoice")}
               </Button>
               <label className="ml-auto flex items-center gap-1.5 text-small text-muted-foreground">
                 <input
@@ -176,20 +202,39 @@ export function VoiceCard({ bot }: { bot: Bot }) {
                   }
                   className="accent-(--brand)"
                 />
-                Read replies aloud
+                {t("voice.readRepliesAloud")}
               </label>
             </div>
           )}
-          <div className="flex max-h-[240px] flex-col gap-0.5 overflow-y-auto">
+          {offered.length > 1 && (
+            <div role="tablist" aria-label={t("voice.voicesFrom")} className="mb-2 flex flex-wrap gap-1">
+              {offered.map(([provider, label]) => (
+                <button
+                  key={provider}
+                  type="button"
+                  role="tab"
+                  aria-selected={current === provider}
+                  onClick={() => setShown(provider)}
+                  className={cn(
+                    "h-7 rounded-full px-3 text-small font-medium transition-colors duration-150",
+                    current === provider ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div role={offered.length > 1 ? "tabpanel" : undefined} className="flex max-h-[240px] flex-col gap-0.5 overflow-y-auto">
             {voices === null && !error && (
-              <div className="py-3 text-body text-muted-foreground">Loading voices…</div>
+              <div className="py-3 text-body text-muted-foreground">{t("voice.loadingVoices")}</div>
             )}
             {voices?.length === 0 && (
               <div className="py-3 text-body text-muted-foreground">
-                No voices available. Check your keys in Settings, Voices.
+                {t("voice.noVoicesAvailableCheckYour")}
               </div>
             )}
-            {(voices ?? []).map((voice) => {
+            {listed.map((voice) => {
               const active = bot.voice?.provider === voice.provider && bot.voice?.id === voice.id;
               return (
                 <button
@@ -211,9 +256,11 @@ export function VoiceCard({ bot }: { bot: Bot }) {
                   <span className="flex-1 truncate text-body font-medium text-foreground">
                     {voice.name}
                   </span>
-                  <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-micro uppercase tracking-wide text-muted-foreground">
-                    {voice.provider === "elevenlabs" ? "11L" : voice.provider === "openai" ? "OpenAI" : "Mac"}
-                  </span>
+                  {offered.length <= 1 && (
+                    <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-micro uppercase tracking-wide text-muted-foreground">
+                      {PROVIDERS.find(([p]) => p === voice.provider)?.[1] ?? voice.provider}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -254,7 +301,7 @@ function startRecognition(handlers: {
     };
     recog.onerror = (event: any) => {
       if (event.error === "no-speech") handlers.onSilence();
-      else handlers.onError(`microphone: ${event.error}`);
+      else handlers.onError(t("voice.micError", { error: event.error }));
     };
     recog.start();
     return { stop: () => recog.stop(), needsManualFinish: false };
@@ -272,7 +319,7 @@ function startRecognition(handlers: {
       needsManualFinish: true,
     };
   }
-  handlers.onError("No microphone available.");
+  handlers.onError(t("voice.noMicrophone"));
   return null;
 }
 
@@ -389,17 +436,17 @@ export function CallOverlay({ bot, onClose }: { bot: Bot; onClose: () => void })
 
   const stateLabel =
     callState === "listening"
-      ? heard || "Listening…"
+      ? heard || t("voice.state.listening")
       : callState === "thinking"
-        ? "Thinking…"
+        ? t("voice.state.thinking")
         : callState === "speaking"
-          ? "Speaking"
+          ? t("voice.state.speaking")
           : "";
 
   return (
     <div className="fixed inset-0 z-50 flex animate-fade-in flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
       <span className="absolute right-5 top-5 rounded-full border border-warning/50 bg-warning/10 px-2 py-0.5 text-caption font-semibold uppercase tracking-wider text-warning">
-        Beta
+        {t("voice.beta")}
       </span>
       <div className="flex flex-col items-center gap-5">
         <div
@@ -423,7 +470,7 @@ export function CallOverlay({ bot, onClose }: { bot: Bot; onClose: () => void })
           {callState === "speaking" && (
             <button
               onClick={bargeIn}
-              title="Interrupt and talk"
+              title={t("voice.interruptAndTalk")}
               className="flex size-14 items-center justify-center rounded-full border bg-card text-foreground shadow-sm transition-transform active:scale-95"
             >
               <Mic size={20} />
@@ -437,12 +484,12 @@ export function CallOverlay({ bot, onClose }: { bot: Bot; onClose: () => void })
                 finishUtterance(heardRef.current);
               }}
             >
-              Done talking
+              {t("voice.doneTalking")}
             </Button>
           )}
           <button
             onClick={hangUp}
-            title="End call"
+            title={t("voice.endCall")}
             className="flex size-14 items-center justify-center rounded-full bg-destructive text-white shadow-md transition-transform active:scale-95"
           >
             <PhoneOff size={20} />
@@ -462,8 +509,8 @@ export function CallButton({ bot }: { bot: Bot }) {
       <Button
         variant="ghost"
         size="icon"
-        title={`Call ${bot.name}`}
-        aria-label={`Call ${bot.name}`}
+        title={t("voice.call", { name: bot.name })}
+        aria-label={t("voice.call", { name: bot.name })}
         onClick={() => setCalling(true)}
       >
         <Phone size={16} />
@@ -574,7 +621,7 @@ export function GroupCallOverlay({
           setCallState("speaking");
           callStateRef.current = "speaking";
           setSpeakingId(speaker?.id ?? null);
-          setCaption(`${speaker?.name ?? "Agent"}: ${message.text!.slice(0, 120)}`);
+          setCaption(t("voice.caption", { name: speaker?.name ?? t("common.agent"), text: message.text!.slice(0, 120) }));
           if (speaker?.voice) {
             try {
               const audio = await fetchSpeech(speaker.id, message.text!);
@@ -655,15 +702,15 @@ export function GroupCallOverlay({
 
   const stateLabel =
     callState === "listening"
-      ? heard || "Listening. Say a name or start talking."
+      ? heard || t("voice.state.roomListening")
       : callState === "thinking"
-        ? "The room is thinking…"
+        ? t("voice.state.roomThinking")
         : caption;
 
   return (
     <div className="fixed inset-0 z-50 flex animate-fade-in flex-col items-center justify-center bg-background/95 backdrop-blur-sm">
       <span className="absolute right-5 top-5 rounded-full border border-warning/50 bg-warning/10 px-2 py-0.5 text-caption font-semibold uppercase tracking-wider text-warning">
-        Beta
+        {t("voice.beta")}
       </span>
       <div className="flex flex-col items-center gap-6">
         <div className="flex items-end gap-3">
@@ -698,7 +745,7 @@ export function GroupCallOverlay({
           {callState === "speaking" && (
             <button
               onClick={interrupt}
-              title="Interrupt and talk"
+              title={t("voice.interruptAndTalk")}
               className="flex size-14 items-center justify-center rounded-full border bg-card text-foreground shadow-sm transition-transform active:scale-95"
             >
               <Mic size={20} />
@@ -712,12 +759,12 @@ export function GroupCallOverlay({
                 finishUtterance(heardRef.current);
               }}
             >
-              Done talking
+              {t("voice.doneTalking")}
             </Button>
           )}
           <button
             onClick={hangUp}
-            title="End call"
+            title={t("voice.endCall")}
             className="flex size-14 items-center justify-center rounded-full bg-destructive text-white shadow-md transition-transform active:scale-95"
           >
             <PhoneOff size={20} />
@@ -746,10 +793,10 @@ export function GroupCallButton({
         size="icon"
         title={
           voiced === members.length
-            ? `Call ${blok.name}`
-            : `Call ${blok.name} (${members.length - voiced} without a voice will reply in text)`
+            ? t("voice.call", { name: blok.name })
+            : t("voice.callSomeInText", { name: blok.name, count: members.length - voiced })
         }
-        aria-label={`Call ${blok.name}`}
+        aria-label={t("voice.call", { name: blok.name })}
         onClick={() => setCalling(true)}
       >
         <Phone size={16} />

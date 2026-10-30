@@ -18,6 +18,7 @@ import { cn } from "@/lib/cn";
 import { DiffLines, type DiffLine } from "./DiffLines";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { MAX_SKILL_CHARS, skillLength } from "@/lib/skillLength";
+import { t, type MessageKey } from "@/lib/i18n";
 
 /** How long the instructions are against the limit, red once over it. */
 function LengthCount({ length }: { length: number }) {
@@ -28,7 +29,7 @@ function LengthCount({ length }: { length: number }) {
         length > MAX_SKILL_CHARS ? "text-destructive" : "text-muted-foreground",
       )}
     >
-      {length.toLocaleString()} / {MAX_SKILL_CHARS.toLocaleString()}
+      {t("skillsPanel.lengthOfMax", { length, max: MAX_SKILL_CHARS })}
     </span>
   );
 }
@@ -43,7 +44,7 @@ function nameFor(markdown: string, fileName: string): string {
     declared?.trim().replace(/^["']|["']$/g, "") ||
     heading?.trim() ||
     fileName ||
-    "New skill"
+    t("skillsPanel.newSkill")
   );
 }
 
@@ -80,13 +81,12 @@ function ReviewImport({
       <div className="flex items-start gap-2.5 rounded-xl bg-warning/10 px-3 py-2.5">
         <ShieldAlert size={15} className="mt-0.5 shrink-0 text-warning" />
         <div className="text-body leading-relaxed text-warning">
-          Agents using this skill follow these instructions. Read them first, and only add skills
-          you trust.
+          {t("skillsPanel.agentsUsingThisSkillFollow")}
         </div>
       </div>
 
       <label className="mt-3 block">
-        <div className="mb-1.5 text-body font-medium text-muted-foreground">Name</div>
+        <div className="mb-1.5 text-body font-medium text-muted-foreground">{t("common.name")}</div>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -95,7 +95,7 @@ function ReviewImport({
       </label>
 
       <div className="mb-1.5 mt-3 text-body font-medium text-muted-foreground">
-        Instructions
+        {t("common.instructions")}
       </div>
       <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-xl border bg-muted/50 p-3 font-mono text-small leading-relaxed text-foreground">
         {draft.markdown}
@@ -103,17 +103,17 @@ function ReviewImport({
 
       {tooLong && (
         <div className="mt-2 text-small text-destructive">
-          Too long: {length.toLocaleString()} of {MAX_SKILL_CHARS.toLocaleString()} characters.
+          {t("skillsPanel.tooLong", { length, max: MAX_SKILL_CHARS })}
         </div>
       )}
       {error && <div className="mt-2 text-small text-destructive">{error}</div>}
 
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" onClick={onBack} className="flex-1">
-          Back
+          {t("common.back")}
         </Button>
         <Button onClick={install} disabled={saving || tooLong} className="flex-1">
-          {saving ? <Loader2 size={13} className="animate-spin" /> : "Install skill"}
+          {saving ? <Loader2 size={13} className="animate-spin" /> : t("skillsPanel.installSkill")}
         </Button>
       </div>
     </div>
@@ -156,7 +156,7 @@ export function AddSkill({
         className="flex flex-col items-center gap-1.5 rounded-xl border border-dashed py-6 transition-colors duration-150 hover:border-ring/50 hover:bg-accent/50"
       >
         <FileText size={18} className="text-muted-foreground" />
-        <span className="text-body font-medium text-foreground">Drop a .md file, or click to choose</span>
+        <span className="text-body font-medium text-foreground">{t("skillsPanel.dropAMdFileOr")}</span>
       </button>
       <input
         ref={fileRef}
@@ -171,14 +171,14 @@ export function AddSkill({
 
       <div className="my-3 flex items-center gap-3 text-small text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
-        or write it
+        {t("skillsPanel.orWriteIt")}
         <span className="h-px flex-1 bg-border" />
       </div>
 
       <Textarea
         value={markdown}
         onChange={(e) => setMarkdown(e.target.value)}
-        placeholder={`Use this when…\n\n1. First step\n2. Second step\n\nNot for: when to leave this alone.\nReturn: what to hand back.\nApproval: what needs a human first.`}
+        placeholder={t("skillsPanel.useThisWhen1First")}
         className="min-h-[180px] flex-1 resize-none font-mono text-small leading-relaxed"
       />
       <div className="mt-1.5 text-right">
@@ -187,14 +187,14 @@ export function AddSkill({
 
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" onClick={onBack} className="flex-1">
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button
           disabled={!markdown.trim()}
           onClick={() => setReview({ name: nameFor(markdown, fileName), markdown })}
           className="flex-1"
         >
-          Review
+          {t("common.review")}
         </Button>
       </div>
     </div>
@@ -215,8 +215,8 @@ export function AddSkillDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[84vh] max-w-[620px] flex-col">
-        <DialogTitle>Add a skill</DialogTitle>
-        <DialogDescription>Drop a Markdown file, or write one.</DialogDescription>
+        <DialogTitle>{t("skillsPanel.addASkill")}</DialogTitle>
+        <DialogDescription>{t("skillsPanel.dropAMarkdownFileOr")}</DialogDescription>
         <div className="mt-4 flex min-h-0 flex-1 flex-col">
           <AddSkill
             onBack={() => onOpenChange(false)}
@@ -246,7 +246,34 @@ export interface Proposal {
   diff?: DiffLine[];
   /** The skill has changed so much since that the change no longer fits. */
   stale?: boolean;
+  /** The version it was written against, and the version the skill is at
+   * now, which keeping it is checked against. */
+  base?: number;
+  current?: number;
+  /** What made it worth suggesting (server/proposals.ts, Trigger). */
+  trigger?: "conversation" | "tools" | "recovery" | "correction" | "deviation" | "agent";
+  /** An agent asked for it, or another app, rather than a review. */
+  by?: "review" | "agent" | "app";
+  /** An agent's whole new text, written against a version that has since
+   * moved on: keeping it as it is would undo that version. */
+  movedOn?: boolean;
+  /** A change to a built-in: keeping it makes your own copy. */
+  builtin?: boolean;
 }
+
+/** Who it is from and why it is here, one sentence for each reason. */
+const FROM_BECAUSE: Record<NonNullable<Proposal["trigger"]>, MessageKey> = {
+  conversation: "skillsPanel.from.conversation",
+  tools: "skillsPanel.from.tools",
+  recovery: "skillsPanel.from.recovery",
+  correction: "skillsPanel.from.correction",
+  deviation: "skillsPanel.from.deviation",
+  agent: "skillsPanel.from.agent",
+};
+
+/** Who it is from, inside a sentence: an agent by its name, another app
+ * as "an app on this computer". */
+const fromWhom = (p: Proposal) => (p.by === "app" ? p.botName.charAt(0).toLowerCase() + p.botName.slice(1) : p.botName);
 
 /**
  * A skill the workspace wrote and has not installed.
@@ -273,10 +300,13 @@ export function ProposedSkill({ proposal, onDone }: { proposal: Proposal; onDone
   const act = (keep: boolean) => {
     setBusy(true);
     setError(null);
+    // a change is kept against the version it was shown against, so one
+    // that moved on while this card was open is refused, not stacked
+    const seen = patch && proposal.current !== undefined ? { from: proposal.current } : {};
     const call = keep
       ? api(`/api/skills/proposals/${proposal.id}`, {
           method: "POST",
-          body: JSON.stringify(patch && !editing ? {} : { name, description, body }),
+          body: JSON.stringify(patch && !editing ? seen : { ...seen, name, description, body }),
         })
       : api(`/api/skills/proposals/${proposal.id}`, { method: "DELETE" });
     call
@@ -289,27 +319,39 @@ export function ProposedSkill({ proposal, onDone }: { proposal: Proposal; onDone
     <div className="rounded-xl border border-brand/30 bg-brand-soft/30 p-3">
       <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
         <div className="text-body font-medium text-foreground">
-          {patch ? `A change to ${proposal.name}` : name}
+          {patch ? t("skillsPanel.aChangeTo", { name: proposal.name }) : name}
         </div>
         <div className="mt-0.5 text-small leading-relaxed text-muted-foreground">
           {proposal.because}
         </div>
         <div className="mt-1 text-small text-muted-foreground/80">
-          From {proposal.botName}. {open ? "Hide" : "Show"}
+          {t(proposal.trigger ? FROM_BECAUSE[proposal.trigger] : "skillsPanel.from.someone", { who: fromWhom(proposal) })}
+          {patch &&
+            proposal.base !== undefined &&
+            ` ${proposal.base === 0 ? t("skillsPanel.againstBuiltIn") : t("skillsPanel.againstVersion", { version: String(proposal.base) })}`}{" "}
+          {open ? t("common.hide") : t("skillsPanel.show")}
         </div>
       </button>
+
+      {patch && proposal.builtin && (
+        <div className="mt-2 text-small leading-relaxed text-muted-foreground">
+          {t("skillsPanel.keepingThisMakesTheBuilt")}
+        </div>
+      )}
 
       {/* An edited skill is somebody's own work, and a suggestion that
           would land on top of it should say so before it is approved. */}
       {proposal.overwritesEdits && (
         <div className="mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-small leading-relaxed text-warning">
-          Keeping this replaces your own edits to this skill.
+          {t("skillsPanel.keepingThisReplacesYourOwn")}
         </div>
       )}
 
       {open && patch && proposal.stale && (
-        <div className="mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-small leading-relaxed text-warning">
-          The skill changed since this was suggested. Discard it.
+        <div role="status" className="mt-2 rounded-lg bg-warning/10 px-2.5 py-1.5 text-small leading-relaxed text-warning">
+          {proposal.movedOn
+            ? t("skillsPanel.movedOn", { base: String(proposal.base), current: String(proposal.current) })
+            : t("skillsPanel.theSkillChangedSinceThis")}
         </div>
       )}
 
@@ -318,12 +360,12 @@ export function ProposedSkill({ proposal, onDone }: { proposal: Proposal; onDone
           <div className="max-h-[320px] overflow-auto rounded-lg border bg-background py-2">
             <DiffLines lines={proposal.diff} />
           </div>
-          {!proposal.stale && (
+          {(!proposal.stale || proposal.movedOn) && (
             <button
               onClick={() => setEditing(true)}
               className="mt-1.5 text-small text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
             >
-              Edit before keeping
+              {t("skillsPanel.editBeforeKeeping")}
             </button>
           )}
         </div>
@@ -334,7 +376,7 @@ export function ProposedSkill({ proposal, onDone }: { proposal: Proposal; onDone
           <Input value={name} onChange={(e) => setName(e.target.value)} className="text-body" />
           <Input
             value={description}
-            placeholder="When to use it"
+            placeholder={t("skillsPanel.whenToUseIt")}
             onChange={(e) => setDescription(e.target.value)}
             className="text-body"
           />
@@ -354,10 +396,10 @@ export function ProposedSkill({ proposal, onDone }: { proposal: Proposal; onDone
           disabled={busy || !name.trim() || !body.trim() || (patch && proposal.stale && !editing)}
           onClick={() => act(true)}
         >
-          Keep it
+          {t("skillsPanel.keepIt")}
         </Button>
         <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(false)}>
-          Discard
+          {t("common.discard")}
         </Button>
       </div>
     </div>

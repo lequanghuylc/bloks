@@ -34,21 +34,24 @@ import {
   ShareMenu,
   systemPreferences,
   utilityProcess,
+  WebContentsView,
 } from "electron";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { overlayChoice, renderBadge } from "./taskbar-badge.mjs";
 import { normalizeBadgeCount, resolveWindowState } from "./window-state.mjs";
-import { appMenuTemplate } from "./app-menu.mjs";
+import { appMenuTemplate, TAB_COMMANDS } from "./app-menu.mjs";
+import { menuLanguage, menuWords } from "./menu-words.mjs";
 import { drainWait } from "./drain-wait.mjs";
 import { mayLookAgain, newestBeforeInstall, updateFrame } from "./update-check.mjs";
 import { markInstall, restartIntoUpdate, takeInstallMark, within } from "./update-restart.mjs";
 import { claimPairLink, reachOf, startLanProxy, startRemoteProxy } from "./remote.mjs";
 import { nativeSettingsObservation } from "./settings-observation.mjs";
 import { sameAppOrigin } from "./navigation.mjs";
-import { joinLink, linkInArgv, planLink, teamLink } from "./links.mjs";
+import { installLink, joinLink, linkInArgv, planLink, teamLink } from "./links.mjs";
 import { licencePrint, withLicence } from "./plan-link.mjs";
 import { keepPlan, planFromReport, readKeptPlan } from "./account-plan.mjs";
 import {
@@ -64,6 +67,8 @@ import {
 } from "./hosting-move.mjs";
 import { HOSTED_TARGET, OWN_LOCAL_KINDS, ServerAsks, othersFor, pairRefusal } from "./server-line.mjs";
 import { terminalQuery } from "./terminal-window.mjs";
+import { conversationTarget, createNotch, notchPlatform } from "./notch.mjs";
+import { AppBrowser, allowedForAgent, downloadName, partitionFor, refusedNavigation } from "./app-browser.mjs";
 import os from "node:os";
 
 // vendored by scripts/bundle-updater.mjs: the packaged app has no
@@ -88,6 +93,7 @@ import {
   markDefault,
   mergeDrains,
   muteFor,
+  NOTIFY_LEVELS,
   nextMuteEnd,
   oneAtATime,
   readRegistry,
@@ -99,6 +105,8 @@ import {
   rerollMark,
   setCurrent,
   setSameAccent,
+  setLanguage,
+  setNotch,
   settle,
   shownMark,
   snapshot,
@@ -106,9 +114,11 @@ import {
   writeRegistry,
 } from "./workspaces.mjs";
 import { startMeeting, startSpeech, stopMeeting, stopSpeech } from "./speech.mjs";
+import { createAttentionSayer } from "./attention-said.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP_ICON = path.join(HERE, "resources/app-icon.png");
+const APP_ICON = path.join(HERE, process.platform === "darwin"
+  ? "resources/app-icon-mac.png" : "resources/app-icon.png");
 
 // Spelled as an IPv4 literal, not "localhost": Vite binds v4, and the name
 // can resolve to ::1 first, which paints an empty window.
@@ -181,10 +191,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 // bloks:// links from the website ("Add to Bloks" on a team in the
-// gallery). Only a gallery team by name is understood: a link cannot
-// point the app at an arbitrary address, and what it opens is the same
-// review a person sees when importing by hand, so nothing is created
-// until they choose the seats. macOS hands links over with open-url, the
+// gallery), and bloks://install?url= for a team or a skill anywhere on
+// https. What either opens is the same review a person sees when
+// importing by hand, so nothing is created until they confirm it. macOS hands links over with open-url, the
 // others as an argument, to a second launch or to the one the link
 // started (electron/links.mjs).
 // A development run that starts its own servers is a throwaway, often on
@@ -193,7 +202,7 @@ if (!app.requestSingleInstanceLock()) {
 if (app.isPackaged || !HOSTS_SERVERS) app.setAsDefaultProtocolClient("bloks");
 let pendingLink = null;
 function deliverLink(raw) {
-  const link = teamLink(raw) ?? joinLink(raw) ?? planLink(raw);
+  const link = teamLink(raw) ?? joinLink(raw) ?? planLink(raw) ?? installLink(raw);
   if (!link) return;
   const main = BrowserWindow.getAllWindows().find((w) => isWorkspaceWindow(w));
   if (!main || main.webContents.isLoading()) {
@@ -222,6 +231,19 @@ handle("link:pending", () => {
 // the same way a link waits above.
 let pendingMenuCommand = null;
 function menuCommand(command) {
+  // The conversation tabs' items (⌘T, ⌘W, ⌘⇧[ and ⌘⇧]) are about the
+  // window in front, and with none in front there is nothing for them to
+  // do: they never open a window or wait for one, and never reach a
+  // workspace window behind a terminal's. A window with no conversations
+  // in it takes ⌘W as the Close it always was. The page plays the rest
+  // as the keys they are (src/lib/conversationKeys.ts).
+  if (TAB_COMMANDS.includes(command)) {
+    const front = BrowserWindow.getFocusedWindow();
+    if (!front || front.isDestroyed()) return;
+    if (command === "closeConversation" && !isWorkspaceWindow(front)) front.close();
+    else front.webContents.send("menu:command", command);
+    return;
+  }
   const main = BrowserWindow.getAllWindows().find((w) => isWorkspaceWindow(w));
   if (!main || main.webContents.isLoading()) {
     pendingMenuCommand = command;
@@ -509,6 +531,8 @@ function runFor(id) {
       handLicence(run);
       handName(run);
       handMark(run);
+      handAttention(run);
+      handBrowser(run);
       setStatus(run, "running");
       pointWindows(run.id);
     },
@@ -552,6 +576,8 @@ function launch(id) {
     if (up) handLicence(run);
     if (up) handName(run);
     if (up) handMark(run);
+    if (up) handAttention(run);
+    if (up) handBrowser(run);
     setStatus(run, up ? "running" : "failed");
     return up;
   });
@@ -724,6 +750,49 @@ function handName(run) {
   }
 }
 
+/** Hands a workspace's mute and notification level to its server, which
+ * holds a phone's "your answer is ready" to them as this end holds a
+ * banner (server/answer-ready.ts), and keeps them (server/attention.ts).
+ * The mute's end is a time the server reads itself, so only a change has
+ * to be said. A server on another machine, your hosted one or one you
+ * joined as its owner, is told through its stand-in instead
+ * (electron/attention-said.mjs). */
+function handAttention(run) {
+  const ws = run ? entryOf(run.id) : null;
+  if (!ws) return;
+  if (isRemoteKind(ws.kind)) {
+    if (run.status === "running" && run.port) void attentionThere().say(ws.id, { kind: ws.kind, base: `http://127.0.0.1:${run.port}` }, ws);
+    return;
+  }
+  if (!run.child) return;
+  try {
+    run.child.postMessage({ kind: "attention", mute: ws.mute ?? null, notify: ws.notify ?? "all" });
+  } catch {
+    /* a server on its way out hears it again when it is back */
+  }
+}
+
+/** What each workspace on another machine last took, kept beside the list. */
+let attentionSayer = null;
+const attentionThere = () =>
+  (attentionSayer ??= createAttentionSayer({ file: path.join(app.getPath("userData"), "attention-said.json") }));
+
+/** A mute or level the owner chose on a device of theirs, put to the list
+ * by the server it was said to: kept, and handed back to that server, the
+ * way a change in the switcher is. */
+function attentionFromServer(id, said) {
+  const ws = entryOf(id);
+  if (!ws || isRemoteKind(ws.kind)) throw Object.assign(new Error("There is no such workspace here."), { status: 404 });
+  if (!NOTIFY_LEVELS.includes(said?.notify)) throw Object.assign(new Error("That is not a notification level."), { status: 400 });
+  const mute = said.mute === "forever" ? "forever" : Number.isSafeInteger(said.mute) && said.mute > 0 ? said.mute : null;
+  registry = updateWorkspace(registry, id, { mute, notify: said.notify });
+  saveRegistry();
+  tellWorkspaces();
+  applyBadge();
+  const now = entryOf(id);
+  return { ok: true, mute: now.mute ?? null, notify: now.notify ?? "all" };
+}
+
 /** A name a workspace's server said: kept, and handed to the rest. */
 function keepName(name, { seed = false } = {}) {
   if (!registry || typeof name !== "string") return;
@@ -777,8 +846,11 @@ async function answerServer(id, child, said) {
   let reply;
   try {
     if (said.what === "mark") reply = markFromServer(id, said.mark);
+    else if (said.what === "attention") reply = attentionFromServer(id, said);
     else if (said.what === "workspaces") reply = await othersForPhone(id);
     else if (said.what === "pair") reply = await pairForPhone(id, said.target, said.device);
+    else if (said.what === "browser") reply = await browserCommand(id, said);
+    else if (said.what === "browser.thumbnail") reply = await browserThumbnail(id);
     else reply = { error: "The app does not answer that.", status: 404 };
   } catch (error) {
     reply = { error: String(error?.message ?? error), status: error?.status ?? 409 };
@@ -977,6 +1049,8 @@ function workspacesState() {
     // new workspace's Team choice; and the one accent, when shared
     plan: accountPlan(),
     sameAccent: registry.prefs.sameAccent,
+    // the notch's switch, only where there is a notch to show it in
+    ...(notchPlatform() ? { notch: notchOn() } : {}),
   };
 }
 
@@ -990,6 +1064,7 @@ function tellWorkspaces() {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send("workspaces:state", state);
   }
+  for (const run of servers.values()) handAttention(run);
   clearTimeout(muteTimer);
   const end = nextMuteEnd(registry.workspaces);
   if (end) {
@@ -1030,6 +1105,8 @@ async function switchWorkspace(id, { target = null, welcome = false, query = "" 
   }
   // the quick ask goes to the workspace you are in; the next one opens there
   if (moved && quickWin && !quickWin.isDestroyed()) quickWin.destroy();
+  // the notch shows the agents of the workspace you are in
+  if (moved) pointNotch(id);
   tellWorkspaces();
   applyBadge();
 }
@@ -1058,6 +1135,7 @@ function openMade(id) {
     void showIn(win, id);
   }
   if (quickWin && !quickWin.isDestroyed()) quickWin.destroy();
+  pointNotch(id);
   tellWorkspaces();
   applyBadge();
   void up.then((started) => {
@@ -1177,6 +1255,8 @@ async function pairHosted(link, { open = true } = {}) {
     await halt(added.entry.id);
   }
   fs.writeFileSync(joinedFile(added.entry.id), safeStorage.encryptString(JSON.stringify(profile)), { mode: 0o600 });
+  // a new pairing may be a new machine, which has heard nothing yet
+  attentionThere().forget(added.entry.id);
   registry = settle(added.registry, { personalDataDir: personalDataDir() });
   saveRegistry();
   tellWorkspaces();
@@ -1356,6 +1436,9 @@ function carryMove() {
 async function moveEnded(move) {
   if (move.phase !== "done") return;
   if (move.direction === "to-hosted") {
+    // the hosted server now holds the moved workspace's folder, with
+    // whatever mute that one kept, so it is told the hosted entry's again
+    attentionThere().forget(move.to.id);
     registry = markMoved(registry, move.from.id, move.to.id);
     keepMove({ moved: { at: Date.now(), from: move.from.id, to: move.to.id } });
   } else {
@@ -1760,6 +1843,8 @@ async function deleteWorkspace(id) {
   // out of it first, so nothing is showing a workspace on its way out
   if (shownId === ws.id) await switchWorkspace(PERSONAL_ID);
   await halt(ws.id);
+  // its browser, and every sign-in it kept, go with it
+  await forgetBrowser(ws.id).catch(() => {});
   registry = removeWorkspace(registry, ws.id).registry;
   saveRegistry();
   waitingCounts.delete(ws.id);
@@ -1838,6 +1923,19 @@ handle("prefs:theme", (_event, theme) => {
   registry = { ...registry, prefs: { ...registry.prefs, theme } };
   saveRegistry();
 });
+// The language is the person's as well. A choice made in one window is
+// told to every other, and the menu bar is built again in it at once.
+handle("prefs:language", (event, language) => {
+  if (!registry) return;
+  const next = setLanguage(registry, language);
+  if (next === registry) return;
+  registry = next;
+  saveRegistry();
+  installAppMenu();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && win.webContents !== event.sender) win.webContents.send("prefs:language", registry.prefs.language ?? "system");
+  }
+});
 handle("prefs:accent", (event, accent) => {
   const id = senderWorkspace(event);
   if (!registry || !id || typeof accent !== "string") return;
@@ -1848,6 +1946,16 @@ handle("prefs:accent", (event, accent) => {
 // "Same accent in every workspace" (src/components/AccentPicker.tsx): on,
 // the window's accent becomes everyone's; off, each goes back to its own.
 // Answers the accent the asking window should draw in now.
+// "Show working agents in the notch" (src/components/settings/GeneralPage.tsx):
+// kept with the theme, since it is the person's and not a workspace's;
+// off, the island's window goes altogether.
+handle("prefs:notch", (_event, on) => {
+  if (!registry || typeof on !== "boolean") return;
+  registry = setNotch(registry, on);
+  saveRegistry();
+  tellWorkspaces();
+  notch.sync(notchOn());
+});
 handle("prefs:same-accent", (event, on, showing) => {
   const id = senderWorkspace(event);
   if (!registry || typeof on !== "boolean") return null;
@@ -1864,7 +1972,7 @@ ipcMain.on("workspaces:boot", (event) => {
   // returnValue answers the moment it is set, so it is set once
   const ws = fromOurPage(event) && registry ? entryOf(senderWorkspace(event)) : null;
   event.returnValue = ws
-    ? { theme: registry.prefs.theme, accent: accentOf(registry, ws.id), sameAccent: registry.prefs.sameAccent, workspace: { id: ws.id, kind: ws.kind, name: ws.name, mark: shownMark(ws) } }
+    ? { theme: registry.prefs.theme, language: registry.prefs.language ?? null, accent: accentOf(registry, ws.id), sameAccent: registry.prefs.sameAccent, workspace: { id: ws.id, kind: ws.kind, name: ws.name, mark: shownMark(ws) } }
     : null;
 });
 
@@ -1956,6 +2064,7 @@ function installContextMenu(win) {
     if (!params.isEditable && !params.selectionText && !params.linkURL && !params.misspelledWord)
       return;
     const items = [];
+    const w = mainWords();
     if (params.misspelledWord) {
       for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
         items.push({
@@ -1967,24 +2076,24 @@ function installContextMenu(win) {
     }
     if (params.linkURL) {
       items.push(
-        { label: "Copy Link", click: () => clipboard.writeText(params.linkURL) },
+        { label: w("menu.copyLink"), click: () => clipboard.writeText(params.linkURL) },
         { type: "separator" },
       );
     }
     if (params.isEditable) {
       items.push(
-        { role: "undo", enabled: params.editFlags.canUndo },
-        { role: "redo", enabled: params.editFlags.canRedo },
+        { role: "undo", label: w("menu.undo"), enabled: params.editFlags.canUndo },
+        { role: "redo", label: w("menu.redo"), enabled: params.editFlags.canRedo },
         { type: "separator" },
-        { role: "cut", enabled: params.editFlags.canCut },
-        { role: "copy", enabled: params.editFlags.canCopy },
-        { role: "paste", enabled: params.editFlags.canPaste },
-        { role: "pasteAndMatchStyle", enabled: params.editFlags.canPaste },
+        { role: "cut", label: w("menu.cut"), enabled: params.editFlags.canCut },
+        { role: "copy", label: w("menu.copy"), enabled: params.editFlags.canCopy },
+        { role: "paste", label: w("menu.paste"), enabled: params.editFlags.canPaste },
+        { role: "pasteAndMatchStyle", label: w("menu.pasteAndMatchStyle"), enabled: params.editFlags.canPaste },
         { type: "separator" },
-        { role: "selectAll", enabled: params.editFlags.canSelectAll },
+        { role: "selectAll", label: w("menu.selectAll"), enabled: params.editFlags.canSelectAll },
       );
     } else {
-      items.push({ role: "copy", enabled: params.editFlags.canCopy });
+      items.push({ role: "copy", label: w("menu.copy"), enabled: params.editFlags.canCopy });
     }
     Menu.buildFromTemplate(items).popup({ window: win, frame: params.frame });
   });
@@ -2128,6 +2237,10 @@ function pointWindows(id) {
     if (win.isDestroyed() || (windowWorkspace.get(win) ?? shownId) !== id) continue;
     // a server that died again at once fails the load, and the next try
     // or the failure page points the window again
+    if (win === notch.window()) {
+      void showNotchIn(win, id);
+      continue;
+    }
     const query = win === quickWin ? "quick=1" : (terminalWins.get(win) ?? "");
     void showIn(win, id, query);
   }
@@ -2178,12 +2291,71 @@ function quickWindow() {
 /** Terminal windows, and the query each one loads. */
 const terminalWins = new Map();
 
-/** The main workspace window, rather than the quick ask panel or a
- * terminal of its own: the one links, menu commands and the Dock icon
- * are for. */
+/** The main workspace window, rather than the quick ask panel, the
+ * notch or a terminal of its own: the one links, menu commands and the
+ * Dock icon are for. */
 function isWorkspaceWindow(win) {
-  return Boolean(win) && !win.isDestroyed() && win !== quickWin && !terminalWins.has(win);
+  return Boolean(win) && !win.isDestroyed() && win !== quickWin && win !== notch.window() && !terminalWins.has(win);
 }
+
+// ── the notch ─────────────────────────────────────────────────────────
+// The agents at work in the MacBook's notch (electron/notch.mjs): a clear
+// window over the top of the screen, drawing the island from the page
+// with ?notch=1. Like the quick ask it shows the workspace you are in,
+// and like it, it is not a window links or the Dock are for.
+
+const notch = createNotch({
+  BrowserWindow,
+  screen,
+  preload: path.join(HERE, "preload.cjs"),
+  guard: (win) => guardNavigation(win),
+  load: (win) => void showNotchIn(win, shownId),
+});
+
+/** On unless turned off, and only on a Mac. */
+function notchOn() {
+  return notchPlatform() && registry?.prefs?.notch !== false;
+}
+
+/** The island's page, from workspace `id`'s server. While that server is
+ * starting, or will not, a clear page: the opening and failure pages are
+ * for a window someone is looking at, and this one would show them as a
+ * slab over the menu bar. pointWindows brings it back once it is up. */
+function showNotchIn(win, id) {
+  windowWorkspace.set(win, id);
+  const url = appUrl("notch=1", id);
+  return win.loadURL(url.startsWith("http") ? url : "about:blank").catch(() => {});
+}
+
+/** The island over to another workspace's agents. */
+function pointNotch(id) {
+  const win = notch.window();
+  if (win) void showNotchIn(win, id);
+}
+
+/** Only the island's own page speaks for it. */
+const fromNotch = (event) => Boolean(notch.window()) && event.sender === notch.window().webContents;
+
+handle("notch:hover", (event, over) => {
+  if (fromNotch(event)) notch.hover(over === true);
+});
+handle("notch:geometry", (event) => (fromNotch(event) ? notch.geometry() : null));
+// A row in the island: that conversation, in the window showing its
+// workspace, brought forward the way a banner's click brings it, and
+// through the same door (notify:activate).
+handle("notch:open", (event, target) => {
+  if (!fromNotch(event)) return;
+  const said = conversationTarget(target);
+  if (!said) return;
+  const id = windowWorkspace.get(notch.window()) ?? shownId;
+  const main = BrowserWindow.getAllWindows().find((w) => isWorkspaceWindow(w) && (windowWorkspace.get(w) ?? shownId) === id);
+  if (main && !main.webContents.isLoading()) {
+    raise(main);
+    main.webContents.send("notify:activate", { target: said });
+  } else {
+    void switchWorkspace(id, { target: said }).catch(() => {});
+  }
+});
 
 function openTerminalWindow(botId, workspace = shownId) {
   const query = terminalQuery(botId);
@@ -2367,6 +2539,455 @@ const pageLogBudget = lineBudget();
 handle("app:log", (_event, text) => {
   if (typeof text === "string" && pageLogBudget()) appLog(`page: ${text}`);
 });
+
+// ── the Bloks browser ─────────────────────────────────────────────────
+// A browser in the window, beside the chat, that agents drive and the
+// person watches and takes over (electron/app-browser.mjs has the rules;
+// server/app-browser.ts has the workspace's side of them).
+//
+// Each workspace browses in a session of its own, on disk, so its
+// sign-ins are its own and never the app's: the app's page runs on the
+// default session with the preload's bridge, and nothing here shares
+// either. A tab is a WebContentsView with no preload at all, sandboxed,
+// that the page in the window places by telling this process where its
+// panel is (browser:bounds). Agents reach a tab through its debugger,
+// asked by the workspace's server over the line it already has.
+
+/** Each workspace's browser, made the first time it is wanted. */
+const browsers = new Map();
+
+/** Permissions a page in the Bloks browser may have. Everything else
+ * (camera, microphone, location, notifications, devices) is refused: a
+ * page an agent opened should not be able to ask the person for any. */
+const BROWSER_GRANTS = new Set(["fullscreen", "clipboard-sanitized-write"]);
+
+/** Every port a Bloks server on this computer answers on, and the app's
+ * own page: none of them is ever loaded in, or fetched from, a tab. */
+function ownPorts() {
+  const ports = [];
+  for (const run of servers.values()) if (run.port) ports.push(run.port);
+  if (remotePort) ports.push(remotePort);
+  try {
+    ports.push(Number(new URL(DEV_URL).port));
+  } catch {
+    /* no development page */
+  }
+  return ports;
+}
+
+/** Where a workspace's downloads go, made private on first use. The
+ * server names the same folder (server/index.ts APP_BROWSER_DOWNLOADS). */
+function downloadsDir(ws) {
+  const dir = path.join(ws.dataDir, "browser-downloads");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
+
+function browserFor(id) {
+  const had = browsers.get(id);
+  if (had) return had;
+  const ws = id ? entryOf(id) : null;
+  if (!ws || isRemoteKind(ws.kind) || !ws.dataDir) return null;
+  const ses = session.fromPartition(partitionFor(id));
+  const held = { id, ses, views: new Map(), bounds: null, win: null, stateTimer: null, browser: null };
+  held.browser = new AppBrowser({
+    makeTab: (tabId) => makeBrowserTab(held, tabId),
+    onChange: () => browserChanged(held),
+    ownPorts,
+  });
+  guardBrowserSession(held, ws);
+  browsers.set(id, held);
+  return held;
+}
+
+/** The rules every page in a workspace's browser lives under. */
+function guardBrowserSession(held, ws) {
+  const { ses } = held;
+  ses.setPermissionRequestHandler((_contents, permission, callback) => callback(BROWSER_GRANTS.has(permission)));
+  ses.setPermissionCheckHandler((_contents, permission) => BROWSER_GRANTS.has(permission));
+  // Sites that refuse "embedded" browsers read the Electron token in the
+  // user agent; without it this is the Chromium it is.
+  ses.setUserAgent(ses.getUserAgent().replace(/\s(Electron|bloks|Bloks)\/\S+/g, ""));
+  // A page may not reach a Bloks server even as a picture or a fetch:
+  // the origin checks would refuse it, and this means it never gets
+  // as far as asking.
+  ses.webRequest.onBeforeRequest({ urls: ["*://127.0.0.1/*", "*://localhost/*", "*://[::1]/*"] }, (details, callback) => {
+    callback({ cancel: Boolean(refusedNavigation(details.url, { ownPorts: ownPorts() })) });
+  });
+  ses.on("will-download", (_event, item) => {
+    let dir;
+    try {
+      dir = downloadsDir(ws);
+    } catch {
+      return item.cancel();
+    }
+    const name = downloadName(item.getFilename(), (taken) => fs.existsSync(path.join(dir, taken)));
+    const file = path.join(dir, name);
+    item.setSavePath(file);
+    const control = held.browser.control;
+    const id = `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const note = (state) =>
+      held.browser.noteDownload({
+        id,
+        name,
+        path: file,
+        bytes: item.getReceivedBytes(),
+        total: item.getTotalBytes(),
+        state,
+        at: Date.now(),
+        ...(control.by === "agent" ? { by: control.name } : {}),
+      });
+    note("progressing");
+    item.on("updated", (_e, state) => note(state === "interrupted" ? "interrupted" : "progressing"));
+    item.once("done", (_e, state) => note(state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : "interrupted"));
+  });
+}
+
+/** One tab: a view with no bridge of ours, and its debugger for agents. */
+function makeBrowserTab(held, tabId) {
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: partitionFor(held.id),
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      sandbox: true,
+      webviewTag: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      // an agent drives it with the panel closed too, and a throttled
+      // page answers its debugger slowly
+      backgroundThrottling: false,
+    },
+  });
+  view.setVisible(false);
+  const wc = view.webContents;
+  try {
+    wc.debugger.attach("1.3");
+  } catch (error) {
+    appLog(`browser: debugger did not attach: ${error?.message ?? error}`);
+  }
+  held.views.set(tabId, view);
+  const tab = {
+    cdp: (method, params = {}) => boundedCdp(wc, method, params),
+    url: () => (wc.isDestroyed() ? "" : wc.getURL()),
+    title: () => (wc.isDestroyed() ? "" : wc.getTitle()),
+    load: (url) => void wc.loadURL(url).catch(() => {}),
+    loading: () => !wc.isDestroyed() && wc.isLoading(),
+    canGoBack: () => !wc.isDestroyed() && wc.navigationHistory.canGoBack(),
+    canGoForward: () => !wc.isDestroyed() && wc.navigationHistory.canGoForward(),
+    close: () => {
+      held.views.delete(tabId);
+      try {
+        held.win?.contentView.removeChildView(view);
+      } catch {
+        /* the window went first */
+      }
+      if (!wc.isDestroyed()) wc.close();
+    },
+  };
+  const changed = () => held.browser.changed();
+  for (const name of ["did-start-loading", "did-stop-loading", "page-title-updated", "did-navigate-in-page", "render-process-gone"]) wc.on(name, changed);
+  wc.on("did-navigate", () => {
+    // a new document: the last snapshot's refs name nothing on it
+    tab.refs = new Map();
+    changed();
+  });
+  // Where a tab may go, on every navigation the page starts and every
+  // redirect: never somewhere refusedNavigation names, and, while an
+  // agent drives it, nowhere its workspace's lists keep agents from.
+  const guard = (event, url) => {
+    if (refusedNavigation(url, { ownPorts: ownPorts() })) return event.preventDefault();
+    const control = held.browser.control;
+    if (control.by === "agent" && tab.by?.kind === "agent" && !allowedForAgent(url, tab.policy)) {
+      tab.blocked = url;
+      event.preventDefault();
+    }
+  };
+  wc.on("will-navigate", (event) => guard(event, event.url));
+  wc.on("will-redirect", (event) => {
+    if (event.isMainFrame) guard(event, event.url);
+  });
+  // A page that opens a window gets a tab of ours instead, under the same
+  // rules, driven by whoever drove the tab that opened it.
+  wc.setWindowOpenHandler(({ url }) => {
+    if (refusedNavigation(url, { ownPorts: ownPorts() })) return { action: "deny" };
+    const control = held.browser.control;
+    if (control.by === "agent" && !allowedForAgent(url, tab.policy)) {
+      tab.blocked = url;
+      return { action: "deny" };
+    }
+    try {
+      const opened = held.browser.newTab(tab.by ?? { kind: "person" });
+      opened.policy = tab.policy;
+      opened.load(url);
+    } catch {
+      /* the most tabs there may be are open */
+    }
+    return { action: "deny" };
+  });
+  // The person reaching into a tab an agent is driving takes it over:
+  // the agent's next step waits for it back. Its own steps' input
+  // events are not that (tab.acting, AppBrowser.command).
+  wc.on("input-event", (_event, input) => {
+    if (tab.acting || held.browser.control.by !== "agent") return;
+    if (input.type === "mouseDown" || input.type === "keyDown" || input.type === "rawKeyDown") held.browser.takeOver();
+  });
+  if (held.win && !held.win.isDestroyed()) {
+    try {
+      held.win.contentView.addChildView(view);
+    } catch {
+      /* placed when the panel next says where it is */
+    }
+  }
+  return tab;
+}
+
+/** A server that just came up hears what its browser is doing, so an
+ * agent asking after a restart is not told about nothing. */
+function handBrowser(run) {
+  const held = browsers.get(run?.id);
+  if (!held || !run.child) return;
+  try {
+    run.child.postMessage({ kind: "browser.state", state: held.browser.state() });
+  } catch {
+    /* it hears the next change */
+  }
+}
+
+/** One protocol call, bounded: a page that never answers its debugger
+ * fails the agent's step instead of holding it, and the turn, forever. */
+function boundedCdp(wc, method, params) {
+  let timer;
+  return Promise.race([
+    wc.debugger.sendCommand(method, params).finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`the page did not answer ${method} in time`)), 20_000);
+    }),
+  ]);
+}
+
+/** The windows showing workspace `id`, which hear its browser's state. */
+const windowsShowing = (id) =>
+  BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && isWorkspaceWindow(w) && (windowWorkspace.get(w) ?? shownId) === id);
+
+/** Said to the window and to the workspace's server, a beat after the
+ * last change, so a page loading is one message rather than twenty. */
+function browserChanged(held) {
+  placeTabs(held);
+  clearTimeout(held.stateTimer);
+  held.stateTimer = setTimeout(() => {
+    const state = held.browser.state();
+    for (const win of windowsShowing(held.id)) win.webContents.send("browser:state", state);
+    try {
+      servers.get(held.id)?.child?.postMessage({ kind: "browser.state", state });
+    } catch {
+      /* the server is restarting; it hears the next change */
+    }
+  }, 120);
+}
+
+/** The tab on screen where the panel is, and every other tab hidden. */
+function placeTabs(held) {
+  const win = held.win;
+  if (!win || win.isDestroyed()) return;
+  const zoom = win.webContents.getZoomFactor?.() ?? 1;
+  for (const [tabId, view] of held.views) {
+    try {
+      if (!win.contentView.children.includes(view)) win.contentView.addChildView(view);
+      const shown = Boolean(held.bounds) && tabId === held.browser.state().activeTabId;
+      if (shown) {
+        const { x, y, width, height } = held.bounds;
+        view.setBounds({ x: Math.round(x * zoom), y: Math.round(y * zoom), width: Math.round(width * zoom), height: Math.round(height * zoom) });
+      }
+      view.setVisible(shown);
+    } catch {
+      /* a view on its way out */
+    }
+  }
+}
+
+/** A workspace's tabs out of the window they were in. */
+function detachBrowser(held) {
+  const win = held.win;
+  held.win = null;
+  held.bounds = null;
+  if (!win || win.isDestroyed()) return;
+  for (const view of held.views.values()) {
+    try {
+      win.contentView.removeChildView(view);
+    } catch {
+      /* already out */
+    }
+  }
+}
+
+/** A rectangle from the page, or null for "not on screen". */
+function boundsFrom(rect) {
+  if (!rect || typeof rect !== "object") return null;
+  const n = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(20_000, Number(v))) : NaN);
+  const out = { x: n(rect.x), y: n(rect.y), width: n(rect.width), height: n(rect.height) };
+  return Object.values(out).some(Number.isNaN) || out.width < 40 || out.height < 40 ? null : out;
+}
+
+/** Windows whose page is leaving: their tabs hide until the page that
+ * replaces it says where its panel is. */
+const watchedForBrowser = new WeakSet();
+function watchWindowForBrowser(win) {
+  if (watchedForBrowser.has(win)) return;
+  watchedForBrowser.add(win);
+  win.webContents.on("did-start-navigation", (event) => {
+    if (!event.isMainFrame || event.isSameDocument) return;
+    for (const held of browsers.values()) {
+      if (held.win !== win) continue;
+      held.bounds = null;
+      placeTabs(held);
+    }
+  });
+  win.once("closed", () => {
+    for (const held of browsers.values()) if (held.win === win) held.win = null;
+  });
+}
+
+handle("browser:state", (event) => browserFor(senderWorkspace(event))?.browser.state() ?? null);
+
+handle("browser:bounds", (event, rect) => {
+  const id = senderWorkspace(event);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!id || !win || !isWorkspaceWindow(win)) return null;
+  const held = browserFor(id);
+  if (!held) return null;
+  watchWindowForBrowser(win);
+  // another workspace's tabs never sit over this one's page
+  for (const other of browsers.values()) if (other !== held && other.win === win) detachBrowser(other);
+  if (held.win !== win) {
+    detachBrowser(held);
+    held.win = win;
+  }
+  held.bounds = boundsFrom(rect);
+  placeTabs(held);
+  return held.browser.state();
+});
+
+/** What the person does in the panel that moves a page an agent may be
+ * driving. */
+const PERSON_STEERS = new Set(["navigate", "selectTab", "closeTab", "back", "forward", "reload", "stop"]);
+
+/** What the person does from the panel. One channel, a fixed set of
+ * actions: the page names one, never a path or a script. */
+handle("browser:do", async (event, action, arg) => {
+  const held = browserFor(senderWorkspace(event));
+  if (!held) return { error: "This workspace has no browser here." };
+  const { browser } = held;
+  const active = browser.active;
+  const wc = active ? held.views.get(active.id)?.webContents : null;
+  const download = () => browser.state().downloads.find((d) => d.id === arg && d.state === "completed");
+  // the person steering while an agent drives is the person taking over
+  if (PERSON_STEERS.has(action) && browser.control.by === "agent") browser.takeOver();
+  switch (action) {
+    case "navigate":
+      return browser.navigate(String(arg ?? ""));
+    case "newTab":
+      browser.newTab({ kind: "person" });
+      return { ok: true };
+    case "closeTab":
+      return { ok: browser.close(String(arg ?? "")) };
+    case "selectTab":
+      return { ok: browser.select(String(arg ?? "")) };
+    case "back":
+      if (wc?.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
+      return { ok: true };
+    case "forward":
+      if (wc?.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
+      return { ok: true };
+    case "reload":
+      wc?.reload();
+      return { ok: true };
+    case "stop":
+      wc?.stop();
+      return { ok: true };
+    case "takeOver":
+      browser.takeOver();
+      return { ok: true };
+    case "giveBack":
+      browser.giveBack();
+      return { ok: true };
+    case "openExternal": {
+      const url = active?.url() ?? "";
+      if (/^https?:\/\//i.test(url)) await shell.openExternal(url);
+      return { ok: true };
+    }
+    case "openDownload": {
+      const found = download();
+      if (found) await shell.openPath(found.path);
+      return { ok: Boolean(found) };
+    }
+    case "revealDownload": {
+      const found = download();
+      if (found) shell.showItemInFolder(found.path);
+      return { ok: Boolean(found) };
+    }
+    case "openDownloads": {
+      const ws = entryOf(held.id);
+      if (ws?.dataDir) await shell.openPath(downloadsDir(ws));
+      return { ok: true };
+    }
+    case "clearDownloads":
+      browser.clearDownloads();
+      return { ok: true };
+    case "forgetSites":
+      // signed out everywhere: cookies, storage and cache, this workspace only
+      await held.ses.clearStorageData();
+      await held.ses.clearCache();
+      return { ok: true };
+    default:
+      return { error: "The browser does not do that." };
+  }
+});
+
+/** A command from the workspace's server: an agent's, or another app's
+ * over MCP. The server checked it and decided the site and the field;
+ * this runs it and says what happened. */
+async function browserCommand(id, said) {
+  const held = browserFor(id);
+  if (!held) return { error: "This workspace has no browser here.", status: 503 };
+  const command = said?.command;
+  if (!command || typeof command.action !== "string") return { error: "That is not a browser command.", status: 400 };
+  const driver = { botId: String(said.driver?.botId ?? ""), name: String(said.driver?.name ?? "An agent") };
+  // the person sees it happen: the panel opens where the workspace is shown
+  if (command.action === "open" && !held.bounds) {
+    for (const win of windowsShowing(id)) win.webContents.send("browser:reveal", { by: driver.name });
+  }
+  return held.browser.command(command, driver);
+}
+
+/** A small picture of the tab on screen, for a phone looking on. */
+async function browserThumbnail(id) {
+  const held = browsers.get(id);
+  const active = held?.browser.active;
+  const wc = active ? held.views.get(active.id)?.webContents : null;
+  if (!wc || wc.isDestroyed()) return { jpeg: null };
+  try {
+    const image = await wc.capturePage();
+    if (image.isEmpty()) return { jpeg: null };
+    return { jpeg: image.resize({ width: 480 }).toJPEG(60).toString("base64") };
+  } catch {
+    return { jpeg: null };
+  }
+}
+
+/** A deleted workspace's browser: its tabs closed, its session emptied. */
+async function forgetBrowser(id) {
+  const held = browsers.get(id);
+  const ses = held?.ses ?? session.fromPartition(partitionFor(id));
+  if (held) {
+    held.browser.closeAll();
+    detachBrowser(held);
+    browsers.delete(id);
+  }
+  await ses.clearStorageData();
+  await ses.clearCache();
+}
 
 // ── permissions the web layer cannot ask for ───────────────────────────
 
@@ -2590,9 +3211,22 @@ async function answerScreen(child, id) {
  * arithmetic, because only it knows what counts as unread right now);
  * the others count on their servers. Each workspace's mute and level
  * decide whether its number is added at all. Windows has no badge, so it
- * gets a small overlay on the taskbar icon instead.
+ * gets a red overlay on the taskbar icon instead, drawn in
+ * taskbar-badge.mjs (never the app icon, which read as a stray logo).
  */
-let badgeOverlay = null;
+const badgeOverlays = new Map();
+/** The overlay for one choice, at 100% and 200% so it stays crisp on a
+ * high-DPI taskbar. Built once per look, since there are only ten. */
+function overlayImage({ kind, label }) {
+  const key = `${kind}:${label}`;
+  let image = badgeOverlays.get(key);
+  if (!image) {
+    image = nativeImage.createFromBitmap(renderBadge(kind, label, 16), { width: 16, height: 16 });
+    image.addRepresentation({ scaleFactor: 2, width: 32, height: 32, buffer: renderBadge(kind, label, 32) });
+    badgeOverlays.set(key, image);
+  }
+  return image;
+}
 /** The count the window on screen last reported. */
 let shownCount = 0;
 /** What each workspace's server last said is waiting. */
@@ -2611,11 +3245,8 @@ function applyBadge() {
   if (process.platform === "win32") {
     const win = mainWindow();
     if (!win) return;
-    badgeOverlay ??= nativeImage.createFromPath(APP_ICON).resize({ width: 16, height: 16 });
-    win.setOverlayIcon(
-      count > 0 && !badgeOverlay.isEmpty() ? badgeOverlay : null,
-      count > 0 ? `${count} unread` : "",
-    );
+    const choice = overlayChoice(count);
+    win.setOverlayIcon(choice.kind === "none" ? null : overlayImage(choice), choice.description);
     return;
   }
   app.setBadgeCount(count);
@@ -2994,6 +3625,27 @@ async function restoreQuickShortcut() {
   }
 }
 
+/** The catalogues the menus read (electron/menu-words.mjs): the
+ * interface's own, carried into Resources by the packaged app. */
+const LOCALES_DIR = () => (app.isPackaged ? path.join(process.resourcesPath, "locales") : path.join(HERE, "..", "src", "locales"));
+
+/** The person's words for the main process: their choice, or the
+ * system's languages under "System". */
+function mainWords() {
+  const code = menuLanguage(registry?.prefs?.language ?? null, app.getPreferredSystemLanguages?.() ?? [app.getLocale()]);
+  return menuWords(LOCALES_DIR(), code);
+}
+
+function installAppMenu() {
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(appMenuTemplate({ name: app.name, packaged: app.isPackaged, command: menuCommand, words: mainWords() })),
+  );
+}
+
 app.whenReady().then(async () => {
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
 
@@ -3002,13 +3654,7 @@ app.whenReady().then(async () => {
   // reachable from the UI. macOS keeps a menu: the hidden-inset titlebar
   // and the platform conventions expect one, and it is the stock one with
   // Settings added (electron/app-menu.mjs).
-  if (process.platform === "darwin") {
-    Menu.setApplicationMenu(
-      Menu.buildFromTemplate(appMenuTemplate({ name: app.name, packaged: app.isPackaged, command: menuCommand })),
-    );
-  } else {
-    Menu.setApplicationMenu(null);
-  }
+  installAppMenu();
 
   // getDisplayMedia in the renderer routed through here keeps the whole
   // capture inside the app's processes, which is the path macOS reliably
@@ -3050,7 +3696,11 @@ app.whenReady().then(async () => {
   } else if (HOSTS_SERVERS) {
     await openWorkspaces();
   }
+  // again, now that the list says which language the person chose
+  if (registry) installAppMenu();
   createWindow();
+  // the island in the notch, once there is a workspace for it to show
+  notch.sync(notchOn());
   // the others come up behind the window, one at a time, so the one you
   // are looking at never waits on them
   if (registry && !remoteProfile) {

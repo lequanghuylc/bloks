@@ -9,6 +9,7 @@
 //
 // Only the wording is here. Whether Redo is offered, and what it would
 // take back, is the server's to say: it holds the turns and the files.
+import { t } from "./i18n.ts";
 
 /** What the server says about redoing one message: what it would take
  * back, or that it is not offered, and why. */
@@ -28,11 +29,13 @@ export type RedoPreview =
       /** How many of the person's messages go again: more than one when
        * other words of theirs were part of the same turn. */
       resend: number;
+      /** Where its files are, when it works somewhere else and they are
+       * not on this computer: "on build-box over SSH". Nothing there is
+       * restored. */
+      filesElsewhere?: string;
     };
 
 export type RedoOffer = Extract<RedoPreview, { offered: true }>;
-
-const counted = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
 /**
  * The line under the editor: "Takes back 3 messages and puts back 2
@@ -42,16 +45,21 @@ const counted = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
  * sent something says what stays.
  */
 export function redoLine(offer: RedoOffer, agent: string): string {
-  const messages = counted(offer.messages, "message");
+  // two counts in one sentence, so each is its own counted phrase
+  const messages = t("redo.messages", { count: offer.messages });
   const takes = offer.working
-    ? `Stops ${agent}, removes ${messages} and undoes its file changes.`
+    ? offer.filesElsewhere
+      ? t("redo.stopsRemoves", { agent, messages })
+      : t("redo.stopsRemovesUndoes", { agent, messages })
     : offer.files > 0
-      ? `Removes ${messages} and restores ${counted(offer.files, "file")}.`
-      : `Removes ${messages}.`;
+      ? t("redo.removesRestores", { messages, files: t("redo.files", { count: offer.files }) })
+      : t("redo.removes", { messages });
   return [
     takes,
-    offer.resend > 1 ? `Resends your ${offer.resend} messages.` : "",
-    offer.sent ? "Messages it sent, and anything outside the folder, stay." : "",
+    // where they are is the server's phrase ("on build-box over SSH")
+    offer.filesElsewhere ? t("redo.filesElsewhere", { where: offer.filesElsewhere }) : "",
+    offer.resend > 1 ? t("redo.resends", { count: offer.resend }) : "",
+    offer.sent ? t("redo.sentStays") : "",
   ]
     .filter(Boolean)
     .join(" ");

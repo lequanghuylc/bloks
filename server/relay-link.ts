@@ -152,11 +152,15 @@ export type Wake = string | { reason: string; clients?: string[]; preview?: bool
 export interface WakePreview {
   title: string;
   body: string;
-  /** "approval" gets Allow and Deny on the lock screen. */
-  category?: "approval" | "question" | "mention" | "brief";
+  /** "approval" gets Allow and Deny on the lock screen. "reply" is an
+   * answer the person was waiting on (server/answer-ready.ts). */
+  category?: "approval" | "question" | "mention" | "brief" | "reply";
   botId?: string;
   requestId?: string;
   threadId?: string;
+  /** "brief": the brief this is about, so a tap opens that morning's and
+   * not whichever is newest by then. */
+  briefId?: string;
 }
 
 /** The build label a sealed request carried, as the header a request on

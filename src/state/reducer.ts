@@ -10,12 +10,17 @@ import type { BlokColor, BlokExpression, BlokShape } from "@/lib/mascot";
 import type { LaneContext } from "@/lib/contextCard";
 import type { CodexSpeed, CodexSpeedStatus } from "@/lib/codexSpeed";
 import type { Effort } from "@/lib/effort";
+import type { RoomAnswers, RoomRoute } from "@/lib/roomRoute";
+import type { Workplace, WorkplaceStatus } from "@/lib/workplace";
 import { resolveSettingsPage } from "../lib/settingsPages.ts";
 
 export type { BlokColor, BlokShape } from "@/lib/mascot";
 
 /** The full pages the main rail opens besides Chat, Automations and Settings. */
 export type RailPage = "overview" | "memory" | "plugins" | "usage";
+
+/** Who speaks a voice (server/speech.ts VOICE_PROVIDERS). */
+export type VoiceProvider = "elevenlabs" | "openai" | "fish" | "xai" | "chatterbox" | "system";
 
 /** What a link into Usage asked for: one agent's numbers, and the limits
  * rather than the top of the page. `at` tells two asks for the same
@@ -27,10 +32,10 @@ export interface UsageFocus {
 }
 /** One routine or watcher, for a link into Automations. */
 export type AutomationsFocus = { kind: "routine" | "watcher"; id: string };
-/** The two pages of Customize, the rail's Plugins place (Customize.tsx). */
-export type CustomizeTab = "plugins" | "skills";
+/** The pages of Customize, the rail's Plugins place (Customize.tsx). */
+export type CustomizeTab = "plugins" | "skills" | "catalog";
 /** One thing on Settings' Plugins page with a page of its own. */
-export type PluginFocus = { kind: "app" | "mcp" | "skill"; id: string };
+export type PluginFocus = { kind: "app" | "mcp" | "skill" | "cli"; id: string };
 /** What the Memory place has open (MemoryPlace.tsx): an agent by its id,
  * the notes about the person, or the shared memory every agent reads. */
 export type MemoryTarget = string;
@@ -60,6 +65,64 @@ export interface OptionCardData {
   /** Present when a lead has proposed hiring a team. Approving it creates
    * the agents and the room they work in. */
   team?: TeamPlan;
+  /** Present when an agent proposed an app watcher (server/app-watch.ts).
+   * Answered through the watcher's own routes, never as a reply. */
+  appWatch?: AppWatchPlan;
+  /** Present when an agent pointed the person at a place in the app
+   * (`bloks open`, server/where.ts). Pressing it only navigates. */
+  open?: OpenPlacePlan;
+  /** Present when an agent proposed changing a setting
+   * (server/settings-proposals.ts). Answered through its own route. */
+  settingsProposal?: SettingsProposalPlan;
+}
+
+/** A place an agent's card opens, as server/where.ts writes it. */
+export interface OpenPlacePlan {
+  kind: "settings" | "panel";
+  page: string;
+  /** The row to scroll to, by its English label. */
+  row?: string;
+  name: string;
+  /** The way there in words, for a window that cannot open it. */
+  path: string;
+  /** The agent whose own settings it opens. */
+  botId?: string;
+  workspace?: boolean;
+}
+
+/** A setting an agent proposed changing (server/settings-proposals.ts). */
+export interface SettingsProposalPlan {
+  id: string;
+  laneId: string;
+  setting: string;
+  nameKey: string;
+  name: string;
+  path: string;
+  page: string;
+  current: { key?: string; text: string };
+  proposed: { key?: string; text: string };
+  value: string;
+  why?: string;
+  botId: string;
+  agentName: string;
+  told?: boolean;
+  outcome?: "changed" | "kept" | "failed";
+  error?: string;
+}
+
+/** An app watcher an agent proposed, as its card shows it. */
+export interface AppWatchPlan {
+  watcherId: string;
+  toolkit: string;
+  appName: string;
+  trigger: string;
+  eventName: string;
+  config: Record<string, string | number | boolean>;
+  filter: string[];
+  botId: string;
+  agentName: string;
+  conversation: string;
+  instruction: string;
 }
 
 /** A team a lead wants to hire, pending the user's approval. */
@@ -129,6 +192,9 @@ export interface Message {
   /** Sent while a turn ran: whether it went in, stopped the turn, or
    * waited, and the quiet line that says so (server/delivery.ts). */
   delivery?: { route: "steered" | "stopped" | "queued"; why: string; line: string };
+  /** In a room set to Auto: who a message naming nobody went to and why,
+   * or that the lead took it (server/room-route.ts). */
+  route?: RoomRoute;
   /** Queued, but still waiting when Bloks restarted and too old to send
    * on its own (server/index.ts, recoverQueued). */
   unsent?: boolean;
@@ -148,7 +214,7 @@ export interface Message {
   /** Came in some other way than you typing it here. "goal" is Bloks
    * starting the next turn toward the conversation's goal; "incident" is
    * the incident desk handing a lead something that failed. */
-  via?: "slack" | "discord" | "whatsapp" | "watcher" | "email" | "webhook" | "routine" | "goal" | "intent" | "incident";
+  via?: "slack" | "discord" | "whatsapp" | "signal" | "watcher" | "email" | "webhook" | "routine" | "goal" | "intent" | "incident";
   /** Posted or sent by a standing intent (server/intents.ts). */
   intent?: { id: string; name: string };
   /** The incident desk (server/incidents.ts): the note on a lead's quiet
@@ -160,7 +226,7 @@ export interface Message {
   failing?: { kind: "routine" | "watcher"; id: string; name: string };
   /** The routine's name and start mode when this message was written,
    * and whether its agent was told it may answer QUIET. */
-  routine?: { name?: string; manual: boolean; quiet?: boolean };
+  routine?: { name?: string; manual: boolean; quiet?: boolean; brief?: boolean };
   /** Part of a quiet check-in: shown folded into one muted line with the
    * rest of its run, and never news (server/store.ts). */
   quiet?: boolean;
@@ -365,6 +431,11 @@ export interface Bot {
   computer?: "cloud" | "sandbox" | "local" | "off" | null;
   /** The folder new turns run in; unset means the agent's workspace. */
   cwd?: string | null;
+  /** Where its engine runs: unset is this computer; otherwise a Docker
+   * container or another machine over SSH (src/lib/workplace.ts). */
+  workplace?: Workplace | null;
+  /** That place now, as the header says it. Null on this computer. */
+  workplaceStatus?: WorkplaceStatus | null;
   /** Whether this agent may reach the shared connectors. Unset = yes. */
   composio?: boolean;
   /** Whether this agent has a browser of its own. Unset = no: a browser
@@ -373,7 +444,7 @@ export interface Bot {
   /** Ids of user-registered MCP servers this agent may use. */
   mcpServers?: string[];
   /** How this agent sounds; unset means no voice yet. */
-  voice?: { provider: "elevenlabs" | "openai" | "system"; id: string; name?: string } | null;
+  voice?: { provider: VoiceProvider; id: string; name?: string } | null;
   /** Read replies aloud as they settle. */
   speakReplies?: boolean;
   /** False: Claude Code runs this agent's turns without hooks. */
@@ -428,6 +499,13 @@ export interface ConfigStatus {
     system?: boolean;
     openaiSource?: "env" | "codex";
     openaiAvailable?: "env" | "codex";
+    fish?: boolean;
+    xai?: boolean;
+    /** Which key xAI speaks with: one saved for speech, or Grok's. */
+    xaiSource?: "speech" | "grok";
+    /** A Chatterbox server of the person's own, and where it is. */
+    chatterbox?: boolean;
+    chatterboxUrl?: string;
   };
   /** Shared context for every agent, not a secret, so it round-trips;
    * `name` is what the owner is called, empty until they say. */
@@ -436,8 +514,9 @@ export interface ConfigStatus {
   /** `beforeTurn` is the size a native session is compacted at before a
    * turn, in tokens; 0 is never. */
   compaction?: { micro: boolean; idle?: boolean; beforeTurn?: number };
-  /** Whether finished sessions are read back for something worth keeping. */
-  skills?: { propose: boolean };
+  /** Whether finished sessions are read back for something worth keeping,
+   * and `learn`, how eagerly: off, suggest or suggest more. */
+  skills?: { propose: boolean; learn?: "off" | "suggest" | "more" };
   /** Whether agents are reminded of their other conversations before
    * your turn. On unless turned off. */
   recall?: { beforeTurn: boolean };
@@ -452,6 +531,8 @@ export interface ConfigStatus {
   /** What happens to words sent mid-turn, for agents that have not
    * chosen (server/delivery.ts). */
   delivery?: { mode: "auto" | "interrupt" | "queue"; askModel?: boolean };
+  /** The engine a room set to Auto asks; null is the room's own. */
+  rooms?: { router: string | null };
   /** Count-only cards for overlapping turns with no own files. On by default. */
   changes?: { showShared: boolean };
   /** How long a silent tool call may hold a turn, in minutes; 0 is never.
@@ -591,6 +672,10 @@ export interface InstanceInfo {
   instanceId: string;
   driverKind: string;
   displayName: string;
+  /** Switched on in Settings. Off starts no turns, however installed and
+   * signed in the snapshot says it is. Absent from an older server, where
+   * it reads as on. */
+  enabled?: boolean;
   snapshot: {
     state: "available" | "unavailable";
     reason?: string;
@@ -634,8 +719,12 @@ export interface Blok {
   id: string;
   name: string;
   memberIds: string[];
-  /** Unaddressed messages wake only the lead. */
+  /** Unaddressed messages wake only the lead. True for Auto as well,
+   * whose fallback is the lead; `answers` says which. */
   leadOnly?: boolean;
+  /** Who answers a message naming nobody. Absent on a room from before
+   * Auto, which reads leadOnly (answersOf in src/lib/roomRoute.ts). */
+  answers?: RoomAnswers;
   /** The member crowned for this room. Null or absent means the most
    * senior leads (src/lib/roomLead.ts). */
   leadId?: string | null;
@@ -669,7 +758,7 @@ export interface NewRoomPreset {
   name: string;
   memberIds: string[];
   leadId: string | null;
-  leadOnly: boolean;
+  answers: RoomAnswers;
   cwd?: string;
   from: string;
 }
@@ -705,11 +794,18 @@ export interface ProviderRow {
   keyHint: string;
   /** For CLI engines: what to do once it is installed but not signed in. */
   signInHint?: string;
+  /** For CLI engines: the name it is looked up by on PATH. */
+  command?: string;
   keyPrefix?: string;
   docsUrl: string;
   connected: boolean;
   /** Installed, but with no login we can see. Not the same as missing. */
   needsSignIn?: boolean;
+  /** Installed, but a release too old to run here: updating fixes it. */
+  outdated?: boolean;
+  /** For CLI engines: the CLI started instead of the one on PATH, or
+   * null for PATH's. */
+  path?: string | null;
   /** Whether this engine can run tools and touch files, or only chat. */
   agentic: boolean;
 }
@@ -721,6 +817,13 @@ export interface Skill {
   description: string;
   body: string;
   source: "builtin" | "user";
+  /** The version it is at (server/skill-history.ts); 0 for a built-in. */
+  revision?: number;
+  /** How often it has been used, how often the person corrected it
+   * straight after, and when it was last used. */
+  uses?: number;
+  corrected?: number;
+  lastUsed?: number | null;
 }
 
 /** The tabs of the Automations page (src/components/AutomationsPanel.tsx). */
@@ -752,6 +855,9 @@ export interface AppState {
   appSettingsOpen: boolean;
   /** Which Settings page is showing, so a link can open the right one. */
   settingsPage: string;
+  /** A row a link asked Settings to scroll to and light, once its page is
+   * in; `at` makes the same row asked twice a new ask. */
+  settingsRow: { page: string; row: string; at: number } | null;
   newAgentOpen: boolean;
   /** the new-agent screen is the last step of setup, not a normal visit */
   newAgentFirstRun: boolean;
@@ -761,6 +867,9 @@ export interface AppState {
   memoryTarget: MemoryTarget | null;
   /** What the last link into Usage asked for, or null (UsagePage). */
   usageFocus: UsageFocus | null;
+  /** The brief a notification asked Overview to open, until the brief
+   * panel takes it (BriefPanel). */
+  briefFocus: string | null;
   /** The agent taking meeting notes, while its panel is open. */
   meetingFor: string | null;
   /** The conversation whose "Set a goal" dialog is open (GoalDialog). */
@@ -772,6 +881,9 @@ export interface AppState {
   ticks: Record<string, number>;
   /** A gallery team a bloks:// link asked to open, until the dialog takes it. */
   teamLink: string | null;
+  /** A team or skill a bloks://install link asked to review, by its https
+   * address, until the catalogue page takes it (CatalogPage.tsx). */
+  installLink: string | null;
   routinesOpen: boolean;
   /** The tab Automations opens on, when something linked to one. */
   routinesTab: AutomationsTab | null;
@@ -797,6 +909,9 @@ export interface AppState {
    * of them is late (pushes through the relay can arrive out of order)
    * and would reopen a finished reply beside its own message. */
   settledTurns: Record<string, true>;
+  /** The turn last seen starting in each thread, by its id, so the end of
+   * an earlier one heard late does not end the one running now. */
+  liveTurns: Record<string, string>;
   /** Agents whose open conversation changed with no transcript to show
    * for it, as when a lane is opened on another device: the lane, by
    * agent, whose messages the store is asking for. */
@@ -822,7 +937,9 @@ export interface AppState {
 }
 
 export type Action =
-  | { type: "hydrate"; bots: Bot[] }
+  /** The whole agent list. `after` is what the stream said after the
+   * list was made (src/state/snapshotOrder.ts), applied over it. */
+  | { type: "hydrate"; bots: Bot[]; after?: Action[] }
   /** A page of earlier messages for a transcript that arrived trimmed.
    * `threadId` guards against a lane that changed while it was loading. */
   | { type: "earlierLoaded"; id: string; threadId: string; messages: Message[]; olderMessages: number }
@@ -835,9 +952,9 @@ export type Action =
   | { type: "joinRequest"; roomId: string; pending?: number }
   | { type: "roomTyping"; roomId: string; name: string; at: number }
   | { type: "blokDeleted"; blokId: string }
-  /** `leadId`, `leadOnly` and `cwd` are the room's own settings, chosen
+  /** `leadId`, `answers` and `cwd` are the room's own settings, chosen
    * as it is made rather than found in its header afterwards. */
-  | { type: "createRoom"; name: string; memberIds: string[]; leadId?: string; leadOnly?: boolean; cwd?: string }
+  | { type: "createRoom"; name: string; memberIds: string[]; leadId?: string; answers?: RoomAnswers; cwd?: string }
   | { type: "deleteRoom"; blokId: string }
   | { type: "patchRoom"; blokId: string; patch: { archived?: boolean; name?: string; section?: string | null } }
   /** Where an agent or a room sits in the sidebar: its section, whether
@@ -863,6 +980,7 @@ export type Action =
    * leaves it empty, so a preset never outlives the dialog it was for. */
   | { type: "toggleNewRoom"; open?: boolean; preset?: NewRoomPreset }
   | { type: "openTeamLink"; slug: string | null }
+  | { type: "openInstallLink"; url: string | null }
   | { type: "instances"; instances: InstanceInfo[] }
   | { type: "engineUpdates"; updates: Record<string, { installed: string; latest: string }> }
   | { type: "providers"; providers: ProviderRow[] }
@@ -900,8 +1018,8 @@ export type Action =
   | { type: "messagePatched"; threadId: string; message: Message; moved?: boolean }
   | { type: "streamDelta"; threadId: string; delta: string }
   | { type: "streamClear"; threadId: string; onlyIfSettled?: boolean }
-  | { type: "turnStarted"; threadId: string }
-  | { type: "turnSettled"; threadId: string }
+  | { type: "turnStarted"; threadId: string; turnId?: string }
+  | { type: "turnSettled"; threadId: string; turnId?: string }
   /** The event stream came back without the frames it missed (hello
    * with resumed: false), so what it was in the middle of is stale. */
   | { type: "streamRestarted" }
@@ -916,6 +1034,9 @@ export type Action =
   | { type: "error"; message: string | null; at?: number }
   | { type: "toggleSettings"; open?: boolean }
   | { type: "openPage"; page: RailPage | null }
+  /** Overview, at one brief: the one its notification was about. Null
+   * only says the panel has it now. */
+  | { type: "openBrief"; id: string | null }
   | { type: "openCustomize"; tab: CustomizeTab; app?: string | null }
   | { type: "openPluginSettings"; focus: PluginFocus | null }
   /** The Memory place, on `target` when given (an agent's id, "you" or
@@ -925,7 +1046,7 @@ export type Action =
   | { type: "openUsage"; botId?: string | null; section?: "limits" | null }
   | { type: "toggleComputer"; open?: boolean }
   /** `page` opens Settings on that page (see SETTINGS_PAGES). */
-  | { type: "toggleAppSettings"; open?: boolean; page?: string }
+  | { type: "toggleAppSettings"; open?: boolean; page?: string; row?: string }
   | { type: "rehearsalsChanged" }
   | { type: "tick"; key: string }
   | { type: "openMeeting"; botId: string | null }
@@ -964,6 +1085,37 @@ export type Action =
 
 function updateBot(state: AppState, botId: string, fn: (b: Bot) => Bot): AppState {
   return { ...state, bots: state.bots.map((b) => (b.id === botId ? fn(b) : b)) };
+}
+
+/**
+ * A turn starting or ending in one lane, on its tab: the lane reads
+ * working or idle, and its agent busy while a lane of it works. The
+ * server's next record of the agent says the same, but until it came a
+ * finished turn's tab still read working, or a running one idle, and sent
+ * the person to the wrong conversation (GitHub 398). A lane waiting on
+ * the person is left as it is: waiting outranks working on the server,
+ * and whether a card still waits once its turn is over is the server's
+ * to say.
+ */
+function laneTurn(state: AppState, threadId: string, running: boolean): AppState {
+  const owner = state.bots.find((b) => (b.tasks ? b.tasks.some((t) => t.id === threadId) : b.threadId === threadId));
+  if (!owner) return state;
+  return updateBot(state, owner.id, (b) => {
+    if (!b.tasks) return { ...b, busy: running };
+    const tasks = b.tasks.map((t): TaskSummary => {
+      if (t.id !== threadId || t.state === "needs-you") return t;
+      if (running) return t.state === "working" ? t : { ...t, state: "working" };
+      // the room it spoke in and the speed it ran at are said only while
+      // a turn runs
+      const { room: _room, codexDispatch: _dispatch, ...ended } = t;
+      return { ...ended, state: "idle" };
+    });
+    // A lane waiting on the person may still have its turn open. A
+    // member's private lanes are not listed here at all; the record the
+    // server sends after every turn's end says if one of those still runs.
+    const busy = running || tasks.some((t) => t.state === "working") || (Boolean(b.busy) && tasks.some((t) => t.state === "needs-you"));
+    return { ...b, tasks, busy };
+  });
 }
 
 /** An agent record from the server, minus the fields the person is still
@@ -1036,7 +1188,14 @@ export function reducer(state: AppState, action: Action): AppState {
         : wanted && !action.bots.some((b) => b.id === wanted)
           ? wanted
           : (action.bots.find((b) => !b.hidden)?.id ?? "");
-      return { ...state, bots: action.bots, selectedId, hydrated: true, laneLoads: {} };
+      const listed: AppState = { ...state, bots: action.bots, selectedId, hydrated: true, laneLoads: {} };
+      if (!action.after?.length) return listed;
+      // Those frames were applied as they came, so what streams and which
+      // turns run is already theirs; going through them again only puts
+      // the agents right. A reply landing a second time would otherwise
+      // clear the next turn's words as they stream.
+      const caught = action.after.reduce(reducer, listed);
+      return { ...caught, streaming: state.streaming, settledTurns: state.settledTurns, liveTurns: state.liveTurns };
     }
     case "earlierLoaded": {
       const prepend = <T extends { messages: Message[]; olderMessages?: number }>(t: T): T => {
@@ -1095,6 +1254,20 @@ export function reducer(state: AppState, action: Action): AppState {
     }
     case "openTeamLink":
       return { ...state, teamLink: action.slug, newRoomOpen: action.slug ? true : state.newRoomOpen };
+    // the catalogue page opens with the link's review on top of it
+    case "openInstallLink":
+      return action.url
+        ? {
+            ...state,
+            installLink: action.url,
+            page: "plugins",
+            customize: "catalog",
+            customizeApp: null,
+            routinesOpen: false,
+            appSettingsOpen: false,
+            settingsOpen: false,
+          }
+        : { ...state, installLink: null };
     case "toggleNewRoom": {
       const open = action.open ?? !state.newRoomOpen;
       return { ...state, newRoomOpen: open, newRoomPreset: open ? (action.preset ?? null) : null };
@@ -1347,12 +1520,22 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...state, streaming: rest };
     }
     case "turnStarted": {
-      if (!state.settledTurns[action.threadId]) return state;
-      const { [action.threadId]: _, ...rest } = state.settledTurns;
-      return { ...state, settledTurns: rest };
+      const { [action.threadId]: _, ...settledTurns } = state.settledTurns;
+      // a turn with no id of its own leaves nothing to tell its end from
+      // an earlier one's, so whatever ends next ends it
+      const { [action.threadId]: _earlier, ...others } = state.liveTurns;
+      const liveTurns = action.turnId ? { ...others, [action.threadId]: action.turnId } : others;
+      return laneTurn({ ...state, settledTurns, liveTurns }, action.threadId, true);
     }
-    case "turnSettled":
-      return { ...state, settledTurns: { ...state.settledTurns, [action.threadId]: true } };
+    case "turnSettled": {
+      // An earlier turn's end, heard after a newer one began, ends nothing:
+      // the newer one is still running. One with no id (an engine rebuilt
+      // under it) ends whatever runs.
+      const live = state.liveTurns[action.threadId];
+      if (action.turnId && live && live !== action.turnId) return state;
+      const { [action.threadId]: _, ...liveTurns } = state.liveTurns;
+      return laneTurn({ ...state, settledTurns: { ...state.settledTurns, [action.threadId]: true }, liveTurns }, action.threadId, false);
+    }
     case "streamRestarted":
       // Whatever was streaming when the line dropped finished or moved on
       // unseen, and the messages that say so are coming in the reload. A
@@ -1360,7 +1543,7 @@ export function reducer(state: AppState, action: Action): AppState {
       // next turn's words were added to the end of it. A computer being
       // set up may have finished unseen too. Cleared here rather than in
       // hydrate, which also follows an archive, mid-turn for everyone else.
-      return { ...state, streaming: {}, settledTurns: {}, provisioning: {} };
+      return { ...state, streaming: {}, settledTurns: {}, liveTurns: {}, provisioning: {} };
     case "screenFrame":
       return {
         ...state,
@@ -1408,6 +1591,10 @@ export function reducer(state: AppState, action: Action): AppState {
       return action.page
         ? { ...state, page: action.page, usageFocus: null, routinesOpen: false, appSettingsOpen: false, settingsOpen: false }
         : { ...state, page: null };
+    case "openBrief":
+      return action.id
+        ? { ...state, page: "overview", briefFocus: action.id, usageFocus: null, routinesOpen: false, appSettingsOpen: false, settingsOpen: false }
+        : { ...state, briefFocus: null };
     case "openCustomize":
       return {
         ...state,
@@ -1465,6 +1652,8 @@ export function reducer(state: AppState, action: Action): AppState {
         // an id that moved goes where it lives now (src/lib/settingsPages.ts),
         // so a link from anywhere, old or new, lands on a real page
         settingsPage: action.page ? resolveSettingsPage(action.page) : open && !state.appSettingsOpen ? "general" : state.settingsPage,
+        // a row only with the page it is on, and only while opening
+        settingsRow: open && action.page && action.row ? { page: resolveSettingsPage(action.page), row: action.row, at: Date.now() } : null,
         // a full page, like Automations: one of them at a time
         routinesOpen: open ? false : state.routinesOpen,
         page: open ? null : state.page,
@@ -1550,15 +1739,18 @@ export const initialState: AppState = {
   computerOpen: false,
   appSettingsOpen: false,
   settingsPage: "general",
+  settingsRow: null,
   newAgentOpen: false,
   newAgentFirstRun: false,
   memoryTarget: null,
   usageFocus: null,
+  briefFocus: null,
   meetingFor: null,
   goalFor: null,
   rehearsalsTick: 0,
   ticks: {},
   teamLink: null,
+  installLink: null,
   routinesOpen: false,
   routinesTab: null,
   routinesFocus: null,
@@ -1575,6 +1767,7 @@ export const initialState: AppState = {
   sectionOrder: [],
   streaming: {},
   settledTurns: {},
+  liveTurns: {},
   laneLoads: {},
   screens: {},
   roomPeople: {},

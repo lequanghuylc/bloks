@@ -24,6 +24,7 @@ import { cn } from "@/lib/cn";
 import { changedLine } from "@/lib/preview";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DiffLines, type DiffLine } from "./DiffLines";
+import { t, type MessageKey } from "@/lib/i18n";
 
 type Changes = NonNullable<Message["changes"]>;
 type Change = Changes["files"][number];
@@ -39,13 +40,24 @@ interface FileDiffBody {
 
 const ICON = { added: FilePlus, modified: FilePen, deleted: FileMinus } as const;
 
-/** "Ada", "Ada and Linus", "Ada, Linus and 2 others". */
-function namesOf(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "another agent";
-  if (names.length === 2) return `${names[0]} and ${names[1]}`;
-  return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length === 3 ? "" : "s"}`;
+/** "Changed while Ada was working here", "while Ada and Linus were",
+ * "while Ada, Linus and 2 others were": one sentence for each, since
+ * the verb agrees with how many there were. */
+function changedWhile(names: string[]): string {
+  if (names.length <= 1) return t("changesCard.changedWhile.one", { name: names[0] ?? t("changesCard.anotherAgent") });
+  if (names.length === 2) return t("changesCard.changedWhile.two", { first: names[0], second: names[1] });
+  return t("changesCard.changedWhile.more", { first: names[0], second: names[1], count: names.length - 2 });
 }
-const VERB = { added: "Added", modified: "Changed", deleted: "Deleted" } as const;
+const VERB: Record<Change["status"], MessageKey> = {
+  added: "changesCard.verb.added",
+  modified: "changesCard.verb.modified",
+  deleted: "changesCard.verb.deleted",
+};
+const VERB_PATH: Record<Change["status"], MessageKey> = {
+  added: "changesCard.verbPath.added",
+  modified: "changesCard.verbPath.modified",
+  deleted: "changesCard.verbPath.deleted",
+};
 
 export function ChangesCard({ message, fresh }: { message: Message; fresh?: boolean }) {
   const { state } = useStore();
@@ -61,8 +73,8 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
   const sharedFiles = changes.files.filter((f) => f.shared);
   const sharedTotal = changes.shared?.total ?? 0;
   const ownTotal = changes.total - sharedTotal;
-  const alongside = namesOf([
-    ...new Set((changes.shared?.alongside ?? []).map((id) => state.bots.find((b) => b.id === id)?.name ?? "another agent")),
+  const alongside = changedWhile([
+    ...new Set((changes.shared?.alongside ?? []).map((id) => state.bots.find((b) => b.id === id)?.name ?? t("changesCard.anotherAgent"))),
   ]);
   const added = ownFiles.reduce((n, f) => n + (f.added ?? 0), 0);
   const removed = ownFiles.reduce((n, f) => n + (f.removed ?? 0), 0);
@@ -105,7 +117,7 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
             )}
             <span className="truncate text-ui font-semibold text-foreground">
               {pending || discarded
-                ? `Would change ${changes.total} file${changes.total === 1 ? "" : "s"}`
+                ? t("changesCard.wouldChange", { count: changes.total })
                 : ownTotal > 0
                   ? changedLine(ownTotal)
                   : changedLine(0, sharedTotal)}
@@ -118,7 +130,7 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
           </div>
           {discarded ? (
             <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-small font-medium text-muted-foreground">
-              Discarded
+              {t("changesCard.discarded")}
             </span>
           ) : pending ? (
             <div className="flex shrink-0 items-center gap-1.5">
@@ -127,7 +139,7 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
                 disabled={busy}
                 className="rounded-full px-2.5 py-1 text-small text-muted-foreground transition-colors hover:text-foreground"
               >
-                Discard
+                {t("common.discard")}
               </button>
               <button
                 onClick={() => decide("apply")}
@@ -135,12 +147,12 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
                 className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-small font-semibold text-primary-foreground transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.96]"
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                Apply
+                {t("changesCard.apply")}
               </button>
             </div>
           ) : undone ? (
             <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-small font-medium text-muted-foreground">
-              Undone
+              {t("changesCard.undone")}
             </span>
           ) : ownTotal === 0 ? null : confirming ? (
             <div className="flex shrink-0 items-center gap-1.5">
@@ -149,7 +161,7 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
                 disabled={busy}
                 className="rounded-full px-2.5 py-1 text-small text-muted-foreground transition-colors hover:text-foreground"
               >
-                Keep
+                {t("common.keep")}
               </button>
               <button
                 onClick={undo}
@@ -157,7 +169,7 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
                 className="flex items-center gap-1 rounded-full bg-destructive px-2.5 py-1 text-small font-semibold text-destructive-foreground transition-opacity hover:opacity-90"
               >
                 {busy ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}
-                Put them back
+                {t("changesCard.putThemBack")}
               </button>
             </div>
           ) : (
@@ -166,43 +178,44 @@ export function ChangesCard({ message, fresh }: { message: Message; fresh?: bool
               className="flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-small font-medium text-foreground transition-colors hover:border-foreground/30"
             >
               <Undo2 size={12} />
-              Undo
+              {t("changesCard.undo")}
             </button>
           )}
         </div>
         {pending && (
           <p className="mt-2 text-small text-muted-foreground">
-            Made on a copy. Apply copies them into the folder, skipping files changed since.
+            {t("changesCard.madeOnACopyApply")}
           </p>
         )}
         {rehearsal === "applied" && !undone && (
-          <p className="mt-2 text-small text-muted-foreground">Applied from a rehearsal.</p>
+          <p className="mt-2 text-small text-muted-foreground">{t("changesCard.appliedFromARehearsal")}</p>
         )}
         {confirming && !undone && (
           <p className="mt-2 text-small text-muted-foreground">
             {sharedTotal > 0
-              ? "These files go back to how they were. Files changed since, or by others, stay as they are."
-              : "Every file below goes back to how it was. Files changed since stay as they are."}
+              ? t("changesCard.theseFilesGoBackTo")
+              : t("changesCard.everyFileBelowGoesBack")}
           </p>
         )}
         {ownFiles.length > 0 && <FileList files={ownFiles} onOpen={setOpen} />}
         {sharedFiles.length > 0 && (
           <>
             <div className={cn("px-1.5 text-small text-muted-foreground", ownFiles.length > 0 ? "mt-2.5" : "mt-2")}>
-              Changed while {alongside} {alongside.includes(" and ") ? "were" : "was"} working here. Undo leaves these alone.
+              {alongside}
             </div>
             <FileList files={sharedFiles} onOpen={setOpen} muted />
           </>
         )}
         {changes.total > changes.files.length && (
           <div className="mt-1 px-1.5 text-small text-muted-foreground">
-            and {changes.total - changes.files.length} more
+            {t("changesCard.andMore", { count: changes.total - changes.files.length })}
           </div>
         )}
         {undone && (
           <div className="mt-2 px-1.5 text-small text-muted-foreground">
-            Put back {undone.restored} file{undone.restored === 1 ? "" : "s"}
-            {undone.skipped - sharedTotal > 0 && `, left ${undone.skipped - sharedTotal} that changed since`}.
+            {undone.skipped - sharedTotal > 0
+              ? t("changesCard.putBackLeft", { count: undone.restored, left: undone.skipped - sharedTotal })
+              : t("changesCard.putBack", { count: undone.restored })}
           </div>
         )}
         {skipped.length > 0 && (
@@ -233,7 +246,7 @@ function FileList({ files, onOpen, muted }: { files: Change[]; onOpen: (file: Ch
             <button
               onClick={() => onOpen(file)}
               className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-accent"
-              title={`${VERB[file.status]} ${file.path}`}
+              title={t(VERB_PATH[file.status], { path: file.path })}
             >
               <Icon
                 size={13}
@@ -246,7 +259,7 @@ function FileList({ files, onOpen, muted }: { files: Change[]; onOpen: (file: Ch
               />
               <span className="min-w-0 flex-1 truncate font-mono text-small text-foreground">{file.path}</span>
               {file.big ? (
-                <span className="shrink-0 text-caption text-muted-foreground">large file</span>
+                <span className="shrink-0 text-caption text-muted-foreground">{t("changesCard.largeFile")}</span>
               ) : (
                 (file.added !== undefined || file.removed !== undefined) && (
                   <span className="shrink-0 font-mono text-caption">
@@ -276,24 +289,24 @@ function DiffDialog({ checkpointId, file, onClose }: { checkpointId: string; fil
     };
   }, [checkpointId, file.path]);
   const note = diff?.big
-    ? "Too large to show changes."
+    ? t("changesCard.tooLarge")
     : diff?.binary
-      ? "Not a text file, so there are no changes to show."
+      ? t("changesCard.notText")
       : diff?.tooLong
-        ? "Too long to show here."
+        ? t("changesCard.tooLong")
         : null;
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[85vh] w-full max-w-[760px] flex-col gap-0 overflow-hidden p-0">
         <div className="border-b px-4 py-3">
           <DialogTitle className="truncate font-mono text-body">{file.path}</DialogTitle>
-          <div className="mt-0.5 text-small text-muted-foreground">{VERB[file.status]}</div>
+          <div className="mt-0.5 text-small text-muted-foreground">{t(VERB[file.status])}</div>
         </div>
         <div className="flex-1 overflow-auto bg-muted/30 py-2 font-mono text-small leading-[1.55]">
           {error && <div className="px-4 text-destructive">{error}</div>}
           {!diff && !error && (
             <div className="flex items-center gap-2 px-4 text-muted-foreground">
-              <Loader2 size={12} className="animate-spin" /> Loading
+              <Loader2 size={12} className="animate-spin" /> {t("common.loading2")}
             </div>
           )}
           {note && <div className="px-4 font-sans text-muted-foreground">{note}</div>}

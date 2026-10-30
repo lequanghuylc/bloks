@@ -52,7 +52,8 @@ import { checkInBand, foldQuietRuns, intervalShort } from "@/lib/checkIns";
 import { AUTOMATIONS_LIST, AUTOMATIONS_LIST_SIZE, useColumnFolded } from "@/lib/sideColumn";
 import { ShowColumn, SideColumn } from "./SideColumn";
 import { Markdownish } from "./Markdown";
-import { runElapsed, runSource } from "@/lib/routineDetails";
+import { describeSchedule, runElapsed, runSource, weekdayName } from "@/lib/routineDetails";
+import { formatDate, formatList, t, type MessageKey } from "@/lib/i18n";
 
 async function api(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(path, { headers: { "content-type": "application/json" }, ...init });
@@ -76,6 +77,12 @@ interface WebhookRow {
 }
 
 const HOUR_PX = 52;
+
+const VIEW_LABELS: Record<"day" | "week" | "month", MessageKey> = {
+  day: "automationsPanel.view.day",
+  week: "automationsPanel.view.week",
+  month: "automationsPanel.view.month",
+};
 /** How far apart check-in bands sit, side by side at a column's edge. */
 const BAND_STEP = 10;
 /** The shortest a routine's card is drawn, so its name always fits. */
@@ -288,7 +295,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
 
   const checkIns = visible.filter((r) => r.enabled && r.every);
   const paused = visible.filter((r) => !r.enabled);
-  const monthLabel = (mode === "month" ? anchor : days[0]).toLocaleDateString([], { month: "long", year: "numeric" });
+  const monthLabel = formatDate(mode === "month" ? anchor : days[0], { month: "long", year: "numeric" });
   const today = dayKey(new Date());
 
   return (
@@ -304,10 +311,10 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           <CalendarClock size={18} className="shrink-0 text-brand-ink" />
           <div className="min-w-0">
             <div className="truncate text-lead font-semibold leading-tight text-foreground">
-              Automations
+              {t("automationsPanel.automations")}
             </div>
             <div className="hidden truncate text-small leading-tight text-muted-foreground sm:block">
-              What runs without you
+              {t("automationsPanel.whatRunsWithoutYou")}
             </div>
           </div>
         </div>
@@ -315,12 +322,12 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           <div className="flex gap-1 rounded-xl bg-muted p-1">
             {(
               [
-                ["schedules", "Schedules", <CalendarClock key="s" size={13} />],
-                ["watchers", "Watchers", <Eye key="e" size={13} />],
-                ["intents", "Intents", <Zap key="i" size={13} />],
-                ["workflows", "Workflows", <Workflow key="f" size={13} />],
-                ["webhooks", "Webhooks", <Webhook key="w" size={13} />],
-                ["jobs", "Job board", <Briefcase key="j" size={13} />],
+                ["schedules", "automationsPanel.tab.schedules", <CalendarClock key="s" size={13} />],
+                ["watchers", "automationsPanel.tab.watchers", <Eye key="e" size={13} />],
+                ["intents", "automationsPanel.tab.intents", <Zap key="i" size={13} />],
+                ["workflows", "automationsPanel.tab.workflows", <Workflow key="f" size={13} />],
+                ["webhooks", "automationsPanel.webhooks", <Webhook key="w" size={13} />],
+                ["jobs", "automationsPanel.tab.jobs", <Briefcase key="j" size={13} />],
               ] as const
             ).map(([key, label, icon]) => (
               <button
@@ -334,7 +341,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                 )}
               >
                 {icon}
-                <span className="hidden sm:inline">{label}</span>
+                <span className="hidden sm:inline">{t(label)}</span>
               </button>
             ))}
           </div>
@@ -360,13 +367,13 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           {/* ── calendar controls ── */}
           <div className="flex shrink-0 flex-wrap items-center gap-3 border-b px-5 py-2.5">
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon-sm" aria-label="Earlier" onClick={() => setAnchor(mode === "month" ? addMonths(anchor, -1) : addDays(anchor, mode === "day" ? -1 : -7))}>
+              <Button variant="ghost" size="icon-sm" aria-label={t("automationsPanel.earlier")} onClick={() => setAnchor(mode === "month" ? addMonths(anchor, -1) : addDays(anchor, mode === "day" ? -1 : -7))}>
                 <ChevronLeft size={15} />
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setAnchor(startOfDay(new Date()))}>
-                Today
+                {t("automationsPanel.today")}
               </Button>
-              <Button variant="ghost" size="icon-sm" aria-label="Later" onClick={() => setAnchor(mode === "month" ? addMonths(anchor, 1) : addDays(anchor, mode === "day" ? 1 : 7))}>
+              <Button variant="ghost" size="icon-sm" aria-label={t("automationsPanel.later")} onClick={() => setAnchor(mode === "month" ? addMonths(anchor, 1) : addDays(anchor, mode === "day" ? 1 : 7))}>
                 <ChevronRight size={15} />
               </Button>
             </div>
@@ -377,12 +384,12 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
               onChange={(e) => setFilterId(e.target.value)}
               className="rounded-lg border border-input bg-background px-2 py-1.5 text-body text-foreground outline-none focus:border-ring/60"
             >
-              <option value="">Everyone</option>
+              <option value="">{t("automationsPanel.everyone")}</option>
               {bots.map((b) => (
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
               {state.bloks.map((r) => (
-                <option key={r.id} value={r.id}>{r.name} (room)</option>
+                <option key={r.id} value={r.id}>{t("automationsPanel.roomOption", { name: r.name })}</option>
               ))}
             </select>
 
@@ -393,19 +400,19 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                     key={m}
                     onClick={() => setMode(m)}
                     className={cn(
-                      "rounded-lg px-2.5 py-1 text-small capitalize transition-colors duration-150",
+                      "rounded-lg px-2.5 py-1 text-small transition-colors duration-150",
                       mode === m
                         ? "bg-background font-medium text-foreground shadow-sm"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {m}
+                    {t(VIEW_LABELS[m])}
                   </button>
                 ))}
               </div>
               <Button size="sm" onClick={() => setCreating({})}>
                 <Plus size={13} />
-                New routine
+                {t("automationsPanel.newRoutine")}
               </Button>
             </div>
           </div>
@@ -449,7 +456,9 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                   {Array.from({ length: hours.end - hours.start }, (_, i) => (
                     <div key={i} className="relative" style={{ height: HOUR_PX }}>
                       <span className="absolute -top-2 right-2 text-caption tabular-nums text-muted-foreground/70">
-                        {(hours.start + i) % 12 || 12} {hours.start + i < 12 ? "AM" : "PM"}
+                        {t(hours.start + i < 12 ? "automationsPanel.hourAm" : "automationsPanel.hourPm", {
+                          hour: String((hours.start + i) % 12 || 12),
+                        })}
                       </span>
                     </div>
                   ))}
@@ -480,7 +489,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                           isToday ? "text-brand-ink" : "text-muted-foreground",
                         )}
                       >
-                        {day.toLocaleDateString([], { weekday: "short" })}
+                        {formatDate(day, { weekday: "short" })}
                         <span
                           className={cn(
                             "flex size-[22px] items-center justify-center rounded-full text-small tabular-nums",
@@ -533,7 +542,13 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                           const band = checkInBand(routine, hours.start, hours.end);
                           if (!band) return null;
                           const target = targetOf(routine.targetId);
-                          const label = `${routine.name || routine.prompt}: ${routine.summary ?? ""}${target ? `, ${target.name}` : ""}`;
+                          const label = target
+                            ? t("automationsPanel.bandLabelFor", {
+                                name: routine.name || routine.prompt,
+                                schedule: describeSchedule(routine),
+                                target: target.name,
+                              })
+                            : t("automationsPanel.bandLabel", { name: routine.name || routine.prompt, schedule: describeSchedule(routine) });
                           return (
                             <button
                               key={routine.id}
@@ -567,7 +582,15 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                           const gap = lane.columns > 1 ? CARD_GAP : 0;
                           // a narrow card cuts its words short, so the whole of
                           // it is on hover and for a screen reader
-                          const label = `${routine.name || routine.prompt}, ${routine.time}${routine.repeat === "once" ? ", once" : ""}${target ? `, ${target.name}` : ""}`;
+                          const named = { name: routine.name || routine.prompt, time: routine.time };
+                          const label =
+                            routine.repeat === "once"
+                              ? target
+                                ? t("automationsPanel.cardLabel.onceFor", { ...named, target: target.name })
+                                : t("automationsPanel.cardLabel.once", named)
+                              : target
+                                ? t("automationsPanel.cardLabel.for", { ...named, target: target.name })
+                                : t("automationsPanel.cardLabel.plain", named);
                           return (
                             <button
                               key={routine.id}
@@ -608,10 +631,10 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                                   {routine.name || routine.prompt}
                                 </span>
                                 <span className="block truncate text-micro leading-tight text-muted-foreground">
-                                  {routine.time}
-                                  {routine.repeat === "once" && " · once"}
-                                  {" · "}
-                                  {target?.name ?? "?"}
+                                  {t(routine.repeat === "once" ? "automationsPanel.cardLine.once" : "automationsPanel.cardLine.plain", {
+                                    time: routine.time,
+                                    target: target?.name ?? "?",
+                                  })}
                                 </span>
                               </span>
                             </button>
@@ -629,7 +652,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           {checkIns.length > 0 && (
             <div className="shrink-0 border-t px-5 py-2.5">
               <div className="mb-1.5 text-small font-medium text-muted-foreground">
-                Check-ins
+                {t("automationsPanel.checkIns")}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {checkIns.map((routine) => {
@@ -642,7 +665,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                     >
                       {target?.bot ? <AgentAvatar bot={target.bot} size={16} /> : <Repeat size={12} className="shrink-0 text-brand-ink" />}
                       <span className="max-w-[160px] shrink-0 truncate font-medium text-foreground">{routine.name || routine.prompt}</span>
-                      <span className="min-w-0 truncate text-muted-foreground">{routine.summary}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{describeSchedule(routine)}</span>
                     </button>
                   );
                 })}
@@ -654,7 +677,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           {paused.length > 0 && (
             <div className="shrink-0 border-t px-5 py-2.5">
               <div className="mb-1.5 text-small font-medium text-muted-foreground">
-                Paused
+                {t("common.paused")}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {paused.map((routine) => {
@@ -668,7 +691,7 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
                       {target?.bot && <AgentAvatar bot={target.bot} size={16} />}
                       <span className="max-w-[200px] truncate">{routine.name || routine.prompt}</span>
                       {routine.repeat === "once" && routine.lastRunAt && (
-                        <span className="text-caption text-success">ran</span>
+                        <span className="text-caption text-success">{t("automationsPanel.ran")}</span>
                       )}
                     </button>
                   );
@@ -687,7 +710,10 @@ export function AutomationsPanel({ onClose }: { onClose: () => void }) {
           <span className="text-caption font-medium text-foreground">
             {`${String(Math.floor(drag.minutes / 60)).padStart(2, "0")}:${String(drag.minutes % 60).padStart(2, "0")}`}
             {" · "}
-            {columnRects.current.get(drag.dayIndex)?.day.toLocaleDateString([], { weekday: "short" })}
+            {(() => {
+              const day = columnRects.current.get(drag.dayIndex)?.day;
+              return day ? formatDate(day, { weekday: "short" }) : null;
+            })()}
           </span>
         </div>
       )}
@@ -733,9 +759,9 @@ function FailingRoutine({
   const name = routine.name || routine.prompt;
   const remove = async () => {
     const yes = await confirm({
-      title: `Remove ${name}?`,
-      body: "The routine and its history go. What it said stays in the conversation.",
-      confirmLabel: "Remove",
+      title: t("automationsPanel.removeRoutine.title", { name }),
+      body: t("automationsPanel.removeRoutine.body"),
+      confirmLabel: t("common.remove"),
       destructive: true,
     });
     if (yes) onWrite(api(`/api/routines/${routine.id}`, { method: "DELETE" }));
@@ -747,20 +773,20 @@ function FailingRoutine({
         <div className="min-w-0">
           <div className="truncate text-body font-medium text-foreground">{name}</div>
           <div className="text-small text-muted-foreground">
-            <span className="text-warning">Stopped after failing {routine.failures ?? 3} times in a row.</span>{" "}
+            <span className="text-warning">{t("automationsPanel.stoppedAfter", { count: routine.failures ?? 3 })}</span>{" "}
             {routine.failing?.error}
           </div>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <Button variant="secondary" size="sm" onClick={onOpen}>
-          Fix it
+          {t("automationsPanel.fixIt")}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => onWrite(api(`/api/routines/${routine.id}`, { method: "PATCH", body: JSON.stringify({ enabled: false }) }))}>
-          Pause
+          {t("common.pause")}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => void remove()}>
-          Remove
+          {t("common.remove")}
         </Button>
       </div>
     </div>
@@ -772,8 +798,8 @@ function FailingRoutine({
 function NowLine({ start, end }: { start: number; end: number }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
   }, []);
   const minutes = now.getHours() * 60 + now.getMinutes();
   const top = ((minutes - start * 60) / 60) * HOUR_PX;
@@ -795,15 +821,15 @@ function EmptyRhythm({ onCreate }: { onCreate: () => void }) {
       </div>
       <div>
         <div className="text-title font-semibold text-foreground">
-          Put your agents on a schedule
+          {t("automationsPanel.putYourAgentsOnA")}
         </div>
         <div className="mx-auto mt-1 max-w-[380px] text-body leading-relaxed text-muted-foreground">
-          Daily digests, weekly reports, regular reviews.
+          {t("automationsPanel.dailyDigestsWeeklyReportsRegular")}
         </div>
       </div>
       <Button onClick={onCreate}>
         <Plus size={14} />
-        Create your first routine
+        {t("automationsPanel.createYourFirstRoutine")}
       </Button>
     </div>
   );
@@ -833,12 +859,12 @@ function MonthGrid({
   return (
     <div className="min-h-0 flex-1 overflow-auto p-3">
       <div className="grid grid-cols-7 gap-px overflow-hidden rounded-2xl border bg-border">
-        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
+        {[1, 2, 3, 4, 5, 6, 0].map((d) => (
           <div
-            key={label}
+            key={d}
             className="bg-background px-2 py-1.5 text-center text-caption font-semibold uppercase tracking-[0.08em] text-muted-foreground"
           >
-            {label}
+            {weekdayName(d, "short")}
           </div>
         ))}
         {cells.map((day) => {
@@ -889,7 +915,7 @@ function MonthGrid({
               })}
               {slots.length > 3 && (
                 <span className="px-1 text-micro text-muted-foreground">
-                  +{slots.length - 3} more
+                  {t("automationsPanel.moreSlots", { count: slots.length - 3 })}
                 </span>
               )}
             </button>
@@ -914,14 +940,14 @@ function RunHistory({ routine }: { routine: Routine }) {
   if (!runs?.length) {
     return (
       <div className="mt-4 border-t pt-3 text-small text-muted-foreground">
-        No runs yet.
+        {t("automationsPanel.noRunsYet")}
       </div>
     );
   }
   return (
     <div className="mt-4 border-t pt-3">
       <div className="mb-1.5 text-small font-medium text-muted-foreground">
-        Recent runs
+        {t("automationsPanel.recentRuns")}
       </div>
       <div>
         {foldQuietRuns(runs).map((row) => {
@@ -929,20 +955,21 @@ function RunHistory({ routine }: { routine: Routine }) {
           if ("quiet" in row) {
             const newest = row.quiet[0];
             const oldest = row.quiet[row.quiet.length - 1];
-            const at = (run: RoutineRun) =>
-              new Date(run.startedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+            const at = (run: RoutineRun) => formatDate(run.startedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
             return (
               <div key={newest.id} className="flex w-full items-start gap-2 px-1.5 py-1.5">
                 <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline justify-between gap-2">
                     <span className="text-small tabular-nums text-muted-foreground">
-                      {row.quiet.length === 1 ? at(newest) : `${at(oldest)} to ${at(newest)}`}
+                      {row.quiet.length === 1 ? at(newest) : t("automationsPanel.quietSpan", { from: at(oldest), to: at(newest) })}
                     </span>
-                    <span className="shrink-0 text-caption text-muted-foreground">quiet</span>
+                    <span className="shrink-0 text-caption text-muted-foreground">{t("automationsPanel.quiet")}</span>
                   </span>
                   <span className="mt-0.5 block text-small text-muted-foreground">
-                    {row.quiet.length === 1 ? "Nothing needed you." : `${row.quiet.length} check-ins, nothing needed you.`}
+                    {row.quiet.length === 1
+                      ? t("automationsPanel.nothingNeededYou")
+                      : t("automationsPanel.quietCheckIns", { count: row.quiet.length })}
                   </span>
                 </span>
               </div>
@@ -973,7 +1000,7 @@ function RunHistory({ routine }: { routine: Routine }) {
                 <span className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-baseline justify-between gap-x-2">
                     <span className="text-small tabular-nums text-foreground">
-                      {new Date(run.startedAt).toLocaleString([], {
+                      {formatDate(run.startedAt, {
                         month: "short",
                         day: "numeric",
                         hour: "numeric",
@@ -991,19 +1018,19 @@ function RunHistory({ routine }: { routine: Routine }) {
                   )}
                   <span className="mt-0.5 flex items-center gap-1 text-caption text-muted-foreground">
                     <ChevronRight size={12} className={cn("shrink-0", showing && "rotate-90")} />
-                    {showing ? "Hide details" : "Show details"}
+                    {showing ? t("automationsPanel.hideDetails") : t("automationsPanel.showDetails")}
                   </span>
                 </span>
               </button>
               {showing && (
                 <div id={`routine-run-${run.id}`} className="min-w-0 space-y-2 pb-3 pl-5 text-small [overflow-wrap:anywhere]">
-                  <div className="text-caption text-muted-foreground">{run.error ? "Saved error excerpt" : "Saved result excerpt"}</div>
+                  <div className="text-caption text-muted-foreground">{run.error ? t("automationsPanel.savedErrorExcerpt") : t("automationsPanel.savedResultExcerpt")}</div>
                   {detail ? (
                     <div className={run.error ? "whitespace-pre-wrap text-destructive" : "text-foreground/80"}>
                       {run.error ? detail : <Markdownish text={detail} />}
                     </div>
                   ) : (
-                    <div className="text-muted-foreground">No excerpt was saved.</div>
+                    <div className="text-muted-foreground">{t("automationsPanel.noExcerptWasSaved")}</div>
                   )}
                   {source ? (
                     <Button
@@ -1014,10 +1041,12 @@ function RunHistory({ routine }: { routine: Routine }) {
                         else dispatch({ type: "select", id: source.id });
                       }}
                     >
-                      Open source conversation
+                      {t("automationsPanel.openSourceConversation")}
                     </Button>
                   ) : (
-                    <div className="text-muted-foreground">Source conversation unavailable.{detail ? " Only the saved excerpt is available here." : ""}</div>
+                    <div className="text-muted-foreground">
+                      {detail ? t("automationsPanel.sourceUnavailableExcerpt") : t("automationsPanel.sourceUnavailable")}
+                    </div>
                   )}
                 </div>
               )}
@@ -1041,27 +1070,33 @@ function RoutineDetails({
   onWrite: (run: Promise<unknown>) => void;
   onClose: () => void;
 }) {
-  const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const daysLabel =
+  const [briefOnly, setBriefOnly] = useState(Boolean(routine.briefOnly));
+  const when =
     routine.repeat === "once"
-      ? `Once on ${routine.date ?? "?"}`
+      ? t("automationsPanel.details.onceOn", { date: routine.date ?? "?", time: routine.time })
       : routine.days.length === 0 || routine.days.length === 7
-        ? "Every day"
-        : routine.days.map((d) => DAY_NAMES[d]).join(", ");
+        ? t("automationsPanel.details.everyDay", { time: routine.time })
+        : t("automationsPanel.details.days", {
+            days: formatList(
+              routine.days.map((d) => weekdayName(d, "short")),
+              { type: "unit", style: "short" },
+            ),
+            time: routine.time,
+          });
   const runsOnLabel =
     routine.runsOn === "cloud"
-      ? "cloud computer"
+      ? t("automationsPanel.details.cloud")
       : routine.runsOn === "local"
         ? thisComputer()
         : routine.runsOn === "off"
-          ? "no computer"
+          ? t("automationsPanel.details.noScreen")
           : null;
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/30" onClick={onClose}>
       <div
         role="dialog"
-        aria-label={routine.name || "Routine details"}
+        aria-label={routine.name || t("automationsPanel.routineDetails")}
         aria-modal="true"
         className="max-h-[85dvh] w-[440px] max-w-[92vw] overflow-y-auto animate-pop-in rounded-2xl border bg-popover p-4 shadow-2xl [overflow-wrap:anywhere] sm:p-5"
         onClick={(e) => e.stopPropagation()}
@@ -1076,23 +1111,27 @@ function RoutineDetails({
           )}
           <div className="min-w-0 flex-1">
             <div className="text-ui font-semibold leading-snug text-foreground">
-              {routine.name || "Routine"}
+              {routine.name || t("automationsPanel.routine")}
             </div>
             <div className="mt-0.5 text-small text-muted-foreground">
               {target?.name} ·{" "}
               {routine.every
-                ? routine.summary
-                : `${daysLabel} at ${routine.time}${routine.quiet ? " · quiet" : ""}`}
+                ? describeSchedule(routine)
+                : routine.quiet
+                  ? `${when} · ${t("automationsPanel.quiet")}`
+                  : when}
               {runsOnLabel ? ` · ${runsOnLabel}` : ""}
             </div>
             {routine.quiet && (
               <div className="mt-0.5 text-small text-muted-foreground/80">
-                Stays silent when nothing needs you.
+                {t("automationsPanel.staysSilentWhenNothingNeeds")}
               </div>
             )}
             {routine.enabled && routine.suspended === "archived" && (
               <div className="mt-0.5 text-small text-warning">
-                Paused while {target?.name ?? "its agent"} is archived. Resumes when restored.
+                {target?.name
+                  ? t("automationsPanel.pausedArchived.named", { name: target.name })
+                  : t("automationsPanel.pausedArchived.unnamed")}
               </div>
             )}
             {/* Stopped for failing: why, and the way back. A run now that
@@ -1100,7 +1139,7 @@ function RoutineDetails({
             {routine.failing && (
               <div className="mt-2 flex flex-col gap-1.5 rounded-lg bg-warning/10 px-2.5 py-2 text-small">
                 <span className="text-warning">
-                  Stopped after failing {routine.failures ?? 3} times in a row. Run it now to check it works, or start it again once it is fixed.
+                  {t("automationsPanel.stoppedAfterRunIt", { count: routine.failures ?? 3 })}
                 </span>
                 <span className="line-clamp-3 break-words text-muted-foreground">{routine.failing.error}</span>
                 <span>
@@ -1111,14 +1150,18 @@ function RoutineDetails({
                       onWrite(api(`/api/routines/${routine.id}`, { method: "PATCH", body: JSON.stringify({ enabled: true }) }).then(onClose))
                     }
                   >
-                    Start it again
+                    {t("automationsPanel.startItAgain")}
                   </Button>
                 </span>
               </div>
             )}
           </div>
           <Switch
-            aria-label={`${routine.name || "This routine"}: on or off`}
+            aria-label={
+              routine.name
+                ? t("automationsPanel.toggle.routineNamed", { name: routine.name })
+                : t("automationsPanel.toggle.routineUnnamed")
+            }
             checked={routine.enabled}
             onCheckedChange={(on) =>
               onWrite(
@@ -1130,6 +1173,32 @@ function RoutineDetails({
             }
           />
         </div>
+        {/* An agent's routine can keep its reports to the morning brief,
+            so several of them make one notification in the morning
+            rather than one each (server/brief.ts). */}
+        {routine.targetKind === "agent" && routine.repeat !== "once" && (
+          <label className="mt-4 flex items-start justify-between gap-4 rounded-xl bg-muted/40 px-3 py-2.5 text-body text-foreground">
+            <span>
+              {t("automationsPanel.briefOnly")}
+              <span className="block text-small text-muted-foreground">
+                {briefOnly ? t("automationsPanel.noNotificationWhenItRuns") : t("automationsPanel.notifiesWhenItRunsAnd")}
+              </span>
+            </span>
+            <Switch
+              aria-label={
+                routine.name
+                  ? t("automationsPanel.toggle.briefNamed", { name: routine.name })
+                  : t("automationsPanel.toggle.briefUnnamed")
+              }
+              checked={briefOnly}
+              onCheckedChange={(on) => {
+                // the dialog stays open on this one, so it answers at once
+                setBriefOnly(on);
+                onWrite(api(`/api/routines/${routine.id}`, { method: "PATCH", body: JSON.stringify({ briefOnly: on }) }));
+              }}
+            />
+          </label>
+        )}
         <div className="mt-4 flex gap-2">
           <Button
             variant="secondary"
@@ -1140,7 +1209,7 @@ function RoutineDetails({
             }
           >
             <Play size={12} />
-            Run now
+            {t("common.runNow")}
           </Button>
           <Button
             variant="secondary"
@@ -1151,16 +1220,16 @@ function RoutineDetails({
             }
           >
             <Trash2 size={12} />
-            Delete
+            {t("common.delete")}
           </Button>
         </div>
         <details open className="mt-4 border-t pt-3">
-          <summary className="cursor-pointer text-small font-medium text-muted-foreground">Instructions</summary>
+          <summary className="cursor-pointer text-small font-medium text-muted-foreground">{t("common.instructions")}</summary>
           <div className="mt-2 whitespace-pre-wrap text-small leading-relaxed text-foreground/80">{routine.prompt}</div>
         </details>
         {routine.lastReport && (
           <section className="mt-4 min-w-0 border-t pt-3">
-            <div className="mb-2 text-small font-medium text-muted-foreground">Last reported · saved excerpt</div>
+            <div className="mb-2 text-small font-medium text-muted-foreground">{t("automationsPanel.lastReportedSavedExcerpt")}</div>
             <div className="text-small leading-relaxed text-foreground/80">
               <Markdownish text={routine.lastReport.summary} />
             </div>
@@ -1209,7 +1278,13 @@ function WebhooksTab({
     const body = bot ? { botId: targetId } : { blokId: targetId };
     api("/api/webhooks", {
       method: "POST",
-      body: JSON.stringify({ ...body, name: `${targetOf(targetId)?.name ?? "New"} webhook` }),
+      body: JSON.stringify({
+        ...body,
+        name: (() => {
+          const owner = targetOf(targetId)?.name;
+          return owner ? t("automationsPanel.webhookName", { name: owner }) : t("automationsPanel.webhookNameNew");
+        })(),
+      }),
     })
       .then((r) => {
         load();
@@ -1221,10 +1296,10 @@ function WebhooksTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       {/* list */}
-      <SideColumn id={AUTOMATIONS_LIST} size={AUTOMATIONS_LIST_SIZE} label="Webhooks" className="max-h-[180px] w-full border-b md:max-h-none md:border-b-0">
+      <SideColumn id={AUTOMATIONS_LIST} size={AUTOMATIONS_LIST_SIZE} label={t("automationsPanel.webhooks")} className="max-h-[180px] w-full border-b md:max-h-none md:border-b-0">
         <div className="flex items-center justify-between px-4 pb-1 pt-3">
           <span className="text-small font-medium text-muted-foreground">
-            Your webhooks
+            {t("automationsPanel.yourWebhooks")}
           </span>
           <select
             value={makingFor}
@@ -1234,18 +1309,18 @@ function WebhooksTab({
             }}
             className="rounded-lg border border-input bg-background px-1.5 py-1 text-small text-muted-foreground outline-none"
           >
-            <option value="">+ New</option>
+            <option value="">{t("automationsPanel.new")}</option>
             {bots.map((b) => (
-              <option key={b.id} value={b.id}>for {b.name}</option>
+              <option key={b.id} value={b.id}>{t("automationsPanel.forTarget", { name: b.name })}</option>
             ))}
             {state.bloks.map((r) => (
-              <option key={r.id} value={r.id}>for {r.name}</option>
+              <option key={r.id} value={r.id}>{t("automationsPanel.forTarget", { name: r.name })}</option>
             ))}
           </select>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {(hooks ?? []).map((hook) => {
-            const t = targetOf(hook.botId ?? hook.blokId ?? "");
+            const owner = targetOf(hook.botId ?? hook.blokId ?? "");
             return (
               <button
                 key={hook.id}
@@ -1255,8 +1330,8 @@ function WebhooksTab({
                   hook.id === selectedId ? "bg-accent" : "hover:bg-accent/60",
                 )}
               >
-                {t?.bot ? (
-                  <AgentAvatar bot={t.bot} size={26} />
+                {owner?.bot ? (
+                  <AgentAvatar bot={owner.bot} size={26} />
                 ) : (
                   <span className="flex size-[26px] items-center justify-center rounded-full bg-muted">
                     <Users size={13} />
@@ -1278,7 +1353,7 @@ function WebhooksTab({
                         hook.enabled ? "bg-success" : "bg-muted-foreground/40",
                       )}
                     />
-                    {hook.enabled ? "Active" : "Paused"}
+                    {hook.enabled ? t("automationsPanel.active") : t("common.paused")}
                   </span>
                 </span>
               </button>
@@ -1286,7 +1361,7 @@ function WebhooksTab({
           })}
           {hooks !== null && hooks.length === 0 && (
             <div className="px-3 py-8 text-center text-body leading-relaxed text-muted-foreground">
-              A webhook lets other apps send your agents work.
+              {t("automationsPanel.aWebhookLetsOtherApps")}
             </div>
           )}
         </div>
@@ -1297,7 +1372,7 @@ function WebhooksTab({
         {/* the list folded away: the way back to it, named for what it lists */}
         {folded && (
           <div className="px-3 pt-3">
-            <ShowColumn id={AUTOMATIONS_LIST} text="Your webhooks" label="Show the list" />
+            <ShowColumn id={AUTOMATIONS_LIST} text={t("automationsPanel.yourWebhooks")} label={t("automationsPanel.showTheList")} />
           </div>
         )}
         {error && <div className="px-6 pt-4 text-body text-destructive">{error}</div>}
@@ -1328,18 +1403,25 @@ function WebhooksTab({
                   }}
                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                   className="-mx-1 w-full rounded-md px-1 text-lead font-semibold text-foreground outline-none transition-colors hover:bg-accent/60 focus:bg-accent/60"
-                  title="Rename"
+                  title={t("automationsPanel.rename")}
                 />
                 <div className="text-small text-muted-foreground">
-                  Goes to {target?.name ?? "?"}
+                  {t("automationsPanel.goesTo", { name: target?.name ?? "?" })}
                   {" · "}
                   {selected.firedCount
-                    ? `used ${selected.firedCount} ${selected.firedCount === 1 ? "time" : "times"}, last ${new Date(selected.lastFiredAt ?? 0).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
-                    : "not used yet"}
+                    ? t("automationsPanel.usedTimes", {
+                        count: selected.firedCount,
+                        last: formatDate(selected.lastFiredAt ?? 0, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
+                      })
+                    : t("automationsPanel.notUsedYet")}
                 </div>
               </div>
               <Switch
-                aria-label={`${selected.name || "This webhook"}: on or off`}
+                aria-label={
+                  selected.name
+                    ? t("automationsPanel.toggle.webhookNamed", { name: selected.name })
+                    : t("automationsPanel.toggle.webhookUnnamed")
+                }
                 checked={selected.enabled}
                 onCheckedChange={(on) =>
                   api(`/api/webhooks/${selected.id}`, {
@@ -1354,28 +1436,28 @@ function WebhooksTab({
 
             <div className="mt-5 rounded-2xl border bg-card p-4">
               <div className="flex items-center justify-between">
-                <div className="text-body font-semibold text-foreground">URL</div>
+                <div className="text-body font-semibold text-foreground">{t("automationsPanel.url")}</div>
                 <Button
                   variant="ghost"
                   size="sm"
                   className="text-muted-foreground"
                   onClick={async () => {
                     const yes = await confirm({
-                      title: "Make a new URL?",
-                      body: "The old one will stop working.",
-                      confirmLabel: "Make new URL",
+                      title: t("automationsPanel.rotate.title"),
+                      body: t("automationsPanel.rotate.body"),
+                      confirmLabel: t("automationsPanel.rotate.confirm"),
                       destructive: true,
                     });
                     if (!yes) return;
                     api(`/api/webhooks/${selected.id}/rotate`, { method: "POST" })
                       .then(() => {
                         load();
-                        toast.success("New URL made");
+                        toast.success(t("automationsPanel.rotate.done"));
                       })
                       .catch((e) => setError(e.message));
                   }}
                 >
-                  New URL
+                  {t("automationsPanel.newUrl")}
                 </Button>
               </div>
               <div className="relative mt-2 rounded-xl bg-foreground/[0.04] p-3 pr-11">
@@ -1389,13 +1471,13 @@ function WebhooksTab({
                     setTimeout(() => setCopied(false), 1400);
                   }}
                   className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  title="Copy URL"
+                  title={t("automationsPanel.copyUrl")}
                 >
                   {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
                 </button>
               </div>
               <p className="mt-2 text-small text-muted-foreground">
-                POST anything to it, or try it from Terminal:
+                {t("automationsPanel.postAnythingToItOr")}
               </p>
               <div className="relative mt-1.5 rounded-xl bg-foreground/[0.04] p-3">
                 <code className="block whitespace-pre-wrap break-all font-mono text-small leading-relaxed text-foreground">
@@ -1406,12 +1488,12 @@ function WebhooksTab({
 
             {selected.botId && (
               <label className="mt-4 block rounded-2xl border bg-card p-4">
-                <div className="text-body font-semibold text-foreground">Conversation</div>
+                <div className="text-body font-semibold text-foreground">{t("automationsPanel.conversation")}</div>
                 <input
                   key={`${selected.id}:${selected.thread ?? ""}`}
                   defaultValue={selected.thread ?? ""}
                   maxLength={40}
-                  placeholder="General"
+                  placeholder={t("common.general")}
                   onBlur={(e) => {
                     const thread = e.target.value.trim();
                     if (thread === (selected.thread ?? "")) return;
@@ -1426,37 +1508,39 @@ function WebhooksTab({
                   className="mt-2 w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-body text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-ring/60"
                 />
                 <p className="mt-1.5 text-small text-muted-foreground">
-                  Leave blank for {target?.name ?? "the agent"}'s main chat. A new name starts a new one.
+                  {target?.name
+                    ? t("automationsPanel.threadHint.named", { name: target.name })
+                    : t("automationsPanel.threadHint.unnamed")}
                 </p>
               </label>
             )}
 
             <div className="mt-4 rounded-2xl border bg-card p-4">
-              <div className="text-body font-semibold text-foreground">Recent deliveries</div>
+              <div className="text-body font-semibold text-foreground">{t("automationsPanel.recentDeliveries")}</div>
               {selected.deliveries?.length ? (
                 <div className="mt-2 flex flex-col gap-1.5">
                   {selected.deliveries.map((d, i) => (
                     <div key={i} className="flex items-baseline gap-2.5 text-small">
                       <span className="shrink-0 tabular-nums text-muted-foreground">
-                        {new Date(d.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                        {formatDate(d.at, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                       </span>
                       <span className="min-w-0 truncate font-mono text-small text-foreground">
-                        {d.excerpt || "(empty)"}
+                        {d.excerpt || t("automationsPanel.empty")}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
                 <div className="mt-1 text-body text-muted-foreground">
-                  Nothing received yet.
+                  {t("automationsPanel.nothingReceivedYet")}
                 </div>
               )}
             </div>
 
             <div className="mt-4 flex items-center justify-between rounded-2xl border bg-card p-4">
               <div>
-                <div className="text-body font-semibold text-foreground">Remove this webhook</div>
-                <div className="text-small text-muted-foreground">The URL will stop working.</div>
+                <div className="text-body font-semibold text-foreground">{t("automationsPanel.removeThisWebhook")}</div>
+                <div className="text-small text-muted-foreground">{t("automationsPanel.theUrlWillStopWorking")}</div>
               </div>
               <Button
                 variant="secondary"
@@ -1472,13 +1556,13 @@ function WebhooksTab({
                 }
               >
                 <Trash2 size={12} />
-                Delete
+                {t("common.delete")}
               </Button>
             </div>
           </div>
         ) : (
           <div className="flex h-full items-center justify-center text-body text-muted-foreground">
-            {hooks === null ? "Loading…" : "Pick a webhook or make a new one."}
+            {hooks === null ? t("common.loading") : t("automationsPanel.pickAWebhookOrMake")}
           </div>
         )}
       </div>

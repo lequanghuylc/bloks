@@ -12,6 +12,10 @@
 // explicit and reviewable, bodies are size-capped, ids are slugs that can
 // never escape the skills directory, and nothing is ever fetched and
 // installed on the app's own initiative.
+//
+// Every change to a skill of the person's is kept as a version beside it
+// (server/skill-history.ts), whoever made it, and a writer that says
+// which version it read is refused when the skill has moved on since.
 import {
   chmodSync,
   mkdirSync,
@@ -21,8 +25,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { SKILLS_DIR } from "./config.ts";
+import { DATA_DIR, SKILLS_DIR } from "./config.ts";
 import { closeHeld, openInside, readHeld } from "./open-inside.ts";
+import { SkillHistory, sameText, type Author, type Revision } from "./skill-history.ts";
 
 export interface Skill {
   id: string;
@@ -429,6 +434,155 @@ The file speaks for itself. Your reply is one or two sentences: what you made an
 Return: one self contained file in your artifacts folder, and a reply of a sentence or two.
 Approval: none needed.`,
   },
+  {
+    id: "using-bloks",
+    name: "Using Bloks",
+    description: "Read before acting on Bloks itself for the person: hiring, a new conversation tab or a handoff, rooms, routines, watchers, sharing files, and what only the person can do",
+    // Every command `bloks help` lists is named here, which
+    // test/agent-tab.test.ts holds it to, so a command added to the CLI
+    // without a line here fails the build rather than going unmentioned.
+    body: `Use this when the person asks you to do something in Bloks itself: hire or brief an agent, open a new conversation tab, hand work on, set up a room, schedule or watch for something, share a file, or arrange the sidebar. You do it with the bloks command line. Run \`bloks help\` for the exact flags of the version installed; this says which command fits.
+
+Not for: the work itself. Do what was asked; reach for these only when Bloks has to change.
+
+## Which conversation
+- A new tab: \`tab <agent-id|me> "<first message>" --title "<name>"\` opens a conversation of its own for you (me) or another agent, with that message in it. Use it when the work should be kept apart ("start a new tab for the setup"). The person's screen stays where it is.
+- A handoff: \`say <agent-id> "<text>"\` goes to that agent's first conversation, starting a turn there or waiting behind the one running. \`--task <name>\` only names the work for counting turns between agents; it never opens a tab. \`--now\` is for a correction to a turn already running. \`take-back\` withdraws your words still waiting.
+- A fresh session: \`fresh\` keeps the conversation you are in and its transcript, and starts your next turn there without the old engine context. Keep what matters with \`memory\` first. \`rename\`, \`close\` and \`summary\` also act only on the conversation you are in.
+
+## People and rooms
+- \`agents\` and \`rooms\` list who and what exists, with ids; \`whoami\` is you. Use ids from there, never guessed ones.
+- \`hire\` adds a teammate. \`stop\` and \`archive\` act only on an agent you hired or lead.
+- A room for shared work: \`room --name "<name>" --members "id,id"\` (you are added), then brief it with \`say <room-id> "<brief>"\`, naming with @Name each agent whose part it is. \`history <room-id>\` reads it.
+- \`sidebar\` shows the arrangement; \`file\`, \`pin\` and \`unpin\` change where a row sits.
+- \`message-person\` writes to one person privately, only when the owner or an admin asked you to in a team conversation or a room.
+
+## Work that comes back
+- \`routine\` files a time of day or a check-in for you; \`routines\` lists them, \`unroutine\` drops one.
+- \`watch\` looks at a folder, a page, a feed, a command or a place and acts on a change; \`watchers\`, \`edit-watch\`, \`unwatch\`. \`watch-app\` (see \`app-events\`) only proposes: nothing listens until the person says yes.
+- \`intent\` proposes a standing intent for the person to approve; \`intents\`, \`unintent\`.
+- \`post\` puts work on the job board for whoever takes it; \`jobs\` reads it.
+- \`pause\`, \`pauses\` and \`unpause\` hold an engine for your own work, up to a day.
+- \`incident\` reads a failure you lead and retries it once, hands it on, or tells the person.
+
+## Files, answers and the person
+- \`share <file>\` puts a file in the chat as a card and gives a link; \`telegram\` sends one to their Telegram chat with your bot; \`show\` answers with a chart or a table.
+- \`secret\` asks for a key through a secure field; never ask for one in the chat. \`note\` suggests a fact about the person for them to keep or not.
+- \`memory\` and \`recall\` are your own notes and past conversations. \`skills\` and \`skill\` read the library; \`skill revise\` only proposes a change.
+- \`settings\`, \`goal\` and \`location\` only read; \`settings propose\` only proposes. \`browser\` drives the Bloks browser while the person watches. \`home\` asks Home Assistant, and a change waits for their yes unless they marked it auto. \`reply\` answers the group message that started this turn.
+
+## What only the person can do
+Say so plainly, and show them where rather than naming a page from memory:
+- \`where <words>\` finds the page and the way there in words. \`open <page-id>\` puts a card in the chat whose one button takes them there; it only opens the page.
+- \`settings propose\` lists the few everyday settings you may change for them, on a card they answer with Change or Keep. Anything else is theirs to change.
+- Answer a card, switch which tab is open, rewind, delete an agent, set a goal (/goal in the chat).
+- Always theirs: approvals and rules, the limit on agents writing to agents, engines, sign-ins and keys, members and invites, phones and Bloks Cloud, the plan and spending limits, backups and moving or exporting a workspace, the browser's sites, Home Assistant. Point them there with \`open\`.
+- How a feature works and where it lives: the how-bloks-works skill.
+
+## Say what happened
+Every command answers JSON. Report what it said: the tab's title and id, whether it started or is queued, an engine warning, a card waiting. A refusal means nothing happened: say why in a sentence and what the person can do, and do not look for another way around it.
+
+Return: a sentence or two on what changed, or on what the person needs to do.
+Approval: anything that waits on a card (an app watcher, an intent, a skill revision, a change to the home, a secret) is not done until the person says yes; say it is waiting.`,
+  },
+  {
+    id: "how-bloks-works",
+    name: "How Bloks works",
+    description: "Read when the person asks how Bloks works, what a feature does, where something is, or why Bloks did something: each feature, where it lives, and what you can do about it versus what only they can",
+    // Every Settings page id is named here, which test/agent-guide.test.ts
+    // holds it to, so a page added to the app without a line here fails
+    // the build rather than going unexplained. Written from README.md and
+    // docs/ARCHITECTURE.md; a feature that changes changes here too.
+    body: `Use this when the person asks how Bloks works, what a feature does, where something is, or why Bloks did something: explain it plainly, say where it lives, and say what you can do about it and what only they can. Each part below ends with where it is; the word in backticks is the page id.
+
+Not for: doing the work itself, or acting on Bloks (the using-bloks skill says which command fits). Not for a question you can answer from the conversation.
+
+## Pointing the person somewhere
+- \`where <words>\` searches the same index the app's settings search uses and answers the page, the path in words and the matching rows. Use it rather than your memory: pages move.
+- \`open <page-id> [--row "<row>"]\` puts a card in this conversation with one button that opens that page in their window, and scrolls to the row on a Settings page. It changes nothing. On a phone or in a browser the page may not open, so say the path in words as well.
+- \`settings propose\` lists the few everyday settings you may change for them; \`settings propose <setting> <value> --why "<reason>"\` puts a card with Change and Keep in front of them. Nothing changes until they tap Change, and then it changes as theirs, in the record. Approvals, keys, people, devices, plans, limits, backups and deleting are refused: send them there with \`open\`.
+
+## Turns and conversations
+A message starts a turn on the agent's engine; the reply streams in, with what it runs. Before and after each turn Bloks photographs the agent's folder, and a card under the reply lists the changed files with one Undo. Rewind takes a conversation back to a message they sent, files too. The flask runs a turn as a rehearsal on a copy of the folder, to apply or discard; several agents can try the same task. Each agent has conversations of its own (tabs). Where: the chat; an agent's own settings (\`agent\`). You: \`tab\`, \`rename\`, \`close\`, \`fresh\`. Only the person: undo, rewind, rehearsals, switching tabs.
+
+## Messages while an agent works
+Said mid-turn, a message is read first. Automatic: a stop stops, a correction or an answer to the agent's question goes in now, the rest waits its turn. Interrupt sends everything in now; Queue always waits. One tap flips a waiting message to now. Where: Settings, Behaviour, Messages while an agent works (\`behaviour\`), and per agent in its settings (\`agent\`). Only the person sets it.
+
+## Long conversations
+Claude Code compacts its own session when it fills. Settings, Behaviour can compact long chats, summarise as you go, and compact while idle (off unless chosen). A new session on an old conversation (another engine, a backup, a rewind) is told a bounded story: the running summary, then recent messages. Where: \`behaviour\`. You: \`summary\` reads or drops the summary; \`fresh\` starts a new session and keeps the transcript; \`settings propose compaction.micro\`.
+
+## Memory and the nightly tidy
+Each agent's memory is plain Markdown (MEMORY.md and topic files) in its own folder. The Memory page holds every agent's files, the shared memory every agent reads, notes about the person and a journal of every change with undo. Each night between 01:00 and 05:00 memory is tidied: lines ending "(until YYYY-MM-DD)" go after that day, and the agent's engine merges and trims; a whole night undoes at once. Where: Memory (\`memory\`); Settings, Behaviour, Tidy memory every night (\`behaviour\`); notes they kept in Settings, About you (\`about-you\`). You: \`memory\` for your own; \`note\` suggests a fact for them to keep or not; \`settings propose memory.tidy\`. Only the person: the shared memory, keeping notes.
+
+## Recall
+Before a turn, an agent brings up what is relevant from its other conversations and says exactly what it was given. Its own search reaches its conversations, the rooms it is in and its memory. Where: Settings, Behaviour, Bring up other conversations (\`behaviour\`). You: \`recall <words>\`; \`settings propose recall.beforeTurn\`.
+
+## Approvals and rules
+Ask first, Accept edits, Auto (only rules refuse) or Full access, which takes the engines' own guards off. A card shows the command, file, diff or page and blocks the turn. Rules are sentences; a deny beats an allow. Repeated approvals are offered as a rule, never for deleting, money or credentials. Work somebody else started never runs in Full access. Where: Settings, Rules and approvals (\`rules\`); new agents' start in Settings, New agents (\`new-agents\`). Only the person, always.
+
+## Agents working with agents
+\`say\` hands work to another agent; \`tab\` opens a conversation for it. A turn may make twelve changes, plus one message kept back to report. Each message an agent sends starts one step further along a chain; past the limit (twelve by default, 1 to 50) the words are held for the person. A budget across tasks is off unless they set one. Where: Settings, Behaviour, Agent-to-agent limit (\`behaviour\`). Only the person changes these.
+
+## Rooms and Auto
+In a room agents take turns and the lead speaks last. Who answers a message naming nobody: everyone, the lead, or Auto, where a small model picks the member whose role fits and the lead answers when it is unsure; @Name always wins. A room can be carried into Slack, Discord, WhatsApp or a Signal group. Where: the room's own settings; the engine Auto asks in Settings, Behaviour, Auto picks with (\`behaviour\`). You: \`room\`, \`say <room-id>\`, \`history\`.
+
+## The incident desk
+Something that fails for good goes to its lead, which retries once, hands it on or tells the person on a card. Where: Settings, Behaviour, Incident desk and Who leads incidents (\`behaviour\`). You: \`incident\` when you lead.
+
+## Routines, check-ins and watchers
+A routine runs at a time on chosen days, or once; a check-in every 15 minutes to 24 hours within hours, answering QUIET when nothing needs the person. A watcher looks at a folder, a page, a feed, a command or a place and starts a turn on a change, at most six an hour. An app watcher starts work on an event in a connected app (it needs the Composio project key in \`apps\`); an agent only proposes one, and the event reaches it as data. Where: Automations on the rail (\`automations\`), Schedules (\`automations:schedules\`) and Watchers (\`automations:watchers\`). You: \`routine\`, \`routines\`, \`unroutine\`, \`watch\`, \`watchers\`, \`edit-watch\`, \`unwatch\`, \`watch-app\`, \`app-events\`. Only the person: starting an app watcher.
+
+## Intents, workflows, webhooks and jobs
+An intent is up to twelve phrases; when one comes up in a conversation it posts a note, brings an agent in or messages one. Agents propose, the person approves. A workflow is a trigger, steps and a person who says yes; a webhook turns an outside event into a task; the job board holds work for whoever takes it. Where: Automations, Intents (\`automations:intents\`), Workflows (\`automations:workflows\`), Webhooks (\`automations:webhooks\`), Job board (\`automations:jobs\`). You: \`intent\`, \`intents\`, \`unintent\`, \`post\`, \`jobs\`. Only the person: approving intents, workflows, webhooks.
+
+## Goals
+\`/goal\` in the chat gives a conversation a goal: what done looks like, a check that must exit 0, and up to a hundred turns (twenty unless said). It keeps going until done, stuck or out of turns. You: \`goal\` reads it. Only the person sets, pauses or clears one.
+
+## The morning brief
+On Overview, written each morning from what is on disk, with no model call: what each agent did, what waits on the person and what it cost. They choose the time, the notification, whether a quiet morning notifies, and the sections. Where: Overview (\`overview\`), Customize the brief. You: \`settings propose\` brief.enabled, brief.time, brief.notify, brief.allClear, brief.section.<name>.
+
+## Skills and their versions
+Skills are instructions agents pick up. With suggestions on, Bloks offers a new skill after a turn that worked something out, or a change after a skill was corrected. Every version is kept: who, why, compare, restore. Where: Plugins, Skills (\`plugins:skills\`); Settings, Behaviour, Suggest skills (\`behaviour\`); Settings, Plugins (\`plugins\`). You: \`skills\`, \`skill\`, \`skill revise\` (a proposal); \`settings propose skills.learn\`. Only the person: keeping, editing, restoring, installing.
+
+## The catalogue
+Ready teams and skills, installed only after a review that names what each creates; routines start paused. Where: Plugins, Catalogue (\`plugins:catalog\`). Only the person installs.
+
+## Engines and keys
+Each agent picks an engine. Engines that run a program (Claude Code, Codex, Gemini CLI and others) work in folders; API engines get a smaller set of tools from Bloks. A backup engine takes a turn that hit a limit or outage. Engines and keys belong to a workspace. Where: Settings, Engines and keys (\`engines\`); an agent's engine in its settings (\`agent\`); defaults in Settings, New agents (\`new-agents\`); voices in Settings, Voices (\`voices\`). You: \`pause\` your own engine up to a day; \`settings propose agent.model\`, \`agent.effort\`, \`newAgents.effort\`. Only the person: installing, signing in, keys, endpoints.
+
+## Bloks AI, plan and spending
+Bloks AI is a monthly allowance on their Bloks plan: no key or sign-in. Usage shows cost, tokens and turns by agent and engine; a monthly spending limit on an engine with their own key pauses new turns there, or hands them to a backup. Members have limits of their own. Where: Settings, Plan (\`plan\`); Usage (\`usage\`); Members (\`workspace:members\`). Only the person.
+
+## Apps, tools and secrets
+Connected apps and MCP servers, and Composio's keys, saved secrets and using Bloks from other AI apps. Where: Settings, Plugins (\`plugins\`); Settings, Apps and keys (\`apps\`); Plugins on the rail (\`plugins:apps\`). You: \`secret\` asks for a key through a secure field. Only the person: everything else.
+
+## Phones, the web and Bloks Cloud
+The iPhone app pairs with each workspace; nothing runs on the phone. Location, when on, tells the owner's agents roughly where they are. With Bloks Cloud a workspace is reachable online for the phone, bloks.dev/web and people they invite, and each agent gets an email address. Where: Settings, Phone and devices (\`devices\`); Reachable online (\`workspace:online\`). You: \`location\`. Only the person: pairing, access, Cloud.
+
+## Telegram, Signal, chat apps and email
+Agents answer on Telegram or Signal; a room can be carried into Slack, Discord, WhatsApp or a Signal group; mail from anyone but the owner never runs in Full access. Where: Settings, Chat and email (\`chat\`). You: \`telegram\` sends a file to their chat with your bot; \`reply\` answers the group message that started a turn. Only the person sets these up.
+
+## Home Assistant
+Agents the owner let in read the entities the owner listed; a change asks on a card unless marked auto, and locks, alarms and garage doors always ask. Home Assistant can start an agent. Where: Settings, Home Assistant (\`home\`). You: \`home\`. Only the person sets it up.
+
+## The browser, computers and where an agent works
+The Bloks browser beside the chat is driven by agents while the person watches and can take over. Sites off their list ask first; passwords, card numbers and uploads always ask. A computer is a private VM here or in the cloud. An agent on an engine that runs a program can work in a Docker container or over SSH, set in its engine settings. Each agent has a terminal. Where: Settings, Browser (\`browser\`); Settings, Computers (\`computers\`); the agent's settings (\`agent\`). You: \`browser\`. Only the person: sites, computers, containers, SSH.
+
+## Workspaces and people
+A workspace is a whole Bloks with its own agents, memory, keys and folder. With Bloks Team they invite people as admins or members. Each workspace can be muted and says how much it may interrupt. Where: Settings, under the workspace's name: General (\`workspace:general\`), Members (\`workspace:members\`), Notifications (\`workspace:notifications\`). You: \`message-person\` when the owner or an admin asks. Only the person.
+
+## Records, safety and moving
+Consequential actions go in a signed, hash-chained record. The security checkup says what can reach their keys, accounts and computer. Backups are daily, beside the data folder, with undo history and a passphrase if chosen. Writing a workspace out moves it to an empty one elsewhere; keys never travel. Setups and past sessions come over from Claude Code, Codex and others, reviewed first. Export for training writes runs to a JSONL file here and sends nothing. Where: Settings, Record (\`record\`), Security checkup (\`security\`), Backups (\`backups\`), Bring your setup (\`bring-setup\`), Past conversations (\`past-sessions\`), Export for training (\`training\`). Only the person, all of it.
+
+## Looks, language and updates
+Name, theme, accent, transcript width, the sidebar's conversations, the quick ask shortcut and the language (seven; agents answer in whatever language is written to them, and some server words are English). Where: Settings, General (\`general\`); version, updates and feedback in Settings, About and updates (\`about\`). Only the person; theme, accent and width belong to each window.
+
+## Where data lives
+Plain files on their computer: Personal in ~/.bloks, other workspaces in the app's folder (on a Mac, ~/Library/Application Support/Bloks/workspaces/). Backups in ~/.bloks-backups, exports in ~/.bloks-exports. No server of Bloks holds their data.
+
+Return: a plain answer in a few sentences: what it is, how it behaves, where it lives, and what you or they can do. Then \`open\` when a page helps.
+Approval: none to explain or point. A proposed change waits on their Change.`,
+  },
 ];
 
 /** The design skill every agent that makes files has, attached or not:
@@ -448,6 +602,34 @@ export function withPageDesign(attached: Skill[]): Skill[] {
   if (attached.some((s) => s.id === PAGE_DESIGN)) return attached;
   const design = getSkills([PAGE_DESIGN]);
   return [...attached, ...design];
+}
+
+/** The skill on Bloks itself, which rides along as the design skill does,
+ * for every agent whose turn has the command line to act with: told only
+ * the commands, an agent asked for a new tab guessed, and a handoff landed
+ * in a conversation nobody meant (GitHub 408). */
+export const BLOKS_GUIDE = "using-bloks";
+
+/** An agent's skills with the Bloks guide added when it is not among
+ * them, read through the library so the person's own copy counts. */
+export function withBloksGuide(attached: Skill[]): Skill[] {
+  if (attached.some((s) => s.id === BLOKS_GUIDE)) return attached;
+  return [...attached, ...getSkills([BLOKS_GUIDE])];
+}
+
+/** The skill on how Bloks works, feature by feature, and where each lives.
+ * Explaining is harmless, so it goes to every turn that can read a skill
+ * on demand. That is the turn the guide above goes to and no other:
+ * reading one on demand is \`bloks skill\`, which needs the turn's own
+ * full credential, and an API engine has no tool that reads a skill, so
+ * sending it the index line would name a skill it cannot open. */
+export const BLOKS_EXPLAINER = "how-bloks-works";
+
+/** An agent's skills with the explainer added when it is not among them,
+ * read through the library so the person's own copy counts. */
+export function withBloksExplainer(attached: Skill[]): Skill[] {
+  if (attached.some((s) => s.id === BLOKS_EXPLAINER)) return attached;
+  return [...attached, ...getSkills([BLOKS_EXPLAINER])];
 }
 
 // ── reading ───────────────────────────────────────────────────────────
@@ -594,7 +776,92 @@ export interface InstallInput {
   id?: string;
 }
 
-export function installSkill(input: InstallInput): Skill {
+/** Who is changing a skill, and why, for its history. */
+export interface Change {
+  by: Author;
+  /** One line. */
+  why: string;
+  /**
+   * The version the writer read. When it is given and the skill has
+   * moved on since, nothing is written: two writers that both read
+   * version 3 cannot both turn it into their version 4. A built-in, and
+   * a skill that is not there yet, are version 0.
+   */
+  from?: number;
+  /** Set when this puts an earlier version back. */
+  restoredFrom?: number;
+}
+
+/** A write refused because the skill moved on since the writer read it. */
+export class SkillMovedOn extends Error {
+  readonly status = 409;
+  readonly read: number;
+  readonly current: number;
+  constructor(read: number, current: number) {
+    super(`This skill has changed since version ${read}: it is version ${current} now. Read it again and make the change against that.`);
+    this.read = read;
+    this.current = current;
+  }
+}
+
+/** A change nobody described, which is a person saving in the app. */
+const BY_YOU: Change = { by: { kind: "person", name: "you" }, why: "Saved" };
+
+let history: SkillHistory | null = null;
+
+/** Where every skill's versions are kept. Made on first use, so reading
+ * the library never touches the disk beyond the skills themselves. */
+export function skillHistory(): SkillHistory {
+  return (history ??= new SkillHistory(join(DATA_DIR, "skill-history")));
+}
+
+/** A bundled skill as it ships, whether or not a copy shadows it. */
+export function builtinSkill(id: string): Skill | null {
+  const found = BUILTIN.find((b) => b.id === id);
+  return found ? { ...found, source: "builtin" } : null;
+}
+
+/**
+ * The version a skill is at, as an agent reading it now would see it.
+ *
+ * A built-in is version 0: it is the same text on every install. A skill
+ * of the person's with no record yet, which is every skill written before
+ * versions existed, becomes version 1 here, as it stands.
+ */
+export function revisionOf(skill: Pick<Skill, "id" | "source" | "name" | "description" | "body">): number {
+  if (skill.source === "builtin") return 0;
+  return skillHistory().sync(skill.id, skill).n;
+}
+
+/** One version of a skill in full, or null when there is no such version.
+ * Version 0 of a built-in is the text it ships with. */
+export function skillAt(id: string, n: number): Revision | null {
+  if (n === 0) {
+    const shipped = builtinSkill(id);
+    return shipped
+      ? { n: 0, at: 0, by: { kind: "builtin", name: "Bloks" }, why: "As it ships with Bloks", name: shipped.name, description: shipped.description, body: shipped.body }
+      : null;
+  }
+  return skillHistory().get(slugify(id), n);
+}
+
+/** Every skill of the person's given a version 1 if it has none, so the
+ * first look at any skill's history finds it already there. Run once as
+ * the server starts; reading the library never writes. */
+export function migrateSkillHistory(): number {
+  let started = 0;
+  for (const skill of readUserSkills()) {
+    try {
+      if (!skillHistory().latest(skill.id)) started++;
+      skillHistory().sync(skill.id, skill);
+    } catch {
+      /* one unreadable record should not stop the rest */
+    }
+  }
+  return started;
+}
+
+export function installSkill(input: InstallInput, change: Change = BY_YOU): Skill & { revision: number } {
   const fromDoc = input.markdown ? parseMarkdown(input.markdown) : null;
   const body = (input.body ?? fromDoc?.body ?? "").trim();
   if (!body) throw Object.assign(new Error("a skill needs instructions"), { status: 400 });
@@ -623,6 +890,11 @@ export function installSkill(input: InstallInput): Skill {
   // "replace what you wrote" rather than say plainly that this is its
   // own skill with your changes on top.
   const before = existing.find((s) => s.id === id);
+  // Whatever stands now is kept before anything is written over it: a
+  // skill with no record yet, or a file edited by hand since its last
+  // version, becomes a version of its own first.
+  const standing = before ? skillHistory().sync(id, before).n : 0;
+  if (change.from !== undefined && change.from !== standing) throw new SkillMovedOn(change.from, standing);
   const from = {
     registry: input.registry ?? before?.registry,
     version: input.version ?? before?.version,
@@ -642,6 +914,17 @@ export function installSkill(input: InstallInput): Skill {
     /* non-POSIX filesystem */
   }
   if (skillObservation) skillObservation.invalidatedAt = Date.now();
+  // The first change to a built-in makes it the person's own copy, and
+  // that copy's history starts with the text as it shipped, so "what did
+  // I change" has an answer.
+  const shipped = before ? null : builtinSkill(id);
+  if (shipped) {
+    const latest = skillHistory().latest(id);
+    if (!latest || !sameText(latest, shipped)) {
+      skillHistory().record(id, shipped, { by: { kind: "builtin", name: "Bloks" }, why: "As it ships with Bloks" });
+    }
+  }
+  const revision = skillHistory().record(id, { name, description, body }, change);
   return {
     id,
     name,
@@ -651,6 +934,7 @@ export function installSkill(input: InstallInput): Skill {
     ...(from.registry ? { registry: from.registry } : {}),
     ...(from.version ? { version: from.version } : {}),
     ...(from.sha256 ? { sha256: from.sha256 } : {}),
+    revision: revision.n,
   };
 }
 
@@ -659,6 +943,12 @@ export function deleteSkill(id: string): boolean {
   try {
     unlinkSync(join(SKILLS_DIR, `${slug}.md`));
     if (skillObservation) skillObservation.invalidatedAt = Date.now();
+    // its versions stay: removing a skill is not forgetting what it said
+    try {
+      skillHistory().removed(slug);
+    } catch {
+      /* the skill is gone either way */
+    }
     return true;
   } catch {
     return false;

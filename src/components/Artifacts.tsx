@@ -32,13 +32,14 @@ import { cn } from "@/lib/cn";
 import { modKey } from "@/lib/thisComputer";
 import { destination } from "@/lib/attachments";
 import { artifactHref, fileBase, fileTarget, openFailure, tooLargeHere, viewerFor, type Viewer } from "@/lib/sharedFile";
+import { formatNumber, t } from "@/lib/i18n";
 
 type ArtifactMeta = NonNullable<Message["artifact"]>;
 
 function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024) return t("artifacts.size.bytes", { n: bytes });
+  if (bytes < 1024 * 1024) return t("artifacts.size.kb", { n: formatNumber(bytes / 1024, { maximumFractionDigits: 0 }) });
+  return t("artifacts.size.mb", { n: formatNumber(bytes / 1024 / 1024, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
 }
 
 function kindOf(artifact: ArtifactMeta): { label: string; icon: React.ReactNode; viewer: Viewer } {
@@ -47,24 +48,24 @@ function kindOf(artifact: ArtifactMeta): { label: string; icon: React.ReactNode;
   const viewer = viewerFor(mime, name);
   switch (viewer) {
     case "iframe":
-      return { label: "Web page", icon: <FileCode size={18} />, viewer };
+      return { label: t("artifacts.kind.webPage"), icon: <FileCode size={18} />, viewer };
     case "pdf":
       return { label: "PDF", icon: <FileText size={18} />, viewer };
     case "image":
-      return { label: "Image", icon: <FileImage size={18} />, viewer };
+      return { label: t("artifacts.kind.image"), icon: <FileImage size={18} />, viewer };
     case "video":
-      return { label: "Video", icon: <FileVideo size={18} />, viewer };
+      return { label: t("artifacts.kind.video"), icon: <FileVideo size={18} />, viewer };
     case "table":
     case "sheet":
-      return { label: "Spreadsheet", icon: <FileSpreadsheet size={18} />, viewer };
+      return { label: t("artifacts.kind.spreadsheet"), icon: <FileSpreadsheet size={18} />, viewer };
     case "markdown":
-      return { label: "Markdown", icon: <FileText size={18} />, viewer };
+      return { label: t("artifacts.kind.markdown"), icon: <FileText size={18} />, viewer };
     case "text":
-      return { label: ext === "json" ? "JSON" : "Text", icon: <FileText size={18} />, viewer };
+      return { label: ext === "json" ? "JSON" : t("artifacts.kind.text"), icon: <FileText size={18} />, viewer };
   }
-  if (ext === "pptx") return { label: "Slides", icon: <Presentation size={18} />, viewer };
-  if (ext === "docx") return { label: "Document", icon: <FileText size={18} />, viewer };
-  return { label: "File", icon: <FileText size={18} />, viewer };
+  if (ext === "pptx") return { label: t("artifacts.kind.slides"), icon: <Presentation size={18} />, viewer };
+  if (ext === "docx") return { label: t("artifacts.kind.document"), icon: <FileText size={18} />, viewer };
+  return { label: t("artifacts.kind.file"), icon: <FileText size={18} />, viewer };
 }
 
 /** The file's bytes as text, or a sentence saying why not: a missing file
@@ -129,13 +130,13 @@ export function ArtifactCard({ botId, artifact }: { botId: string; artifact: Art
           <span className="flex shrink-0 items-center gap-1">
             {kind.viewer !== "none" && (
               <Button size="sm" variant="secondary" onClick={() => setViewing(true)}>
-                View
+                {t("artifacts.view")}
               </Button>
             )}
             <a
               href={`${href}?download`}
               download={fileBase(artifact.name)}
-              title="Download"
+              title={t("artifacts.download")}
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <Download size={15} />
@@ -208,7 +209,8 @@ function anchorLabel(anchor: ArtifactNote["anchor"]): string {
     }
     return `${name}${(anchor.row ?? 0) + 1}`;
   }
-  return anchor.kind === "line" ? `L${(anchor.index ?? 0) + 1}` : `p${(anchor.index ?? 0) + 1}`;
+  const n = String((anchor.index ?? 0) + 1);
+  return anchor.kind === "line" ? t("artifacts.anchor.line", { n }) : t("artifacts.anchor.page", { n });
 }
 
 function GridTable({
@@ -239,7 +241,7 @@ function GridTable({
                   <td
                     key={c}
                     onClick={() => onPin(r, c)}
-                    title="Leave a note on this cell"
+                    title={t("artifacts.leaveANoteOnThis")}
                     className={cn(
                       "relative max-w-[320px] cursor-text truncate border-r px-2.5 py-1.5 tabular-nums last:border-r-0",
                       r === 0 ? "font-medium text-foreground" : "text-foreground/90",
@@ -266,7 +268,7 @@ function GridTable({
       </table>
       {rows.length > MAX_ROWS && (
         <div className="px-3 py-2 text-small text-muted-foreground">
-          Showing the first {MAX_ROWS} of {rows.length} rows; download for the rest.
+          {t("artifacts.showingFirstRows", { shown: MAX_ROWS, total: rows.length })}
         </div>
       )}
     </div>
@@ -361,7 +363,7 @@ export function ArtifactViewer({
               onClick={() => setSource((s) => !s)}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-body text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              {source ? "Show rendered" : "Show source"}
+              {source ? t("artifacts.showRendered") : t("artifacts.showSource")}
             </button>
           )}
           <a
@@ -370,7 +372,7 @@ export function ArtifactViewer({
             className="mr-6 flex items-center gap-1.5 rounded-lg px-2 py-1 text-body text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <Download size={14} />
-            Download
+            {t("artifacts.download")}
           </a>
         </div>
 
@@ -379,7 +381,7 @@ export function ArtifactViewer({
             <div className="flex flex-col items-start gap-3 p-6">
               <div className="text-body text-destructive">{error}</div>
               <Button size="sm" variant="secondary" onClick={() => setAttempt((n) => n + 1)}>
-                Try again
+                {t("common.tryAgain")}
               </Button>
             </div>
           )}
@@ -392,7 +394,7 @@ export function ArtifactViewer({
                 className="size-full border-0 bg-white"
               />
             ) : (
-              !error && <div className="p-6 text-body text-muted-foreground">Loading…</div>
+              !error && <div className="p-6 text-body text-muted-foreground">{t("common.loading")}</div>
             ))}
           {kind.viewer === "pdf" && (
             <iframe src={href} title={artifact.name} className="size-full border-0" />
@@ -413,7 +415,7 @@ export function ArtifactViewer({
               <div className="flex size-full flex-col items-center justify-center gap-3 px-6 text-center">
                 <span className="text-muted-foreground">{kind.icon}</span>
                 <div className="max-w-[420px] text-ui text-muted-foreground">
-                  This video can't play here. Download it to watch in another player.
+                  {t("artifacts.thisVideoCantPlayHere")}
                 </div>
                 <div className="flex gap-2">
                   <Button
@@ -424,12 +426,12 @@ export function ArtifactViewer({
                       setAttempt((n) => n + 1);
                     }}
                   >
-                    Try again
+                    {t("common.tryAgain")}
                   </Button>
                   <Button asChild size="sm" variant="secondary">
                     <a href={`${href}?download`} download={fileBase(artifact.name)}>
                       <Download size={13} />
-                      Download
+                      {t("artifacts.download")}
                     </a>
                   </Button>
                 </div>
@@ -468,7 +470,7 @@ export function ArtifactViewer({
                     a table nor a comment thread. */}
                 <div className="flex max-h-[45%] w-full shrink-0 flex-col border-t bg-card sm:max-h-none sm:w-[260px] sm:border-l sm:border-t-0">
                   <div className="flex items-center justify-between border-b px-3 py-2">
-                    <span className="text-small font-semibold text-foreground">Notes</span>
+                    <span className="text-small font-semibold text-foreground">{t("artifacts.notes")}</span>
                     {notes.some((n) => !n.resolved) && (
                       <button
                         disabled={sending}
@@ -481,7 +483,7 @@ export function ArtifactViewer({
                         }}
                         className="rounded-lg bg-primary px-2 py-1 text-small font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
                       >
-                        {sending ? "Sending…" : "Send to agent"}
+                        {sending ? t("artifacts.sending") : t("artifacts.sendToAgent")}
                       </button>
                     )}
                   </div>
@@ -515,17 +517,17 @@ export function ArtifactViewer({
                               setDraft("");
                             }
                           }}
-                          placeholder="What is wrong here?"
+                          placeholder={t("artifacts.whatIsWrongHere")}
                           className="w-full resize-none rounded-lg border border-input bg-background px-2 py-1.5 text-small outline-none"
                         />
                         <div className="mt-1 text-caption text-muted-foreground">
-                          {modKey()}Enter saves, Escape cancels
+                          {t("artifacts.enterSavesEscapeCancels", { mod: modKey() })}
                         </div>
                       </div>
                     )}
                     {notes.length === 0 && !pinning && (
                       <div className="px-1 py-3 text-small leading-relaxed text-muted-foreground">
-                        Click a cell to leave a note on it.
+                        {t("artifacts.clickACellToLeave")}
                       </div>
                     )}
                     {notes.map((note) => (
@@ -542,7 +544,7 @@ export function ArtifactViewer({
                           </span>
                           <div className="flex gap-0.5">
                             <button
-                              title={note.resolved ? "Reopen" : "Mark done"}
+                              title={note.resolved ? t("artifacts.reopen") : t("artifacts.markDone")}
                               onClick={() =>
                                 void fetch(`${notesUrl}/${note.id}`, {
                                   method: "PATCH",
@@ -557,7 +559,7 @@ export function ArtifactViewer({
                               <Check size={12} />
                             </button>
                             <button
-                              title="Remove"
+                              title={t("common.remove")}
                               onClick={() =>
                                 void fetch(`${notesUrl}/${note.id}`, { method: "DELETE" })
                                   .then(loadNotes)
@@ -578,7 +580,7 @@ export function ArtifactViewer({
                 </div>
               </div>
             ) : (
-              !error && <div className="p-6 text-body text-muted-foreground">Loading…</div>
+              !error && <div className="p-6 text-body text-muted-foreground">{t("common.loading")}</div>
             ))}
           {kind.viewer === "markdown" &&
             (text !== null ? (
@@ -594,7 +596,7 @@ export function ArtifactViewer({
                 </div>
               )
             ) : (
-              !error && <div className="p-6 text-body text-muted-foreground">Loading…</div>
+              !error && <div className="p-6 text-body text-muted-foreground">{t("common.loading")}</div>
             ))}
           {kind.viewer === "text" &&
             (text !== null ? (
@@ -602,19 +604,19 @@ export function ArtifactViewer({
                 {text}
               </pre>
             ) : (
-              !error && <div className="p-6 text-body text-muted-foreground">Loading…</div>
+              !error && <div className="p-6 text-body text-muted-foreground">{t("common.loading")}</div>
             ))}
           {/* the notes rail */}
           {kind.viewer === "none" && (
             <div className="flex size-full flex-col items-center justify-center gap-3 text-center">
               <span className="text-muted-foreground">{kind.icon}</span>
               <div className="text-ui text-muted-foreground">
-                No preview for this file type.
+                {t("artifacts.noPreviewForThisFile")}
               </div>
               <Button asChild size="sm" variant="secondary">
                 <a href={`${href}?download`} download={fileBase(artifact.name)}>
                   <Download size={13} />
-                  Download {fileBase(artifact.name)}
+                  {t("artifacts.downloadName", { name: fileBase(artifact.name) })}
                 </a>
               </Button>
             </div>
@@ -673,7 +675,7 @@ export function SharedFileLink({
         type="button"
         onClick={() => void open()}
         disabled={opening.phase === "opening"}
-        title={target?.kind === "artifact" ? `Open ${fileBase(target.name)}` : `Open ${href}`}
+        title={t("artifacts.openName", { name: target?.kind === "artifact" ? fileBase(target.name) : href })}
         className={cn(
           "inline cursor-pointer text-left underline decoration-dotted underline-offset-2 [overflow-wrap:anywhere] hover:opacity-80 disabled:cursor-progress disabled:opacity-60",
           className,
@@ -687,15 +689,15 @@ export function SharedFileLink({
       {opening.phase === "failed" && (
         <Dialog open onOpenChange={(isOpen) => !isOpen && setOpening({ phase: "idle" })}>
           <DialogContent className="max-w-[420px] gap-3 p-5">
-            <DialogTitle className="text-ui">Couldn't open this file</DialogTitle>
+            <DialogTitle className="text-ui">{t("artifacts.couldntOpenThisFile")}</DialogTitle>
             <div className="text-body leading-relaxed text-muted-foreground">{opening.message}</div>
             <div className="break-all font-mono text-small text-muted-foreground/80">{href}</div>
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="secondary" onClick={() => void open()}>
-                Try again
+                {t("common.tryAgain")}
               </Button>
               <Button size="sm" onClick={() => setOpening({ phase: "idle" })}>
-                Close
+                {t("common.close")}
               </Button>
             </div>
           </DialogContent>

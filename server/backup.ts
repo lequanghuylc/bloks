@@ -280,6 +280,8 @@ export const SECRET_PATHS = [
   "composio.apiKey",
   "speech.elevenlabsKey",
   "speech.openaiKey",
+  "speech.fishKey",
+  "speech.xaiKey",
   "box.token",
   "custom[].keys[].key",
   "chat.slack.botToken",
@@ -291,8 +293,10 @@ export const SECRET_PATHS = [
   "telegram.token",
   "telegram.bots.*.token",
   "telegram.pending.token",
+  "home.token",
   "mcpServers[].headers",
   "secrets",
+  "connections[].token",
   "relay.agentToken",
   "relay.clientToken",
   "credits.licence",
@@ -405,6 +409,8 @@ export function leftOutBecause(rel: string, isDir: boolean, undo: boolean): stri
     if (isDir && (name === "cache" || name === "tmp")) return "cache";
     if (isDir && name === "checkpoints" && !undo) return "Undo history, not asked for";
     if (!isDir && (name === "server.lock" || name === "port")) return "belongs to the running server";
+    // what the last server update did, and the output of a server it started
+    if (!isDir && (name === "server-update.json" || name === "server-update-plan.json" || name === "server.log")) return "belongs to the running server";
     // where the person's phone last was is for now, and for this computer
     if (!isDir && name === "location.json") return "where your phone last was, which is not kept";
   }

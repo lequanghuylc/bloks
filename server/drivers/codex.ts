@@ -46,6 +46,7 @@ import { CODEX_PERSON_HOLD, CODEX_PERSON_NEXT, personTurnHold } from "../person-
 import { CodexSpeedUnavailable, type CodexSpeedRefusal, FAST_TIER, fastRefusal, requireFastTier, resolveCodexSpeed } from "../codex-speed.ts";
 import { createAskBroker, type AskBroker } from "../harness/ask-broker.ts";
 import { checkCodexReplyEndpoint, makeCodexReplyFolder } from "../person-turn.ts";
+import { isConnectionEnvName } from "../connections.ts";
 
 const DRIVER_KIND = "codex";
 const NATIVE_SOURCE = "codex.app-server";
@@ -208,7 +209,12 @@ const SHELL_NAMES = ["BLOKS_CLI", "BLOKS_URL", "BLOKS_TOKEN", "BLOKS_REPLY_TOKEN
 export function shellConfig(env: Record<string, string | undefined> | undefined, includeOnly?: unknown): Record<string, unknown> | null {
   const config: Record<string, unknown> = {};
   const named: string[] = [];
-  for (const name of SHELL_NAMES) {
+  // A connection's address and git's pointer to it (server/connections.ts)
+  // ride the same way: Codex's default policy leaves out any name with
+  // KEY in it, which GIT_CONFIG_KEY_0 has, and a clone would then go
+  // straight to github.com with no address at all.
+  const connection = Object.keys(env ?? {}).filter((name) => isConnectionEnvName(name));
+  for (const name of [...SHELL_NAMES, ...connection]) {
     const value = env?.[name];
     if (typeof value !== "string" || !value) continue;
     config[`shell_environment_policy.set.${name}`] = value;
@@ -231,6 +237,18 @@ const CONFIG_REFUSED = /unknown field `?config\b/i;
 export const SHELL_REFUSED_NOTICE =
   "This Codex would not take the setting Bloks uses to hand its command line to the agent's shell, so it carried on without it. " +
   "Where this project's Codex config narrows shell_environment_policy, the agent's commands cannot reach Bloks. Updating Codex should fix it.";
+
+// ── Codex's own goals ──────────────────────────────────────────────────
+//
+// An agent could give itself a goal with Codex's create_goal tool, on by
+// default, and Codex then starts a turn of its own to carry on with it
+// straight after each one ends. Bloks ends the process there, so that
+// turn was cut off every time, and the next one opened told to keep
+// working toward a goal nobody was holding (GitHub 380). So the thread's
+// config turns Codex's goals off, on every start, resume and fork, and a
+// thread that already has one has it cleared once, when it is resumed.
+
+const GOALS_OFF = { "features.goals": false } as const;
 
 // ── the agent's own MCP servers ────────────────────────────────────────
 //
@@ -484,6 +502,37 @@ const QUESTION_METHOD = "item/tool/requestUserInput";
 const MCP_ELICITATION_METHOD = "mcpServer/elicitation/request";
 const EDIT_APPROVAL_METHODS = new Set(["item/fileChange/requestApproval", "applyPatchApproval"]);
 
+// ── questions that do not wait ────────────────────────────────────────
+//
+// Codex has a second way to ask, request_user_input_async, and it is not
+// a request at all: the tool tells the agent its question was taken, the
+// agent carries on, and the question arrives as a finished agentMessage
+// with `delivery: "async"` and the questions themselves beside its text.
+// Read as a reply, it was words in the transcript with nothing to answer
+// and nobody told (GitHub 402). It opens the same card a blocking
+// question does now, and since no call is left to hear the answer, the
+// answer goes to the conversation as the person's words.
+
+/** Outstanding async questions an instance keeps, and the items it
+ * remembers having carded. Past these the oldest goes. */
+const MAX_ASYNC_ASKS = 256;
+const MAX_ASYNC_SEEN = 1_024;
+
+/** An async question item, read the way a blocking question's card is:
+ * every question's title, and the first one's choices. Null for an item
+ * that is only words, or one whose questions name nothing to ask. */
+export function asyncQuestion(item: any): { summary: string; choices: string[] } | null {
+  if (item?.delivery !== "async" || !Array.isArray(item.questions)) return null;
+  const said = (value: unknown, max: number) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+  const asked = item.questions
+    .map((q: any) => ({ title: said(q?.title ?? q?.question ?? q?.header, 500), options: Array.isArray(q?.options) ? q.options : [] }))
+    .filter((q: { title: string }) => q.title);
+  if (!asked.length) return null;
+  // a choice is a plain string here, a { label } on the blocking path
+  const choices: string[] = asked[0].options.map((o: any) => said(typeof o === "string" ? o : o?.label, 200)).filter(Boolean);
+  return { summary: asked.map((q: { title: string }) => q.title).join(" · "), choices: [...new Set(choices)].slice(0, 5) };
+}
+
 /** What the agent is asking to touch, in a word the transcript can show. */
 function toolOf(method: string, params: any): string {
   if (EDIT_APPROVAL_METHODS.has(method)) return "edit";
@@ -611,11 +660,21 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       asks: Map<string, Answer>;
     }
     const running = new Map<string, RunningTurn>();
+    /** Async questions still open, by the request id on their card, with
+     * the conversation and turn that asked. The instance's, not the
+     * turn's: the turn that asked has often ended by the time anyone
+     * answers, and the answer still has somewhere to go. */
+    const asyncAsks = new Map<string, { threadId: string; turnId: string }>();
+    /** The async question items already carded, by conversation, Codex
+     * turn and item, so the same item said again is not a second card. */
+    const asyncSeen = new Set<string>();
     /** Conversations already told their Codex would not take the shell's
      * config (SHELL_REFUSED_NOTICE), so a lane hears it once, not every turn. */
     const toldShellRefused = new Set<string>();
     /** The same for the agent's MCP servers (SERVERS_REFUSED_NOTICE). */
     const toldServersRefused = new Set<string>();
+    /** Codex threads already asked to clear a goal of Codex's own. */
+    const goalsCleared = new Set<string>();
     /** What each conversation was last told Codex could not be handed
      * (leftOutNotice), so it hears again only when that changes. */
     const toldLeftOut = new Map<string, string>();
@@ -690,6 +749,16 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       let ownerReplyFolder: ReturnType<typeof makeCodexReplyFolder> | undefined;
       let replyBroker: AskBroker | undefined;
+      // Working elsewhere, Bloks' own bridges are named in the thread
+      // config over stdin, at their address through the gate, rather
+      // than in argv as a command to run here.
+      const bridgesThere: Record<string, unknown> = {};
+      const bridgeThere = (name: string, server: { command: string; args: string[]; env: Record<string, string> }, approve = false) => {
+        const reached = turn.place?.mcp(name, { transport: "stdio", ...server });
+        if (!reached) return;
+        bridgesThere[`mcp_servers.${name}`] = { url: reached.url, http_headers: reached.headers, ...(approve ? { default_tools_approval_mode: "approve" } : {}) };
+        for (const value of Object.values(reached.headers)) hiddenTokens.push(value, value.replace(/^Bearer /, ""));
+      };
 
       // The connectors, over the stdio bridge, because this CLI mounts
       // MCP servers as child processes and nothing else. The key rides
@@ -719,13 +788,27 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         } catch (error) { replyBroker?.close(); ownerReplyFolder.close(); throw error; }
         finally { if (running.get(threadId) === pending) running.delete(threadId); }
         const prefix = "mcp_servers.bloks_reply";
-        appServerArgs.push("-c", `${prefix}.command=${JSON.stringify(process.execPath)}`,
+        if (turn.place) {
+          // the bridge stays here; Codex there reaches it through the gate
+          bridgeThere("bloks_reply", { command: process.execPath, args: [helper, ownerReplyFolder.socketPath], env: { ELECTRON_RUN_AS_NODE: "1", BLOKS_PUBLISH: "reply_to_sender" } }, true);
+        } else appServerArgs.push("-c", `${prefix}.command=${JSON.stringify(process.execPath)}`,
           "-c", `${prefix}.args=${JSON.stringify([helper, ownerReplyFolder.socketPath])}`,
           "-c", `${prefix}.default_tools_approval_mode="approve"`,
           "-c", `${prefix}.env.ELECTRON_RUN_AS_NODE="1"`,
           "-c", `${prefix}.env.BLOKS_PUBLISH="reply_to_sender"`);
       }
-      if (turn.integrations?.composio?.key) {
+      if (turn.integrations?.composio?.key && turn.place) {
+        // the connectors' key stays on this computer with the bridge
+        bridgeThere("bloks_connectors", {
+          command: process.execPath,
+          args: [connectorsHelper()],
+          env: {
+            BLOKS_COMPOSIO_KEY: turn.integrations.composio.key,
+            ...(turn.integrations.composio.url ? { BLOKS_COMPOSIO_URL: turn.integrations.composio.url } : {}),
+            ELECTRON_RUN_AS_NODE: "1",
+          },
+        });
+      } else if (turn.integrations?.composio?.key) {
         env.BLOKS_COMPOSIO_KEY = turn.integrations.composio.key;
         if (turn.integrations.composio.url) env.BLOKS_COMPOSIO_URL = turn.integrations.composio.url;
         // in the packaged app process.execPath is Electron; this makes it
@@ -740,7 +823,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       }
 
       const child = (() => {
-        try { return spawn(config.cli, appServerArgs, {
+        try { return turn.place ? turn.place.spawn(config.cli, appServerArgs, { env }) : spawn(config.cli, appServerArgs, {
           cwd: turn.cwd ?? homedir(),
           env,
           stdio: ["pipe", "pipe", "pipe"],
@@ -936,6 +1019,45 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         });
       }
 
+      // An async question's card. Nothing here waits on it and nothing
+      // times it out: the agent is working on, and the card is open until
+      // somebody answers or puts it aside, or Bloks stops.
+      function askAsync(params: any, question: { summary: string; choices: string[] }) {
+        const item = params.item;
+        const said = typeof item.id === "string" && item.id ? item.id : question.summary;
+        const key = JSON.stringify([threadId, typeof params.turnId === "string" ? params.turnId : "", said]);
+        if (asyncSeen.has(key)) return;
+        asyncSeen.add(key);
+        while (asyncSeen.size > MAX_ASYNC_SEEN) asyncSeen.delete(asyncSeen.keys().next().value!);
+        const requestId = newId();
+        asyncAsks.set(requestId, { threadId, turnId });
+        appendNative(threadId, {
+          dir: "out",
+          source: "bloks.approval",
+          msg: {
+            stage: "opened", requestId, method: "request_user_input_async", threadId, turnId,
+            providerThreadId: params.threadId, providerTurnId: params.turnId, itemId: item.id,
+          },
+        });
+        emit({
+          ...envelope(threadId, turnId),
+          type: "request.opened",
+          requestId,
+          requestType: "question",
+          tool: "ask_user",
+          summary: question.summary,
+          choices: question.choices,
+          async: true,
+        });
+        // One nobody ever answers is let go of, the oldest first, and its
+        // card says it closed rather than staying open for good.
+        while (asyncAsks.size > MAX_ASYNC_ASKS) {
+          const [oldest, asked] = asyncAsks.entries().next().value!;
+          asyncAsks.delete(oldest);
+          emit({ ...envelope(asked.threadId, asked.turnId), type: "request.resolved", requestId: oldest, behavior: "deny", source: "engine" });
+        }
+      }
+
       // News of a thread other than the one this turn is in. Before the
       // turn knows its thread, or from an app-server that does not say
       // which thread it means, nothing counts as elsewhere.
@@ -1062,6 +1184,15 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const item = params.item ?? {};
             if (item.type === "contextCompaction") { compactionItem(params, true); break; }
             if (item.type === "agentMessage") {
+              if (elsewhere(params)) break;
+              // A question, card only, as a blocking one is: its text is
+              // the same question written out, and said as well it would
+              // read as a reply to be answered by typing.
+              const question = asyncQuestion(item);
+              if (question) {
+                askAsync(params, question);
+                break;
+              }
               if (!item.text?.trim()) break;
               // read once, so the streamed text and the stored text agree
               const codexItem = codexItemText(item);
@@ -1306,7 +1437,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           // all that a policy without that list needs. The same read names
           // the person's own MCP servers, which the agent's keep clear of.
           let shell = shellConfig(turn.env);
-          const attached = turn.integrations?.mcpServers ?? [];
+          // Working elsewhere, each of the agent's servers is reached
+          // through the gate, so its command runs here and its key is added
+          // here; Codex there is handed only the address.
+          const attached = (turn.integrations?.mcpServers ?? []).flatMap((server) => {
+            if (!turn.place) return [server];
+            const reached = turn.place.mcp(server.name ?? "server", server);
+            return reached ? [{ name: server.name, transport: "http" as const, url: reached.url, headers: reached.headers }] : [];
+          });
           let theirs: string[] = [];
           if (shell || attached.length) {
             try {
@@ -1320,7 +1458,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           }
           const own = serverConfig(attached, { approve: !turn.untrusted && !turn.shared, taken: theirs });
           hiddenTokens.push(...own.secrets);
-          let servers: Record<string, unknown> | null = Object.keys(own.config).length ? own.config : null;
+          let servers: Record<string, unknown> | null = Object.keys(own.config).length || Object.keys(bridgesThere).length ? { ...bridgesThere, ...own.config } : null;
           // A server Codex cannot be handed is said, not dropped without a
           // word: once in the conversation, and again when what is left
           // out changes, not on every turn.
@@ -1330,7 +1468,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             toldLeftOut.set(threadId, leftOut);
             emit({ ...envelope(threadId, turnId), type: "runtime.error", message: leftOutNotice(own.leftOut) });
           }
-          const threadConfig = () => (shell || servers ? { ...shell, ...servers } : null);
+          // Codex's goals off (GOALS_OFF), dropped only by a Codex that
+          // takes no thread config at all
+          let goals: Record<string, unknown> | null = GOALS_OFF;
+          const threadConfig = () => (shell || servers || goals ? { ...goals, ...shell, ...servers } : null);
 
           // A Codex that will not take that config still gets its thread,
           // without the part it refused, and the conversation is told once
@@ -1359,7 +1500,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
                 const all = CONFIG_REFUSED.test(said);
                 const shellOut = Boolean(shell) && (all || SHELL_REFUSED.test(said));
                 const serversOut = Boolean(servers) && (all || SERVERS_REFUSED.test(said));
-                if (!params.config || (!shellOut && !serversOut)) throw error;
+                const goalsOut = Boolean(goals) && all;
+                if (!params.config || (!shellOut && !serversOut && !goalsOut)) throw error;
+                if (goalsOut) goals = null;
                 if (shellOut) {
                   shell = null;
                   shellDropped = true;
@@ -1439,6 +1582,18 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               reportedModel = resumed?.model ?? null;
               carriedOn = true;
               takeOpeningReadings(reportedModel);
+              // A goal set before its goals were turned off would still
+              // be there, waiting. Clearing it is all it needs; a Codex
+              // without the method, or with goals off for good, says no,
+              // and then there is nothing to clear.
+              if (goals && codexThread && !goalsCleared.has(codexThread)) {
+                goalsCleared.add(codexThread);
+                try {
+                  await within(rpc.request("thread/goal/clear", { threadId: codexThread }), "clearing its goal", "Codex", PROBE_TIMEOUT_MS);
+                } catch {
+                  /* nothing to clear */
+                }
+              }
             } catch (error) {
               // Fast that was not had: refused, and the session kept
               if (error instanceof CodexSpeedUnavailable) throw error;
@@ -1635,6 +1790,29 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         interruptTurn: async (threadId) => running.get(threadId)?.abort(),
 
         respondToRequest: async (threadId, requestId, decision) => {
+          // An async question has no call to reply to. Its answer goes
+          // back to the harness, to say in the conversation (the
+          // contract's request.resolved answer); put aside, it is only
+          // settled, since the agent already went on without it.
+          const asked = asyncAsks.get(requestId);
+          if (asked && asked.threadId === threadId) {
+            asyncAsks.delete(requestId);
+            const answer = decision.behavior === "answer" && decision.message?.trim() ? decision.message : undefined;
+            appendNative(threadId, {
+              dir: "out",
+              source: "bloks.approval",
+              msg: { stage: "resolved", requestId, method: "request_user_input_async", threadId, turnId: asked.turnId, behavior: decision.behavior, source: "user" },
+            });
+            emit({
+              ...envelope(threadId, asked.turnId),
+              type: "request.resolved",
+              requestId,
+              behavior: decision.behavior,
+              source: "user",
+              ...(answer ? { answer } : {}),
+            });
+            return;
+          }
           const answer = running.get(threadId)?.asks.get(requestId);
           if (!answer) {
             appendNative(threadId, {
@@ -1661,6 +1839,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       dispose: async () => {
         skillCatalogs.clear();
+        asyncAsks.clear();
         for (const turn of running.values()) turn.abort();
         listeners.clear();
         await engines.end();

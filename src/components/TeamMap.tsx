@@ -14,6 +14,7 @@ import { useStore, type Bot } from "@/state/store";
 import { AgentAvatar } from "./Avatar";
 import { layoutTeamMap } from "@/lib/teamMap";
 import { cn } from "@/lib/cn";
+import { t, useLanguage } from "@/lib/i18n";
 
 export function TeamMapView({ onNavigate }: { onNavigate: (id: string) => void }) {
   const { state } = useStore();
@@ -31,6 +32,9 @@ export function TeamMapView({ onNavigate }: { onNavigate: (id: string) => void }
 
   const bots = state.bots.filter((b) => !b.hidden);
   const byId = new Map(bots.map((b) => [b.id, b]));
+  // the layout names the unsectioned cluster, so it is drawn again in a
+  // new language
+  const language = useLanguage();
   const { nodes, edges, clusters, height } = useMemo(
     () =>
       layoutTeamMap(
@@ -38,15 +42,15 @@ export function TeamMapView({ onNavigate }: { onNavigate: (id: string) => void }
           id: b.id,
           section: b.section,
           busy: b.busy,
-          needsYou: b.tasks?.some((t) => t.state === "needs-you"),
+          needsYou: b.tasks?.some((task) => task.state === "needs-you"),
         })),
         state.bloks.map((r) => ({ id: r.id, name: r.name, memberIds: r.memberIds })),
         width,
       ),
-    [state.bots, state.bloks, width],
+    [state.bots, state.bloks, width, language],
   );
   const needsYou = new Set(
-    bots.filter((b) => b.tasks?.some((t) => t.state === "needs-you")).map((b) => b.id),
+    bots.filter((b) => b.tasks?.some((task) => task.state === "needs-you")).map((b) => b.id),
   );
   const roomsById = new Map(state.bloks.map((r) => [r.id, r]));
 
@@ -118,7 +122,13 @@ export function TeamMapView({ onNavigate }: { onNavigate: (id: string) => void }
                 <button
                   key={node.id}
                   onClick={() => open(node.id)}
-                  title={`${bot.name}${bot.busy ? " (working)" : needsYou.has(bot.id) ? " (waiting for you)" : ""}`}
+                  title={
+                    bot.busy
+                      ? t("teamMap.agentWorking", { name: bot.name })
+                      : needsYou.has(bot.id)
+                        ? t("teamMap.agentWaiting", { name: bot.name })
+                        : bot.name
+                  }
                   style={{ left: node.x, top: node.y }}
                   className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 transition-transform hover:scale-105"
                 >
@@ -140,7 +150,7 @@ export function TeamMapView({ onNavigate }: { onNavigate: (id: string) => void }
           </div>
           {bots.length === 0 && (
             <div className="py-16 text-center text-body text-muted-foreground">
-              No agents yet. The map fills in as you hire.
+              {t("teamMap.noAgentsYetTheMap")}
             </div>
           )}
       </div>

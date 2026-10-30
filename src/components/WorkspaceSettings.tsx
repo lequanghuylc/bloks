@@ -35,13 +35,14 @@ import { ensureYourName } from "./YourNameDialog";
 import { WorkspaceMark } from "./WorkspaceMark";
 import { MarkPicker } from "./MarkPicker";
 import { MoveHome } from "./hosting/MoveHome";
+import { formatNumber, t, type MessageKey } from "@/lib/i18n";
 
-export const WORKSPACE_PAGES = [
-  { id: "general", label: "General" },
-  { id: "members", label: "Members" },
-  { id: "online", label: "Reachable online" },
-  { id: "notifications", label: "Notifications" },
-] as const;
+export const WORKSPACE_PAGES: ReadonlyArray<{ id: "general" | "members" | "online" | "notifications"; label: MessageKey }> = [
+  { id: "general", label: "workspaceSettings.page.general" },
+  { id: "members", label: "workspaceSettings.page.members" },
+  { id: "online", label: "workspaceSettings.page.online" },
+  { id: "notifications", label: "workspaceSettings.notifications" },
+];
 
 export type WorkspacePage = (typeof WORKSPACE_PAGES)[number]["id"];
 
@@ -77,9 +78,9 @@ function NameRow({ ws }: { ws: WorkspaceInfo }) {
   };
   return (
     <SettingRow
-      label="Name"
+      label={t("common.name")}
       htmlFor="workspace-name"
-      description="How it is called in the switcher, in banners and in invites."
+      description={t("workspaceSettings.howItIsCalledIn")}
       control={
         <Input
           id="workspace-name"
@@ -111,30 +112,30 @@ function KindRows({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
   return (
     <>
       <SettingRow
-        label="Kind"
+        label={t("workspaceSettings.kind")}
         description={
           ws.kind === "personal"
-            ? "Personal is the workspace Bloks has always had. It keeps its kind and its mark."
+            ? t("workspaceSettings.personalIsTheWorkspaceBloks")
             : ws.kind === "business"
-              ? "Business wears the same mark on every computer."
+              ? t("workspaceSettings.businessWearsTheSameMark")
               : ws.kind === "hosted"
-                ? "Your workspace on a machine run for you. It keeps working when this computer is off."
-                : "A workspace with a name and a mark of its own."
+                ? t("workspaceSettings.yourWorkspaceOnAMachine")
+                : t("workspaceSettings.aWorkspaceWithAName")
         }
         control={
           ws.kind === "personal" || ws.kind === "joined" || ws.kind === "hosted" || (ws.kind === "custom" && businessElsewhere) ? (
             // one option is not a choice, so it is said rather than offered
             <span className="text-body text-muted-foreground">
-              {ws.kind === "personal" ? "Personal" : ws.kind === "joined" ? "Joined" : ws.kind === "hosted" ? "Hosted" : "Its own name"}
+              {ws.kind === "personal" ? t("workspaceSettings.personal") : ws.kind === "joined" ? t("workspaceSettings.joined") : ws.kind === "hosted" ? t("workspaceSettings.hosted") : t("workspaceSettings.itsOwnName")}
             </span>
           ) : (
             <Segmented<"business" | "custom">
-              aria-label="Kind"
+              aria-label={t("workspaceSettings.kind")}
               value={ws.kind}
               onChange={(kind) => void run(window.bloks?.workspaceUpdate?.(ws.id, { kind }))}
               options={[
-                ...(businessElsewhere ? [] : [{ value: "business" as const, label: "Business" }]),
-                { value: "custom", label: "Its own name" },
+                ...(businessElsewhere ? [] : [{ value: "business" as const, label: t("workspaceSettings.business") }]),
+                { value: "custom", label: t("workspaceSettings.itsOwnName") },
               ]}
             />
           )
@@ -142,30 +143,30 @@ function KindRows({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
       />
       {ws.kind !== "joined" && ws.kind !== "hosted" && (
         <SettingRow
-          label="Who uses it"
+          label={t("workspaceSettings.whoUsesIt")}
           description={
             ws.team
-              ? "You and the people you invite. Each has their own conversations with its agents."
+              ? t("workspaceSettings.youAndThePeopleYou")
               : ws.kind === "personal"
-                ? "Only you. For a team, make a Business workspace or one with a name of its own."
-                : "Only you."
+                ? t("workspaceSettings.onlyYouForATeam")
+                : t("workspaceSettings.onlyYou")
           }
           control={
             ws.kind === "personal" && !ws.team ? (
               // Personal is yours alone, so there is nothing to choose
-              <span className="text-body text-muted-foreground">Just you</span>
+              <span className="text-body text-muted-foreground">{t("workspaceSettings.justYou")}</span>
             ) : (
             <Segmented<"solo" | "team">
-              aria-label="Who uses it"
+              aria-label={t("workspaceSettings.whoUsesIt")}
               value={ws.team ? "team" : "solo"}
               onChange={async (next) => {
                 // people are invited from here on, and they see your name
-                if (next === "team" && !(await ensureYourName({ why: `Everyone you invite to ${ws.name} sees it.` }))) return;
+                if (next === "team" && !(await ensureYourName({ why: t("workspaceSettings.nameWhy", { name: ws.name }) }))) return;
                 void run(window.bloks?.workspaceUpdate?.(ws.id, { team: next === "team" }));
               }}
               options={[
-                { value: "solo", label: "Just me" },
-                { value: "team", label: "Team" },
+                { value: "solo", label: t("workspaceSettings.justMe") },
+                { value: "team", label: t("workspaceSettings.team") },
               ]}
             />
             )
@@ -179,10 +180,10 @@ function KindRows({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
 /** What the mark row says under its name: who sees the mark, and where
  * else it can be changed. */
 export function markWords(ws: Pick<WorkspaceInfo, "kind" | "logo">): string {
-  if (ws.logo) return "Your logo, shown wherever this workspace is named.";
-  if (ws.kind === "joined") return "Only you see this mark. Everyone else sees the one its owner chose.";
-  if (ws.kind === "hosted") return "Change it any time. No other workspace here wears it.";
-  return "Change it any time, here or on your phone. No other workspace here wears it.";
+  if (ws.logo) return t("workspaceSettings.markWords.logo");
+  if (ws.kind === "joined") return t("workspaceSettings.markWords.joined");
+  if (ws.kind === "hosted") return t("workspaceSettings.markWords.hosted");
+  return t("workspaceSettings.markWords.own");
 }
 
 function MarkRow({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
@@ -195,23 +196,23 @@ function MarkRow({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
   };
   return (
     <SettingRow
-      label="Mark"
+      label={t("workspaceSettings.mark")}
       description={markWords(ws)}
       control={
         <div className="flex items-center gap-3">
           <span key={ws.logo ?? (ws.mark ? `${ws.mark.color}${ws.mark.pattern}` : "none")} className="flex animate-pop-in">
-            <WorkspaceMark mark={ws.mark} logo={ws.logo} size={44} label={`${ws.name}'s mark`} />
+            <WorkspaceMark mark={ws.mark} logo={ws.logo} size={44} label={t("workspaceSettings.markOf", { name: ws.name })} />
           </span>
           <div className="flex flex-col gap-1.5">
             {ws.logo ? (
               <Button variant="ghost" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => void doing("logo", window.bloks?.workspaceLogoClear?.(ws.id))}>
                 <Trash2 size={13} />
-                Remove logo
+                {t("workspaceSettings.removeLogo")}
               </Button>
             ) : (
               <Button variant="ghost" size="sm" className="gap-1.5" disabled={busy !== null} onClick={() => void doing("logo", window.bloks?.workspaceLogoPick?.(ws.id))}>
                 {busy === "logo" ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                Upload logo
+                {t("workspaceSettings.uploadLogo")}
               </Button>
             )}
           </div>
@@ -238,13 +239,11 @@ function MarkRow({ ws, all }: { ws: WorkspaceInfo; all: WorkspaceInfo[] }) {
 /** "Its 3 agents, 2 rooms…": what a delete takes, counted from what this
  * window has loaded, which is this workspace. */
 function deleteWords(ws: WorkspaceInfo, agents: number, rooms: number) {
-  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
-  const parts = [n(agents, "agent", "agents"), n(rooms, "room", "rooms")];
-  return (
-    `Its ${parts.join(" and ")}, every conversation, routine and watcher, its memory, keys and settings, and its backups ` +
-    `go to the Trash, from ${ws.dataDir ?? "its folder"}. Its server stops, and it leaves the switcher.` +
-    "\n\nPersonal and your other workspaces are not touched."
-  );
+  const counted = { agents: t("workspaceSettings.delete.agents", { count: agents }), rooms: t("workspaceSettings.delete.rooms", { count: rooms }) };
+  const body = ws.dataDir
+    ? t("workspaceSettings.delete.body", { ...counted, folder: ws.dataDir })
+    : t("workspaceSettings.delete.bodyNoFolder", counted);
+  return `${body}\n\n${t("workspaceSettings.delete.untouched")}`;
 }
 
 function DeleteRow({ ws }: { ws: WorkspaceInfo }) {
@@ -253,8 +252,8 @@ function DeleteRow({ ws }: { ws: WorkspaceInfo }) {
   if (ws.kind === "personal") {
     return (
       <SettingRow
-        label="Delete workspace"
-        description="Personal cannot be deleted. It is the folder Bloks has always used, and the one the others are made beside."
+        label={t("workspaceSettings.deleteWorkspace")}
+        description={t("workspaceSettings.personalCannotBeDeletedIt")}
       />
     );
   }
@@ -262,8 +261,8 @@ function DeleteRow({ ws }: { ws: WorkspaceInfo }) {
   const rooms = state.bloks.length;
   return (
     <SettingRow
-      label="Delete workspace"
-      description={`${ws.name} and everything in it go to the Trash.`}
+      label={t("workspaceSettings.deleteWorkspace")}
+      description={t("workspaceSettings.delete.description", { name: ws.name })}
       control={
         <Button
           variant="destructive"
@@ -271,9 +270,9 @@ function DeleteRow({ ws }: { ws: WorkspaceInfo }) {
           className="gap-1.5"
           onClick={async () => {
             const yes = await confirm({
-              title: `Delete ${ws.name}?`,
+              title: t("workspaceSettings.delete.title", { name: ws.name }),
               body: deleteWords(ws, agents, rooms),
-              confirmLabel: "Delete workspace",
+              confirmLabel: t("workspaceSettings.deleteWorkspace"),
               destructive: true,
             });
             if (!yes) return;
@@ -283,7 +282,7 @@ function DeleteRow({ ws }: { ws: WorkspaceInfo }) {
           }}
         >
           {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
-          Delete
+          {t("common.delete")}
         </Button>
       }
     />
@@ -294,18 +293,18 @@ function GeneralPage({ ws, all, go }: { ws: WorkspaceInfo; all: WorkspaceInfo[];
   const muted = muteLabel(ws.mute);
   return (
     <>
-      <SettingsGroup title="Workspace">
+      <SettingsGroup title={t("workspaceSettings.workspace")}>
         <NameRow ws={ws} />
         <KindRows ws={ws} all={all} />
         <MarkRow ws={ws} all={all} />
       </SettingsGroup>
-      <SettingsGroup title="Notifications">
+      <SettingsGroup title={t("workspaceSettings.notifications")}>
         <SettingRow
-          label={LEVELS.find((l) => l.value === ws.notify)?.label ?? "All activity"}
-          description={muted ? `Muted. ${muted}.` : "Not muted."}
+          label={t(LEVELS.find((l) => l.value === ws.notify)?.label ?? "workspaceSettings.allActivity")}
+          description={muted ? t("workspaceSettings.mutedFor", { when: muted }) : t("workspaceSettings.notMuted")}
           control={
             <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => go("notifications")}>
-              Change
+              {t("common.change")}
               <ArrowRight size={13} />
             </Button>
           }
@@ -314,7 +313,7 @@ function GeneralPage({ ws, all, go }: { ws: WorkspaceInfo; all: WorkspaceInfo[];
       {/* your hosted workspace, brought home to this Mac when you choose */}
       {ws.kind === "hosted" && <div className="mb-9"><MoveHome only={ws.id} /></div>}
       {/* what cannot be undone sits apart, at the end, in its own colour */}
-      <SettingsGroup title="Danger zone" tone={ws.kind === "personal" ? "default" : "danger"}>
+      <SettingsGroup title={t("workspaceSettings.dangerZone")} tone={ws.kind === "personal" ? "default" : "danger"}>
         <DeleteRow ws={ws} />
       </SettingsGroup>
     </>
@@ -323,18 +322,19 @@ function GeneralPage({ ws, all, go }: { ws: WorkspaceInfo; all: WorkspaceInfo[];
 
 // ── Notifications ──────────────────────────────────────────────────────
 
-const LEVELS: Array<{ value: WorkspaceNotify; label: string; says: string }> = [
-  { value: "all", label: "All activity", says: "Replies, finished goals and anything that needs you." },
-  { value: "needs-me", label: "Only when it needs me", says: "Approvals and questions: work that is stopped until you answer." },
-  { value: "nothing", label: "Nothing", says: "No banners and nothing on the Dock icon. It keeps working." },
+// Keys, read where the list is drawn.
+const LEVELS: Array<{ value: WorkspaceNotify; label: MessageKey; says: MessageKey }> = [
+  { value: "all", label: "workspaceSettings.allActivity", says: "workspaceSettings.level.allSays" },
+  { value: "needs-me", label: "workspaceSettings.level.needsMe", says: "workspaceSettings.level.needsMeSays" },
+  { value: "nothing", label: "workspaceSettings.level.nothing", says: "workspaceSettings.level.nothingSays" },
 ];
 
 function NotificationsPage({ ws }: { ws: WorkspaceInfo }) {
   const muted = muteLabel(ws.mute);
   return (
     <>
-      <SettingsGroup title="Tell me about">
-        <div role="radiogroup" aria-label="Tell me about" className="flex flex-col divide-y">
+      <SettingsGroup title={t("workspaceSettings.tellMeAbout")}>
+        <div role="radiogroup" aria-label={t("workspaceSettings.tellMeAbout")} className="flex flex-col divide-y">
           {LEVELS.map((level) => {
             const on = ws.notify === level.value;
             return (
@@ -356,34 +356,34 @@ function NotificationsPage({ ws }: { ws: WorkspaceInfo }) {
                   {on && <span className="size-1.5 rounded-full bg-brand-foreground" />}
                 </span>
                 <span className="flex min-w-0 flex-col">
-                  <span className="text-ui font-medium text-foreground">{level.label}</span>
-                  <span className="text-pretty text-body text-muted-foreground">{level.says}</span>
+                  <span className="text-ui font-medium text-foreground">{t(level.label)}</span>
+                  <span className="text-pretty text-body text-muted-foreground">{t(level.says)}</span>
                 </span>
               </button>
             );
           })}
         </div>
       </SettingsGroup>
-      <SettingsGroup title="Mute">
+      <SettingsGroup title={t("workspaceSettings.mute")}>
         <SettingRow
-          label={muted ? "Muted" : "Not muted"}
+          label={muted ? t("workspaceSettings.muted") : t("workspaceSettings.notMutedLabel")}
           description={
             muted
-              ? `${muted}. Nothing from ${ws.name} interrupts you meanwhile; it keeps working, and the switcher still shows when something waits.`
-              : `Quiet ${ws.name} for a while without changing what it tells you about.`
+              ? t("workspaceSettings.mutedMeanwhile", { when: muted, name: ws.name })
+              : t("workspaceSettings.quietFor", { name: ws.name })
           }
           control={
             <div className="flex items-center gap-2">
               {muted && (
                 <Button variant="outline" size="sm" onClick={() => void run(window.bloks?.workspaceMute?.(ws.id, "off"))}>
-                  Turn back on
+                  {t("workspaceSettings.turnBackOn")}
                 </Button>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant={muted ? "ghost" : "outline"} size="sm" className="gap-1.5">
                     <BellOff size={13} />
-                    {muted ? "Change" : "Mute"}
+                    {muted ? t("common.change") : t("workspaceSettings.mute")}
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-[220px]">
@@ -450,12 +450,12 @@ function ReachableOnline({ ws }: { ws: WorkspaceInfo }) {
   const health: { tone: Health; label: string } | null = !status
     ? null
     : !on
-      ? { tone: "off", label: "Offline" }
+      ? { tone: "off", label: t("workspaceSettings.health.offline") }
       : working
-        ? { tone: "on", label: "Online" }
+        ? { tone: "on", label: t("workspaceSettings.online") }
         : status.pairing === false
-          ? { tone: "issue", label: "Paused" }
-          : { tone: "wait", label: "Connecting" };
+          ? { tone: "issue", label: t("workspaceSettings.health.paused") }
+          : { tone: "wait", label: t("workspaceSettings.health.connecting") };
 
   const flip = async (next: boolean) => {
     setError(null);
@@ -497,42 +497,42 @@ function ReachableOnline({ ws }: { ws: WorkspaceInfo }) {
       <SettingsGroup
         footnote={
           <>
-            Bloks Cloud keeps 3 workspaces online at once, just for you. Bloks Team keeps every workspace online and lets you bring people in, up to 10 in each. Workspaces on this computer are always free.{" "}
+            {t("workspaceSettings.onlineFootnote")}{" "}
             <button type="button" onClick={toPlan} className="rounded font-medium text-foreground underline-offset-2 hover:underline">
-              See your plan
+              {t("workspaceSettings.seeYourPlan")}
             </button>
           </>
         }
       >
         <SettingRow
-          label="Online"
-          description={`Your phone, and the people you invite, reach ${ws.name} from anywhere through Bloks Cloud. Off, it works on this computer and your own network.`}
+          label={t("workspaceSettings.online")}
+          description={t("workspaceSettings.onlineDescription", { name: ws.name })}
           control={
             <div className="flex items-center gap-3">
               {busy && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
-              <Switch aria-label="Online" checked={on} disabled={busy || status === null} onCheckedChange={(next) => void flip(next)} />
+              <Switch aria-label={t("workspaceSettings.online")} checked={on} disabled={busy || status === null} onCheckedChange={(next) => void flip(next)} />
             </div>
           }
         >
           <ConnectionError>{error}</ConnectionError>
           {needsKey && (
             <div role="status" className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-brand-soft px-3.5 py-2.5">
-              <span className="text-pretty text-body text-foreground">Going online needs Bloks Cloud. Add your key on Plan, and {ws.name} goes online.</span>
+              <span className="text-pretty text-body text-foreground">{t("workspaceSettings.needsKey", { name: ws.name })}</span>
               <Button size="sm" variant="brand" onClick={toPlan}>
-                Open Plan
+                {t("workspaceSettings.openPlan")}
               </Button>
             </div>
           )}
         </SettingRow>
-        <SettingRow label="Status" control={health ? <HealthLine tone={health.tone} label={health.label} /> : <Loader2 size={14} className="animate-spin text-muted-foreground" />}>
+        <SettingRow label={t("workspaceSettings.status")} control={health ? <HealthLine tone={health.tone} label={health.label} /> : <Loader2 size={14} className="animate-spin text-muted-foreground" />}>
           {/* Phone access is the master switch, Cloud included: turning it
               off is how somebody cuts every phone loose at once, so a
               workspace can be online and still reach nobody */}
           {on && status?.pairing === false ? (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-pretty text-small text-muted-foreground">Phone access is off on this computer, so nothing reaches {ws.name} from outside.</span>
+              <span className="text-pretty text-small text-muted-foreground">{t("workspaceSettings.phoneAccessOff", { name: ws.name })}</span>
               <Button size="sm" variant="secondary" disabled={busy} onClick={() => void phonesOn()}>
-                Turn on phone access
+                {t("workspaceSettings.turnOnPhoneAccess")}
               </Button>
             </div>
           ) : (
@@ -541,22 +541,22 @@ function ReachableOnline({ ws }: { ws: WorkspaceInfo }) {
         </SettingRow>
         {on && status?.spaceId && (
           <SettingRow
-            label="Address"
-            description="Its own space at Bloks Cloud, which holds nothing it can read."
+            label={t("common.address")}
+            description={t("workspaceSettings.itsOwnSpaceAtBloks")}
             control={<span className="font-mono text-small text-muted-foreground">{status.spaceId}</span>}
           />
         )}
         {online && (
           <SettingRow
-            label="Workspaces online"
+            label={t("workspaceSettings.workspacesOnline")}
             description={
               online.limit === null
-                ? "Your plan keeps every workspace online."
-                : `Your plan keeps ${online.limit} online at once. Turn one off here to free its place for another.`
+                ? t("workspaceSettings.yourPlanKeepsEveryWorkspace")
+                : t("workspaceSettings.limitOnline", { limit: online.limit })
             }
             control={
               <span className="text-body tabular-nums text-foreground">
-                {online.limit === null ? online.online : `${online.online} of ${online.limit}`}
+                {online.limit === null ? formatNumber(online.online) : t("workspaceSettings.onlineOf", { online: online.online, limit: online.limit })}
               </span>
             }
           />
@@ -578,7 +578,7 @@ export function WorkspacePageBody({ page }: { page: string }) {
   if (!s.available || !ws) {
     return (
       <SettingsGroup>
-        <SettingsEmpty title="Workspaces live in the Bloks desktop app" body="Open Bloks on your computer to change this workspace's name, members and notifications." />
+        <SettingsEmpty title={t("workspaceSettings.workspacesLiveInTheBloks")} body={t("workspaceSettings.openBloksOnYourComputer")} />
       </SettingsGroup>
     );
   }

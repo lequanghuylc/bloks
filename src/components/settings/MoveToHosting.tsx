@@ -13,12 +13,13 @@ import { ArrowUpRight, Check, Server } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { hostingOffer, ladderFor, planKey, type PlanKey, type PlanSnapshot } from "@/lib/plan";
 import { openOffer, openSite } from "@/lib/planClient";
+import { t, type MessageKey } from "@/lib/i18n";
 
-const POINTS = ["Always on", "Your phone and any browser reach it", "Nothing to set up: Bloks moves your agents over for you"];
+const POINTS: readonly MessageKey[] = ["moveToHosting.point.alwaysOn", "moveToHosting.point.reach", "moveToHosting.point.nothingToSetUp"];
 
-/** The machine the person is on, as the line names it. */
-function thisMachine(): string {
-  return typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent) ? "Mac" : "computer";
+/** Whether the person is on a Mac, which the line names as one. */
+function onMac(): boolean {
+  return typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
 }
 
 /** What pressing does, from the offers: the upgrade itself, the plans
@@ -29,19 +30,19 @@ export function moveAction(snapshot: PlanSnapshot, key: PlanKey): { label: strin
   if (offer?.onSale) {
     const cta = offer.cta;
     return {
-      label: "Choose a plan",
+      label: t("moveToHosting.choosePlan"),
       soon: false,
       go: cta ? () => void openOffer(cta.url) : () => openSite(`${pricing}?plan=${encodeURIComponent(offer.id)}`),
     };
   }
-  return { label: "See plans", soon: Boolean(offer), go: () => openSite(pricing) };
+  return { label: t("moveToHosting.seePlans"), soon: Boolean(offer), go: () => openSite(pricing) };
 }
 
 export function MoveToHostingCard({ snapshot, appPlan }: { snapshot: PlanSnapshot; appPlan?: "cloud" | "team" | null }) {
   const action = moveAction(snapshot, planKey(snapshot, appPlan));
   return (
     <section
-      aria-label="Move to managed hosting"
+      aria-label={t("moveToHosting.moveToManagedHosting")}
       data-setting-row="move-to-managed-hosting"
       className="mb-9 rounded-2xl border bg-card p-5 transition-colors duration-700 last:mb-0"
     >
@@ -51,17 +52,17 @@ export function MoveToHostingCard({ snapshot, appPlan }: { snapshot: PlanSnapsho
         </span>
         <div className="min-w-0 flex-1 basis-[240px]">
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <h2 className="text-lead font-semibold text-foreground">Move to managed hosting</h2>
-            {action.soon && <span className="rounded-full bg-muted px-2 py-0.5 text-small font-medium text-muted-foreground">Coming soon</span>}
+            <h2 className="text-lead font-semibold text-foreground">{t("moveToHosting.moveToManagedHosting")}</h2>
+            {action.soon && <span className="rounded-full bg-muted px-2 py-0.5 text-small font-medium text-muted-foreground">{t("moveToHosting.comingSoon")}</span>}
           </div>
           <p className="mt-0.5 max-w-[60ch] text-pretty text-body text-muted-foreground">
-            Your agents on a private machine of their own, so they keep working when this {thisMachine()} is asleep or off.
+            {onMac() ? t("moveToHosting.lineMac") : t("moveToHosting.lineComputer")}
           </p>
           <ul className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5">
             {POINTS.map((point) => (
               <li key={point} className="flex items-start gap-2 text-pretty text-small text-foreground">
                 <Check size={14} strokeWidth={2.25} className="mt-[2px] shrink-0 text-brand-ink" />
-                <span className="min-w-0">{point}</span>
+                <span className="min-w-0">{t(point)}</span>
               </li>
             ))}
           </ul>

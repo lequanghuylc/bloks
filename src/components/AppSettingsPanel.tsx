@@ -24,6 +24,7 @@ import {
   Archive,
   BellDot,
   Cpu,
+  Download,
   Globe,
   History,
   Info,
@@ -31,6 +32,7 @@ import {
   Luggage,
   MessageCircle,
   MessagesSquare,
+  House,
   Mic,
   Monitor,
   Puzzle,
@@ -64,11 +66,14 @@ import {
 } from "@/lib/settingsPages";
 import { RecordPanel } from "./RecordPanel";
 import { BackupsSection } from "./BackupsSection";
+import { TrainingExportPage } from "./TrainingExport";
 import { PluginSettings } from "./PluginSettings";
 import { EnginesPanel } from "./EnginesPanel";
 import { DevicesSection } from "./DevicesSection";
 import { LocationSection } from "./LocationSection";
 import { TelegramSection } from "./TelegramSection";
+import { SignalSection } from "./SignalSection";
+import { HomeAssistantPage } from "./HomeAssistantPage";
 import { ChatSection } from "./ChatSection";
 import { RemoteSection } from "./RemoteSection";
 import { SecurityCheckup } from "./SecurityCheckup";
@@ -85,6 +90,8 @@ import { BehaviourPage } from "./settings/BehaviourPage";
 import { GeneralPage } from "./settings/GeneralPage";
 import { PlanPage } from "./settings/PlanPage";
 import { AboutYouPage, AppsPage, ComputersPage, RulesPage, VoicesPage } from "./settings/pages";
+import { BrowserPage } from "./settings/BrowserPage";
+import { inEnglish, t } from "@/lib/i18n";
 
 type Icon = React.ComponentType<{ size?: number; className?: string }>;
 
@@ -106,33 +113,46 @@ const ICONS: Record<string, Icon> = {
   apps: LayoutGrid,
   devices: Smartphone,
   chat: MessageCircle,
+  home: House,
   computers: Monitor,
+  browser: Globe,
   "past-sessions": MessagesSquare,
   "bring-setup": Luggage,
   record: History,
   backups: Archive,
+  training: Download,
   about: Info,
 };
 
 interface SettingsPage {
   id: string;
-  label: string;
+  readonly label: string;
   icon: Icon;
-  description: string;
-  keywords: string;
+  readonly description: string;
+  readonly keywords: string;
 }
 
 /** Every page of the person's own Settings, grouped, with its icon: the
  * command palette offers them by name. The workspace's pages are reached
  * there through "Workspace settings". */
-export const SETTINGS_PAGES: Array<{ group: string; pages: SettingsPage[] }> = SETTINGS_GROUPS.filter((g) => g.id !== "workspace").map((g) => ({
-  group: g.label,
+export const SETTINGS_PAGES: Array<{ readonly group: string; pages: SettingsPage[] }> = SETTINGS_GROUPS.filter((g) => g.id !== "workspace").map((g) => ({
+  // read when asked for, so the palette names them in the language of the day
+  get group() {
+    return t(g.label);
+  },
   pages: SETTINGS_PAGE_LIST.filter((p) => p.group === g.id).map((p) => ({
     id: p.id,
-    label: p.label,
+    get label() {
+      return p.label;
+    },
     icon: ICONS[p.id] ?? SlidersHorizontal,
-    description: p.description,
-    keywords: `${p.keywords} ${(p.rows ?? []).join(" ")}`,
+    get description() {
+      return p.description;
+    },
+    // the reader's words and the English ones, so either finds the page
+    get keywords() {
+      return [p.keywords, t(p.keywordsKey), inEnglish(p.labelKey), ...p.rows, ...p.rowMessages.map((key) => inEnglish(key))].join(" ");
+    },
   })),
 }));
 
@@ -173,11 +193,16 @@ function PageBody({ id }: { id: string }) {
       return (
         <>
           <TelegramSection />
+          <SignalSection />
           <ChatSection />
         </>
       );
+    case "home":
+      return <HomeAssistantPage />;
     case "computers":
       return <ComputersPage />;
+    case "browser":
+      return <BrowserPage />;
     case "past-sessions":
       return <PastSessionsPage />;
     case "bring-setup":
@@ -186,6 +211,8 @@ function PageBody({ id }: { id: string }) {
       return <RecordPanel />;
     case "backups":
       return <BackupsSection />;
+    case "training":
+      return <TrainingExportPage />;
     case "about":
       return <AboutPage />;
     default:
@@ -264,6 +291,13 @@ export function AppSettingsPanel() {
     dispatch({ type: "toggleAppSettings", open: true, page: id });
     setTarget(row ? { page: id, row: rowKey(row), at: Date.now() } : null);
   };
+
+  // A row asked for from outside the list, such as an agent's card in a
+  // conversation: the same scroll and light a search result gets.
+  const asked = state.settingsRow;
+  useEffect(() => {
+    if (asked) setTarget({ page: asked.page, row: rowKey(asked.row), at: asked.at });
+  }, [asked]);
 
   // a new page starts at its top, not wherever the last one was left
   const targetRef = useRef(target);
@@ -353,12 +387,12 @@ export function AppSettingsPanel() {
             <Marked text={p.label} words={words} />
           </span>
           {p.id === "security" && risky > 0 && (
-            <span aria-label={`${risky} risky`} className="ml-auto rounded-md bg-destructive/10 px-1.5 py-0.5 text-caption font-medium tabular-nums text-destructive">
+            <span aria-label={t("appSettingsPanel.risky", { count: risky })} className="ml-auto rounded-md bg-destructive/10 px-1.5 py-0.5 text-caption font-medium tabular-nums text-destructive">
               {risky}
             </span>
           )}
           {/* somebody asking to join is said where the eye goes (design: Mac-Approve) */}
-          {p.id === "workspace:members" && waiting > 0 && <span className="ml-auto text-small font-semibold tabular-nums text-warning">{waiting} waiting</span>}
+          {p.id === "workspace:members" && waiting > 0 && <span className="ml-auto text-small font-semibold tabular-nums text-warning">{t("appSettingsPanel.waiting", { count: waiting })}</span>}
         </button>
         {/* the rows a search found on this page, each a way straight to it */}
         {rows.map((row) => (
@@ -386,7 +420,7 @@ export function AppSettingsPanel() {
   const folded = useColumnFolded("settings", SETTINGS_COLUMN);
   const tabGroups: SideTabGroup[] = SETTINGS_GROUPS.map((g) => ({
     id: g.id,
-    name: g.id === "workspace" && ws ? `${ws.name} workspace` : g.label,
+    name: g.id === "workspace" && ws ? t("appSettingsPanel.workspaceNamed", { name: ws.name }) : t(g.label),
     // "General" is in two groups, so the workspace's says whose it is
     label:
       g.id === "workspace" && ws ? (
@@ -395,7 +429,7 @@ export function AppSettingsPanel() {
           <span className="max-w-[140px] truncate">{ws.name}</span>
         </>
       ) : (
-        g.label
+        t(g.label)
       ),
     tabs: pages
       .filter((p) => p.group === g.id)
@@ -404,11 +438,11 @@ export function AppSettingsPanel() {
         label: p.label,
         badge:
           p.id === "security" && risky > 0 ? (
-            <span aria-label={`${risky} risky`} className="rounded-md bg-destructive/10 px-1.5 py-px text-caption font-medium tabular-nums text-destructive">
+            <span aria-label={t("appSettingsPanel.risky", { count: risky })} className="rounded-md bg-destructive/10 px-1.5 py-px text-caption font-medium tabular-nums text-destructive">
               {risky}
             </span>
           ) : p.id === "workspace:members" && waiting > 0 ? (
-            <span aria-label={`${waiting} waiting`} className="text-small font-semibold tabular-nums text-warning">
+            <span aria-label={t("appSettingsPanel.waiting", { count: waiting })} className="text-small font-semibold tabular-nums text-warning">
               {waiting}
             </span>
           ) : undefined,
@@ -422,12 +456,12 @@ export function AppSettingsPanel() {
 
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background md:flex-row">
-      <SideColumn id="settings" size={SETTINGS_COLUMN} as="nav" label="Settings" className="border-b bg-sidebar/60 md:border-b-0">
+      <SideColumn id="settings" size={SETTINGS_COLUMN} as="nav" label={t("common.settings")} className="border-b bg-sidebar/60 md:border-b-0">
         {/* No back button of its own: the title bar's Back (or Esc) leaves,
             and on a phone the pill's drawer does; the room on the left
             there is the pill's. */}
         <div className="flex h-[52px] items-center gap-2 px-4 max-md:pl-16">
-          <span className="text-lead font-semibold text-foreground">Settings</span>
+          <span className="text-lead font-semibold text-foreground">{t("common.settings")}</span>
           {state.config?.hosted?.on && <HostedMark />}
         </div>
         <div className="px-3 pb-2">
@@ -450,15 +484,15 @@ export function AppSettingsPanel() {
                   list.current?.querySelector<HTMLButtonElement>("[data-nav-item]")?.focus();
                 }
               }}
-              placeholder="Search settings"
-              aria-label="Search settings"
+              placeholder={t("appSettingsPanel.searchSettings")}
+              aria-label={t("appSettingsPanel.searchSettings")}
               aria-controls="settings-pages"
               className="w-full bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground"
             />
             {query && (
               <button
                 type="button"
-                aria-label="Clear search"
+                aria-label={t("appSettingsPanel.clearSearch")}
                 onClick={() => {
                   setQuery("");
                   search.current?.focus();
@@ -480,10 +514,10 @@ export function AppSettingsPanel() {
             <div
               key={g.id}
               role="group"
-              aria-label={g.id === "workspace" && ws ? `${ws.name} workspace` : g.label}
+              aria-label={g.id === "workspace" && ws ? t("appSettingsPanel.workspaceNamed", { name: ws.name }) : t(g.label)}
               className="flex shrink-0 gap-0.5 md:flex-col"
             >
-              <div className="hidden px-2.5 pb-1 pt-3 text-small font-medium text-muted-foreground md:flex">{groupTitle(g.id, g.label)}</div>
+              <div className="hidden px-2.5 pb-1 pt-3 text-small font-medium text-muted-foreground md:flex">{groupTitle(g.id, t(g.label))}</div>
               {/* a phone has no room for headings: the workspace's own pages
                   are set apart by its mark instead */}
               {g.id === "workspace" && ws && (
@@ -496,9 +530,9 @@ export function AppSettingsPanel() {
           ))}
           {groups.length === 0 && (
             <div className="flex flex-col gap-1 px-3 py-6 text-body text-muted-foreground">
-              <span>Nothing matches “{query.trim()}”.</span>
+              <span>{t("appSettingsPanel.nothingMatches", { query: query.trim() })}</span>
               <button type="button" onClick={() => setQuery("")} className="w-fit rounded text-small font-medium text-foreground underline-offset-2 hover:underline">
-                Clear the search
+                {t("appSettingsPanel.clearTheSearch")}
               </button>
             </div>
           )}
@@ -508,7 +542,7 @@ export function AppSettingsPanel() {
         {folded && (
           <SideTabs
             column="settings"
-            label="Settings"
+            label={t("common.settings")}
             groups={tabGroups}
             current={pageId}
             onPick={(id) => go(id)}
@@ -516,8 +550,8 @@ export function AppSettingsPanel() {
               <button
                 type="button"
                 onClick={searchInList}
-                aria-label="Search settings"
-                title="Search settings"
+                aria-label={t("appSettingsPanel.searchSettings")}
+                title={t("appSettingsPanel.searchSettings")}
                 className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-[background-color,color,scale] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.96]"
               >
                 <SearchIcon size={15} />
@@ -537,7 +571,7 @@ export function AppSettingsPanel() {
                   workspacePage && ws ? (
                     <>
                       <WorkspaceMark mark={ws.mark} logo={ws.logo} size={16} />
-                      <span className="truncate">{ws.name} workspace</span>
+                      <span className="truncate">{t("appSettingsPanel.workspaceNamed", { name: ws.name })}</span>
                     </>
                   ) : undefined
                 }

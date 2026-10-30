@@ -17,6 +17,7 @@ import { Hand } from "@/components/icons";
 import { Archive } from "@/components/icons";
 import { CornerUpLeft } from "@/components/icons";
 import { File as FileIcon } from "@/components/icons";
+import { FileImage } from "@/components/icons";
 import { Undo2 } from "@/components/icons";
 import { X } from "@/components/icons";
 import { FlaskConical } from "@/components/icons";
@@ -38,10 +39,8 @@ import { useUnsentNotice } from "./chat/HeldSends";
 import { UsageNotice } from "./composer/UsageNotice";
 import { useDeliveryPreview, type DeliveryPreview } from "@/lib/delivery";
 import {
-  attachmentBasename,
   composeOutgoing,
   destination,
-  formatBytes,
   intakeFiles,
   isLongPaste,
   pasteAttachment,
@@ -49,13 +48,16 @@ import {
   uploadImageAttachment,
   type Attachment,
 } from "@/lib/attachments";
+import { heldLine } from "@/lib/pendingImages";
+import { AttachmentChip, AttachmentChips, usePendingImages } from "./composer/Attachments";
 import { Button } from "@/components/ui/button";
 import { modKey } from "@/lib/thisComputer";
 import { edgeMask } from "@/lib/composerSize";
-import { acceptDraft, boxFor, carryFocus, discardRecovery, isEmptyDraft, keepDraft, readDraft, readRecoveries, recoverDraft, restoreRecovery, showBox, takeFocus, type Draft } from "@/lib/drafts";
+import { acceptDraft, boxFor, carryFocus, discardRecovery, isEmptyDraft, keepDraft, readDraft, readRecoveries, recoverDraft, restoreRecovery, showBox, takeFocus, takeLaneFocus, type Draft } from "@/lib/drafts";
 import { grouped, insert as insertCommand, matches as matchCommands, segments, slashAt, withBloksCommands, type Command } from "@/lib/slashCommands";
 import { escapeTaken } from "@/lib/useEscape";
 import { ComparePicker } from "./composer/ComparePicker";
+import { t, type MessageKey } from "@/lib/i18n";
 
 /** Fade whichever edges have more text beyond them (see edgeMask). */
 function shadeEdges(el: HTMLTextAreaElement) {
@@ -149,13 +151,11 @@ function useAutoSize(value: string) {
 }
 
 /** What the helper's error words mean to a person. */
-const SPEECH_TROUBLE: Record<string, string> = {
-  "speech-not-authorized":
-    "Dictation needs Speech Recognition access. It's separate from the microphone.",
-  "recognizer-unavailable":
-    "English speech recognition isn't available on this Mac right now.",
-  "mic-failed": "Couldn't open the microphone. Another app may be using it.",
-  "recognition-error": "Dictation stopped. Try again, or check your microphone.",
+const SPEECH_TROUBLE: Record<string, MessageKey> = {
+  "speech-not-authorized": "composer.speech.notAuthorized",
+  "recognizer-unavailable": "composer.speech.recognizerUnavailable",
+  "mic-failed": "composer.speech.micFailed",
+  "recognition-error": "composer.speech.recognitionError",
 };
 
 /**
@@ -178,25 +178,6 @@ function VoiceMeter({ level }: { level: number }) {
   );
 }
 
-function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; onRemove?: () => void }) {
-  return (
-    <span className="flex max-w-[240px] animate-pop-in items-center gap-1.5 rounded-xl border bg-muted/50 py-1 pl-1.5 pr-1 text-small text-foreground">
-      {a.kind === "image" ? (
-        <img src={`/api/attachments/${attachmentBasename(a.path)}`} alt={a.name} className="size-7 shrink-0 rounded-lg object-cover" />
-      ) : (
-        <FileIcon size={14} className="shrink-0 text-muted-foreground" />
-      )}
-      <span className="min-w-0 flex-1 truncate">{a.kind === "paste" ? `Pasted text, ${a.lines} lines` : a.name}</span>
-      <span className="shrink-0 text-muted-foreground">{formatBytes(a.bytes)}</span>
-      {onRemove && (
-        <button onClick={onRemove} className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label={`Remove ${a.kind === "paste" ? "pasted text" : a.name}`}>
-          <X size={12} />
-        </button>
-      )}
-    </span>
-  );
-}
-
 /** What the next message answers, inside the box with the files, since it
  * travels with the words rather than being something to read about. */
 function ReplyTag({ draft, onClear }: { draft: ReplyDraft; onClear: () => void }) {
@@ -209,7 +190,7 @@ function ReplyTag({ draft, onClear }: { draft: ReplyDraft; onClear: () => void }
         type="button"
         onClick={onClear}
         className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-background/60 hover:text-foreground"
-        aria-label="Cancel reply"
+        aria-label={t("composer.cancelReply")}
       >
         <X size={12} />
       </button>
@@ -236,10 +217,19 @@ function DeliveryLine({ preview, onFlip }: { preview: DeliveryPreview; onFlip: (
         onMouseDown={(e) => e.preventDefault()}
         className="rounded-md font-medium text-foreground underline-offset-2 transition-colors duration-150 hover:underline"
       >
-        {waits ? "Send now" : "Wait instead"}
+        {waits ? t("composer.sendNow") : t("composer.waitInstead")}
       </button>
     </div>
   );
+}
+
+/** Why an archived agent's box takes nothing, and the one way back. */
+function archivedLine(bot: Bot, archiver: string | undefined): string {
+  if (!bot.archivedBy) return t("composer.archived.plain", { name: bot.name });
+  const by = archiver ?? t("composer.archived.theAgentThatHiredIt");
+  return bot.archiveNote
+    ? t("composer.archived.byWithNote", { by, name: bot.name, note: bot.archiveNote })
+    : t("composer.archived.by", { by, name: bot.name });
 }
 
 export function Composer({
@@ -298,6 +288,21 @@ export function Composer({
   });
   const [recoveries, setRecoveries] = useState(() => readRecoveries(draftKey));
   const [blockedRecovery, setBlockedRecovery] = useState<string | null>(null);
+  /** Why something did not become a chip, said once, dismissible. */
+  const [attachNotice, setAttachNotice] = useState<string | null>(null);
+  // A picture is a chip from the moment it lands, and joins the draft
+  // once the server has it (lib/pendingImages).
+  const images = usePendingImages({
+    onReady: (ready) => setAttachments((current) => [...current, ...ready]),
+    onFailed: (name, error) => setAttachNotice(t("composer.imageFailed", { name, error })),
+  });
+  // Send pressed while a picture still held it: the tray says why until
+  // nothing holds it any more.
+  const [sendHeld, setSendHeld] = useState(false);
+  const heldBy = heldLine(images.items);
+  useEffect(() => {
+    if (!heldBy) setSendHeld(false);
+  }, [heldBy]);
   useEffect(() => {
     if (prefill) setText(prefill.text);
   }, [prefill]);
@@ -343,14 +348,27 @@ export function Composer({
     return () => {
       mounted.current = false;
       hide();
-      keepDraft(draftKey, latest.current);
+      // a picture that was ready, held only behind one still going up,
+      // stays with the words; one still on its way goes with the box
+      const held = images.held();
+      keepDraft(draftKey, held.length ? { ...latest.current, attachments: [...latest.current.attachments, ...held] } : latest.current);
     };
   }, [draftKey]);
   // Layout, not passive: on the way out the box has to still be in the
   // page to tell whether it had the keyboard, and the box replacing it
   // takes the keyboard in the same commit.
+  // A conversation just made from a + or a menu takes it too, unless the
+  // keyboard went somewhere else while it was being made.
   useLayoutEffect(() => {
-    if (takeFocus()) inputRef.current?.focus();
+    const carried = takeFocus();
+    const at = document.activeElement;
+    const made = takeLaneFocus(
+      bot.id,
+      bot.activeTaskId ?? bot.threadId,
+      !at || at === document.body ? null : at,
+      Boolean(at?.closest("[role=dialog], [role=alertdialog]")),
+    );
+    if (carried || made) inputRef.current?.focus();
     const input = inputRef.current;
     return () => carryFocus(Boolean(input) && document.activeElement === input);
   }, [draftKey]);
@@ -374,8 +392,6 @@ export function Composer({
     setBlockedRecovery(null);
     inputRef.current?.focus();
   };
-  /** Why something did not become a chip, said once, dismissible. */
-  const [attachNotice, setAttachNotice] = useState<string | null>(null);
   /** A wider approval mode that Touch ID was not given for. */
   const [modeRefused, setModeRefused] = useState(false);
   const pickerRef = useRef<HTMLInputElement>(null);
@@ -403,7 +419,7 @@ export function Composer({
   }, [bot.id, skillKey, laneId, bot.modelSelection.instanceId, bot.cwd, bot.busy, commandTick, commandEngine]);
   // Bloks' own (`/goal`) ride along with the agent's, except while
   // rehearsing, where the message becomes a rehearsal and not a turn
-  const lane = bot.tasks?.find((t) => t.id === laneId);
+  const lane = bot.tasks?.find((task) => task.id === laneId);
   const listed = rehearse ? commands : withBloksCommands(commands, lane);
   const commandIds = new Set(listed.filter((c) => !c.prefix).map((c) => c.id));
   const dollarIds = new Set(listed.filter((c) => c.prefix === "$").map((c) => c.id));
@@ -439,10 +455,13 @@ export function Composer({
       // a path from here is no use to a server elsewhere: the file goes
       uploadFile: (file) => uploadFileAttachment(file),
       sameComputer: async () => (await destination()).sameComputer,
-      onSending: (file) => setAttachNotice(`Sending ${file.name || "the file"}…`),
+      onSending: (file) => setAttachNotice(file.name ? t("composer.sendingFile", { name: file.name }) : t("composer.sendingTheFile")),
+      // each picture is its own chip at once, and settles by itself
+      onImage: (file) => images.add([file]),
     }).then(({ attachments: added, refused }) => {
       if (added.length) setAttachments((current) => [...current, ...added]);
-      setAttachNotice(refused);
+      // pictures alone have nothing to say here: each chip says its own
+      if (added.length || refused) setAttachNotice(refused);
     });
   };
 
@@ -495,6 +514,11 @@ export function Composer({
     const stopOnly = () => {
       if (stopFirst) dispatch({ type: "interrupt", botId: bot.id });
     };
+    // A picture still on its way, or one that failed, would be left out
+    // of the message without a word. The message waits, the words stay,
+    // and the tray says why. The modifier does not stop the turn either:
+    // it was pressed to send, and nothing is sent.
+    if (heldLine(images.now())) return setSendHeld(true);
     if (rehearse) { stopOnly(); return void startRehearsal(); }
     if (!text.trim() && !attachments.length) { stopOnly(); return; }
     // `/goal` alone has nothing to aim at yet, so it opens the dialog
@@ -578,7 +602,7 @@ export function Composer({
       }
       if (typeof line.error === "string") {
         setRecording(false);
-        setSpeechError(SPEECH_TROUBLE[line.error] ?? "Dictation stopped unexpectedly.");
+        setSpeechError(t(SPEECH_TROUBLE[line.error] ?? "composer.speech.stoppedUnexpectedly"));
         setSpeechPane(line.error === "speech-not-authorized" ? "speech" : "mic");
         return;
       }
@@ -593,8 +617,7 @@ export function Composer({
       // only if nothing more specific already explained itself
       if (code === 1) {
         setSpeechError((current) =>
-          current ??
-          "Allow Microphone and Speech Recognition in System Settings, Privacy & Security.",
+          current ?? t("composer.speech.allowInSettings"),
         );
       }
     });
@@ -616,7 +639,7 @@ export function Composer({
    */
   const toggleMic = async () => {
     if (!window.bloks) {
-      setSpeechError("Dictation needs the desktop app.");
+      setSpeechError(t("composer.speech.needsDesktop"));
       return;
     }
     if (recording) return setRecording(false);
@@ -630,16 +653,15 @@ export function Composer({
     }
     if (mic === "denied" || mic === "restricted") {
       setMicDenied(true);
-      setSpeechError(
-        "Bloks doesn't have microphone access.",
-      );
+      setSpeechError(t("composer.speech.noMicAccess"));
       return;
     }
     baseText.current = text.trim();
     setRecording(true);
   };
 
-  const canSend = Boolean(text.trim()) || attachments.length > 0;
+  // a picture on its way counts: Send is pressed for it, and says why it waits
+  const canSend = Boolean(text.trim()) || attachments.length > 0 || images.items.length > 0;
 
   // While you hold the wheel the server refuses a turn, and it is right
   // to: you are the one driving. But a bare refusal after typing a
@@ -693,6 +715,16 @@ export function Composer({
           onDismiss: () => setAttachNotice(null),
         }
       : null,
+    sendHeld && heldBy
+      ? {
+          id: "images-held",
+          tone: "info",
+          rank: RANK.feedback,
+          icon: <FileImage size={14} />,
+          title: heldBy,
+          onDismiss: () => setSendHeld(false),
+        }
+      : null,
     speechError
       ? {
           id: "speech",
@@ -701,7 +733,7 @@ export function Composer({
           icon: <Mic size={14} />,
           title: speechError,
           actions: (micDenied || speechPane === "speech") && (
-            <TrayButton onClick={() => void window.bloks?.permOpenSettings(speechPane)}>Open Settings</TrayButton>
+            <TrayButton onClick={() => void window.bloks?.permOpenSettings(speechPane)}>{t("composer.openSettings")}</TrayButton>
           ),
           onDismiss: () => setSpeechError(null),
         }
@@ -712,8 +744,8 @@ export function Composer({
           tone: "warn",
           rank: RANK.feedback,
           icon: <ShieldAlert size={14} />,
-          title: "Not confirmed.",
-          detail: `${bot.name} still asks as before.`,
+          title: t("composer.modeRefused.title"),
+          detail: t("composer.modeRefused.detail", { name: bot.name }),
           onDismiss: () => setModeRefused(false),
         }
       : null,
@@ -723,7 +755,7 @@ export function Composer({
           tone: "warn",
           rank: RANK.feedback,
           icon: <FlaskConical size={14} />,
-          title: "The rehearsal didn't start.",
+          title: t("composer.rehearseFailed"),
           detail: rehearseError,
           onDismiss: () => setRehearseError(null),
         }
@@ -734,9 +766,8 @@ export function Composer({
         tone: "warn",
         rank: RANK.unsent,
         icon: <Undo2 size={14} />,
-        title: "A message didn't send.",
-        detail:
-          blockedRecovery === item.id ? "Finish or clear the current draft first." : "Check the chat before sending again.",
+        title: t("composer.unsent.title"),
+        detail: blockedRecovery === item.id ? t("composer.unsent.finishDraftFirst") : t("composer.unsent.checkChat"),
         actions: (
           <>
             <TrayButton
@@ -746,10 +777,10 @@ export function Composer({
                 setBlockedRecovery(null);
               }}
             >
-              Discard
+              {t("common.discard")}
             </TrayButton>
             <TrayButton strong onClick={() => restore(item.id)}>
-              Restore
+              {t("composer.restore")}
             </TrayButton>
           </>
         ),
@@ -810,10 +841,7 @@ export function Composer({
       <>
         <Archive size={15} className="shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 text-body leading-relaxed text-muted-foreground">
-          {bot.archivedBy
-            ? `${state.bots.find((b) => b.id === bot.archivedBy)?.name ?? "The agent that hired it"} archived ${bot.name}${bot.archiveNote ? `: "${bot.archiveNote}"` : ""}. `
-            : `${bot.name} is archived. `}
-          Restore it to give it new work.
+          {archivedLine(bot, state.bots.find((b) => b.id === bot.archivedBy)?.name)}
         </span>
         <Button
           size="sm"
@@ -821,7 +849,7 @@ export function Composer({
           className="shrink-0"
           onClick={() => dispatch({ type: "restoreBot", botId: bot.id })}
         >
-          Restore
+          {t("composer.restore")}
         </Button>
       </>,
       "bg-muted",
@@ -833,7 +861,7 @@ export function Composer({
       <>
         <Hand size={15} className="shrink-0 text-warning" />
         <span className="min-w-0 flex-1 text-body leading-relaxed text-foreground">
-          You have {bot.name}&rsquo;s computer ({bot.held.why}). It waits until you hand it back.
+          {t("composer.held", { name: bot.name, why: bot.held.why })}
         </span>
         <Button
           size="sm"
@@ -843,7 +871,7 @@ export function Composer({
             void api(`/api/bots/${bot.id}/wheel`, { method: "DELETE" }).catch(() => {});
           }}
         >
-          Hand it back
+          {t("composer.handItBack")}
         </Button>
       </>,
       "border-warning/40 bg-background",
@@ -856,7 +884,7 @@ export function Composer({
     inputRef.current?.focus();
   };
 
-  const chips = (replyTo || attachments.length > 0 || rehearse || delivery) && (
+  const chips = (replyTo || attachments.length > 0 || images.items.length > 0 || rehearse || delivery) && (
     <>
       {delivery && (
         <DeliveryLine
@@ -865,15 +893,17 @@ export function Composer({
         />
       )}
       {replyTo && <ReplyTag draft={replyTo} onClear={() => onClearReply?.()} />}
-      {attachments.map((a) => (
-        <AttachmentChip key={a.id} attachment={a} onRemove={() => setAttachments((cur) => cur.filter((x) => x.id !== a.id))} />
-      ))}
+      <AttachmentChips
+        attachments={attachments}
+        images={images}
+        onRemove={(id) => setAttachments((cur) => cur.filter((x) => x.id !== id))}
+      />
       {rehearse && (
         // what rehearsing means, said where the words go, with who else
         // could try the same task beside it
         <div className="flex w-full animate-pop-in flex-wrap items-center gap-1.5 text-small">
           <span className="text-muted-foreground">
-            {bot.name} works on a copy. You choose what to keep.
+            {t("composer.rehearseWorksOnCopy", { name: bot.name })}
           </span>
           {others.length > 0 && <ComparePicker others={others} chosen={compareWith} onChange={setCompareWith} />}
         </div>
@@ -898,7 +928,7 @@ export function Composer({
           // the whole window is the target, so say so where the eye is
           <div className="pointer-events-none fixed inset-2 z-50 flex animate-pop-in items-center justify-center rounded-2xl border-2 border-dashed border-brand/50 bg-background/70">
             <span className="rounded-xl bg-popover px-3.5 py-2 text-body text-foreground shadow-lg shadow-(color:--shadow-color)">
-              Drop to attach to {bot.name}
+              {t("composer.dropToAttach", { name: bot.name })}
             </span>
           </div>
         )
@@ -907,12 +937,12 @@ export function Composer({
         slash &&
         slashShown && (
           <SlashMenu
-            label={`${bot.name}'s commands`}
+            label={t("composer.commandsOf", { name: bot.name })}
             offered={offered}
             pick={pick}
             onHover={setPick}
             onChoose={choose}
-            empty="No skills yet. Add some from Skills or agent settings."
+            empty={t("composer.noSkillsYetAddSome")}
           />
         )
       }
@@ -929,7 +959,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          <BoxButton title="Attach a file or image" onClick={() => pickerRef.current?.click()}>
+          <BoxButton title={t("composer.attachAFileOrImage")} onClick={() => pickerRef.current?.click()}>
             <Plus size={18} />
           </BoxButton>
         </>
@@ -940,15 +970,15 @@ export function Composer({
               it is on, and then plainly on: the next message becomes a
               rehearsal, which is worth not forgetting. */}
           <BoxButton
-            title={rehearse ? "Stop rehearsing" : "Rehearse"}
-            hint={rehearse ? "Rehearsing: the next message runs on a copy" : "Rehearse: try it on a copy first"}
+            title={rehearse ? t("composer.stopRehearsing") : t("composer.rehearse")}
+            hint={rehearse ? t("composer.rehearsingTheNextMessageRuns") : t("composer.rehearseTryItOnA")}
             pressed={rehearse}
             onClick={() => (rehearse ? stopRehearsing() : setRehearse(true))}
           >
             <FlaskConical size={16} />
           </BoxButton>
           <BoxButton
-            title={recording ? "Stop dictation (Esc)" : "Dictate"}
+            title={recording ? t("composer.stopDictationEsc") : t("composer.dictate")}
             onClick={() => void toggleMic()}
             className={cn(recording && "animate-pulse bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive motion-reduce:animate-none")}
           >
@@ -956,7 +986,7 @@ export function Composer({
           </BoxButton>
           <SendStop
             mode={canSend ? "send" : working ? "stop" : "idle"}
-            sendLabel={working ? `Send, ${modKey()}Enter stops ${bot.name} first` : "Send"}
+            sendLabel={working ? t("composer.sendStopsFirst", { key: modKey(), name: bot.name }) : t("composer.send")}
             onSend={() => send()}
             onStop={() => dispatch({ type: "interrupt", botId: bot.id })}
           />
@@ -998,7 +1028,7 @@ export function Composer({
           ref={inputRef}
           rows={1}
           value={text}
-          aria-label={`Message ${bot.name}`}
+          aria-label={t("composer.messageTo", { name: bot.name })}
           onChange={(e) => {
             setText(e.target.value);
             readSlash(e.target);
@@ -1059,6 +1089,7 @@ export function Composer({
               !e.shiftKey &&
               !text &&
               !attachments.length &&
+              !images.items.length &&
               e.currentTarget.selectionStart === 0 &&
               e.currentTarget.selectionEnd === 0 &&
               onEditLast?.()
@@ -1087,20 +1118,20 @@ export function Composer({
           }}
           placeholder={
             recording
-              ? "Listening…"
+              ? t("composer.listening")
               : rehearse
                 ? compareWith.length
-                  ? "Describe the task to compare…"
-                  : "Describe the task to rehearse…"
+                  ? t("composer.describeTheTaskToCompare")
+                  : t("composer.describeTheTaskToRehearse")
                 : // the transcript and the header already say it is
                   // working; this says what typing does about it, and the
                   // Send button's own hint has the stop-first shortcut
                   working
-                  ? `Add to what ${bot.name} is doing`
+                  ? t("composer.addToWhatIsDoing", { name: bot.name })
                   : // stopped on a card: words typed here are read after it is answered
                     lane?.state === "needs-you"
-                    ? `${bot.name} is waiting for your answer above.`
-                    : `Message ${bot.name}`
+                    ? t("composer.waitingForYourAnswer", { name: bot.name })
+                    : t("composer.messageTo", { name: bot.name })
           }
           // the scale's own leading for lead text, a whole 24px: a
           // fractional line left the box a fraction short of its words,

@@ -17,6 +17,7 @@ import { EngineSetupActions } from "@/components/EngineSetup";
 import { RANK, TrayButton, type Notice } from "@/components/composer/Tray";
 import { toast } from "@/components/ui/toast";
 import { refusalToShow, runsOnCredits } from "@/lib/credits";
+import { t, tr } from "@/lib/i18n";
 
 /**
  * The lane mail from senders the person has not listed is answered in.
@@ -33,8 +34,8 @@ export function guestMailNotice(bot: Bot): Notice | null {
     tone: "info",
     rank: RANK.guestMail,
     icon: <Info size={14} />,
-    title: "Mail from unlisted senders is answered here.",
-    detail: `What you type goes to ${first ? `"${first.title}"` : "the first conversation"}.`,
+    title: t("banners.guestMail"),
+    detail: first ? t("banners.typedGoesTo", { title: first.title }) : t("banners.typedGoesToFirst"),
   };
 }
 
@@ -56,28 +57,30 @@ export function useApprovalsNotice(bot: Bot, pending: Message[] | undefined): No
     for (const m of list) dispatch({ type: "answerCard", botId: bot.id, messageId: m.id, answer });
   };
   const caution = risky.length
-    ? `${risky.length === 1 ? "One can" : `${risky.length} can`} delete or overwrite things. Answer ${risky.length === 1 ? "it" : "those"} on ${risky.length === 1 ? "its" : "their"} own.`
+    ? t("banners.caution", { count: risky.length })
     : undefined;
   return {
     id: "approvals",
     tone: "urgent",
     rank: RANK.approvals,
     icon: <ShieldAlert size={14} />,
-    title: `${pending.length} approvals waiting.`,
+    title: t("banners.approvalsWaiting", { count: pending.length }),
     detail: caution,
     hint: caution,
     actions: (
       <>
-        <TrayButton onClick={() => answerAll(pending, "Deny")}>Deny all</TrayButton>
+        <TrayButton onClick={() => answerAll(pending, "Deny")}>{t("banners.denyAll")}</TrayButton>
         {allowable.length > 0 && (
           <TrayButton strong onClick={() => answerAll(allowable, "Allow")}>
             {risky.length ? (
               <>
-                Allow <span className="max-sm:hidden">the other </span>
-                {allowable.length}
+                {tr("banners.allowTheOther", {
+                  theOther: <span className="max-sm:hidden">{t("banners.theOther")} </span>,
+                  count: allowable.length,
+                })}
               </>
             ) : (
-              "Allow all"
+              t("banners.allowAll")
             )}
           </TrayButton>
         )}
@@ -112,10 +115,12 @@ export function takeSuggestion(
   accept(suggestion.id, scope).then(
     () =>
       toast.success(
-        scope === "agent" && suggestion.forAgent ? `${suggestion.forAgent.name} won't ask about this again` : "No agent will ask about this again",
-        { description: "Saved as a rule. Remove it in Settings, Rules and approvals." },
+        scope === "agent" && suggestion.forAgent
+          ? t("banners.wontAskAgain", { name: suggestion.forAgent.name })
+          : t("banners.noAgentWillAsk"),
+        { description: t("banners.savedAsRule") },
       ),
-    (e: Error) => toast.error(`The rule wasn't saved: ${e.message}`),
+    (e: Error) => toast.error(t("banners.ruleNotSaved", { error: e.message })),
   );
 }
 
@@ -143,15 +148,15 @@ export function useSuggestionNotice(bot: Bot): Notice | null {
     hint: `${first.title} ${first.what.replace(/`/g, "")}`,
     actions: (
       <>
-        <TrayButton onClick={() => void dismiss(first.id)}>Not now</TrayButton>
+        <TrayButton onClick={() => void dismiss(first.id)}>{t("common.notNow")}</TrayButton>
         {first.forEveryone && (
           <TrayButton strong={!forThis} onClick={() => takeSuggestion(accept, first, "everyone")}>
-            Allow for everyone
+            {t("banners.allowForEveryone")}
           </TrayButton>
         )}
         {forThis && (
           <TrayButton strong onClick={() => takeSuggestion(accept, first, "agent")}>
-            Allow <span className="max-sm:hidden">for this agent</span>
+            {tr("banners.allowForThisAgent", { forThisAgent: <span className="max-sm:hidden">{t("banners.forThisAgent")}</span> })}
           </TrayButton>
         )}
       </>
@@ -177,10 +182,10 @@ export function useOtherLanesNotice(bot: Bot): Notice | null {
     icon: <MessagesSquare size={14} />,
     title:
       waiting.length === 1
-        ? `"${first.title}" is waiting on you.`
-        : `${waiting.length} other conversations are waiting on you.`,
+        ? t("banners.laneWaiting", { title: first.title })
+        : t("banners.lanesWaiting", { count: waiting.length }),
     actions: (
-      <TrayButton onClick={() => dispatch({ type: "selectTask", botId: bot.id, taskId: first.id })}>Open</TrayButton>
+      <TrayButton onClick={() => dispatch({ type: "selectTask", botId: bot.id, taskId: first.id })}>{t("common.open")}</TrayButton>
     ),
   };
 }
@@ -194,8 +199,12 @@ export function useOtherLanesNotice(bot: Bot): Notice | null {
 export function useEngineNotice(bot: Bot): Notice | null {
   const { state, dispatch } = useStore();
   const instance = state.instances.find((i) => i.instanceId === bot.modelSelection?.instanceId);
-  const missing = instance ? instance.snapshot.state !== "available" : false;
-  const signedOut = Boolean(instance) && !missing && instance!.snapshot.authenticated === false;
+  // An agent that works in a container or over SSH runs the engine there:
+  // this computer's copy, installed or signed in or not, is not the one it
+  // uses, and the Test in its settings says how the other one stands.
+  const elsewhere = Boolean(bot.workplace);
+  const missing = instance && !elsewhere ? instance.snapshot.state !== "available" : false;
+  const signedOut = Boolean(instance) && !elsewhere && !missing && instance!.snapshot.authenticated === false;
   const refresh = () => {
     api("/api/instances")
       .then(({ instances }) => dispatch({ type: "instances", instances }))
@@ -267,12 +276,12 @@ export function useEngineNotice(bot: Bot): Notice | null {
     rank: RANK.engine,
     icon: <AlertTriangle size={14} />,
     title: missing
-      ? `${instance.displayName} isn't set up, so ${bot.name} can't answer.`
-      : `${instance.displayName} isn't signed in, so ${bot.name} can't answer.`,
+      ? t("banners.engineMissing", { engine: instance.displayName, name: bot.name })
+      : t("banners.engineSignedOut", { engine: instance.displayName, name: bot.name }),
     actions: alternative && (
       <TrayButton
         strong
-        title={`Use ${alternative.displayName} instead`}
+        title={t("banners.useInstead", { engine: alternative.displayName })}
         onClick={() =>
           dispatch({
             type: "setModel",
@@ -281,7 +290,7 @@ export function useEngineNotice(bot: Bot): Notice | null {
           })
         }
       >
-        Use {alternative.displayName}
+        {t("banners.use", { engine: alternative.displayName })}
       </TrayButton>
     ),
     body: (
@@ -298,7 +307,7 @@ export function useEngineNotice(bot: Bot): Notice | null {
           onClick={() => dispatch({ type: "toggleAppSettings", open: true, page: "engines" })}
           className="mt-1.5 underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
         >
-          Engine settings
+          {t("banners.engineSettings")}
         </button>
       </div>
     ),
@@ -337,7 +346,7 @@ export function useCreditsNotice(bot: Bot): Notice | null {
     hint: showing.message,
     actions: checkout ? (
       <TrayButton strong onClick={() => window.open(checkout, "_blank", "noopener")}>
-        Top up
+        {t("banners.topUp")}
       </TrayButton>
     ) : undefined,
     onDismiss: () => setDismissedAt(showing.at),

@@ -19,6 +19,7 @@ import { toast } from "@/components/ui/toast";
 import { deviceWord } from "@/lib/thisComputer";
 import { keysToEnter } from "@/lib/backups";
 import { SettingRow, SettingsGroup } from "./SettingsLayout";
+import { formatNumber, t } from "@/lib/i18n";
 
 interface MoveStatus {
   empty: boolean;
@@ -129,7 +130,7 @@ async function sendInParts(file: File, onProgress: (sent: number) => void): Prom
         if ((e as { final?: boolean }).final) throw e;
         failed = e instanceof Error ? e.message : String(e);
       }
-      if (attempt >= TRIES) throw new Error(`A part did not get through (${failed}). Choose the same file again to carry on.`);
+      if (attempt >= TRIES) throw new Error(t("moveWorkspace.partFailed", { reason: failed }));
       await new Promise((r) => setTimeout(r, Math.min(1_000 * 2 ** attempt, 20_000)));
     }
   };
@@ -145,7 +146,11 @@ async function sendInParts(file: File, onProgress: (sent: number) => void): Prom
   return id;
 }
 
-const megabytes = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(0.1, bytes / 1e6).toFixed(bytes >= 1e8 ? 0 : 1)} MB`);
+const megabytes = (bytes: number) => {
+  if (bytes >= 1e9) return t("moveWorkspace.sizeGb", { size: formatNumber(bytes / 1e9, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
+  const digits = bytes >= 1e8 ? 0 : 1;
+  return t("moveWorkspace.sizeMb", { size: formatNumber(Math.max(0.1, bytes / 1e6), { minimumFractionDigits: digits, maximumFractionDigits: digits }) });
+};
 
 /** The pid of the server answering now, to tell a restarted one apart. */
 const serverPid = () =>
@@ -162,7 +167,8 @@ export function MoveWorkspace() {
   const [arriving, setArriving] = useState<{ toEnter: string[]; pid: number | null } | null>(null);
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState<{ sent: number; size: number } | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  // the restart was waited for and never came: said where it draws
+  const [stuck, setStuck] = useState(false);
   const [resumable] = useState(() => readSending());
   const picker = useRef<HTMLInputElement>(null);
 
@@ -193,7 +199,7 @@ export function MoveWorkspace() {
           return;
         }
       }
-      if (!done) setNote("The workspace is in place once Bloks restarts. Restart it to finish.");
+      if (!done) setStuck(true);
     })();
     return () => {
       done = true;
@@ -221,9 +227,9 @@ export function MoveWorkspace() {
 
   const take = async (file: File) => {
     const ok = await confirm({
-      title: "Bring this workspace here?",
-      body: `${file.name} becomes this workspace: its agents, conversations, rooms, routines, memory, skills and settings. Bloks restarts to put it in place. Keys are not in the file, so you enter them again afterwards.`,
-      confirmLabel: "Bring it here",
+      title: t("moveWorkspace.take.title"),
+      body: t("moveWorkspace.take.body", { name: file.name }),
+      confirmLabel: t("moveWorkspace.take.confirm"),
     });
     if (!ok) return;
     setSending(true);
@@ -257,19 +263,19 @@ export function MoveWorkspace() {
     }
   };
 
-  const showIn = deviceWord() === "Mac" ? "Show in Finder" : "Show in folder";
+  const showIn = deviceWord() === "Mac" ? t("moveWorkspace.showInFinder") : t("moveWorkspace.showInFolder");
 
   return (
-    <SettingsGroup title="Move to a hosted workspace">
+    <SettingsGroup title={t("moveWorkspace.moveToAHostedWorkspace")}>
       {canWrite && (
         <SettingRow
-          label="Write out this workspace"
-          info="One file with every agent, conversation, room, routine, watcher, intent, memory, skill and setting. Left out: saved keys, folders on this computer, engine sessions only this computer can carry on, and the Undo history."
-          description="One file to bring into a hosted workspace. Keys stay here."
+          label={t("moveWorkspace.writeOutThisWorkspace")}
+          info={t("moveWorkspace.oneFileWithEveryAgent")}
+          description={t("moveWorkspace.oneFileToBringInto")}
           control={
             <Button size="sm" variant="secondary" disabled={writing} onClick={write}>
               {writing && <Loader2 size={14} className="animate-spin" />}
-              Write the file
+              {t("moveWorkspace.writeTheFile")}
             </Button>
           }
         >
@@ -281,7 +287,7 @@ export function MoveWorkspace() {
                 <Button size="sm" variant="secondary" asChild>
                   <a href={`/api/workspace/move/${encodeURIComponent(written.name)}`} download={written.name}>
                     <Download size={14} />
-                    Download
+                    {t("moveWorkspace.download")}
                   </a>
                 </Button>
                 {window.bloks && (
@@ -297,11 +303,11 @@ export function MoveWorkspace() {
       )}
       {status.empty && (
         <SettingRow
-          label="Bring a workspace here"
+          label={t("moveWorkspace.bringAWorkspaceHere")}
           description={
             status.hosted
-              ? "This hosted workspace is empty. Bring in the file you wrote out on your Mac."
-              : "This workspace is empty, so it can take in a workspace written out elsewhere."
+              ? t("moveWorkspace.thisHostedWorkspaceIsEmpty")
+              : t("moveWorkspace.thisWorkspaceIsEmptySo")
           }
           control={
             <>
@@ -310,7 +316,7 @@ export function MoveWorkspace() {
                 type="file"
                 accept=".gz,.enc,application/gzip,application/octet-stream"
                 className="sr-only"
-                aria-label="Workspace file"
+                aria-label={t("moveWorkspace.workspaceFile")}
                 onChange={(e) => {
                   const file = e.target.files?.[0];
                   e.target.value = "";
@@ -319,7 +325,7 @@ export function MoveWorkspace() {
               />
               <Button size="sm" variant="secondary" disabled={sending || Boolean(arriving)} onClick={() => picker.current?.click()}>
                 {sending ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                Choose the file
+                {t("moveWorkspace.chooseTheFile")}
               </Button>
             </>
           }
@@ -327,12 +333,12 @@ export function MoveWorkspace() {
           {progress && (
             <div role="status" className="mt-3 rounded-xl bg-muted/60 px-3 py-2.5 text-small leading-relaxed text-muted-foreground">
               <div className="flex items-center justify-between gap-3 font-medium text-foreground">
-                <span>Sending the workspace</span>
-                <span className="tabular-nums">{Math.floor((progress.sent / Math.max(1, progress.size)) * 100)}%</span>
+                <span>{t("moveWorkspace.sendingTheWorkspace")}</span>
+                <span className="tabular-nums">{formatNumber(Math.floor((progress.sent / Math.max(1, progress.size)) * 100) / 100, { style: "percent" })}</span>
               </div>
               <div
                 role="progressbar"
-                aria-label="Sending the workspace"
+                aria-label={t("moveWorkspace.sendingTheWorkspace")}
                 aria-valuemin={0}
                 aria-valuemax={progress.size}
                 aria-valuenow={progress.sent}
@@ -341,20 +347,20 @@ export function MoveWorkspace() {
                 <div className="h-full origin-left bg-brand-ink transition-transform duration-300 ease-out" style={{ transform: `scaleX(${progress.sent / Math.max(1, progress.size)})` }} />
               </div>
               <div className="mt-1.5 text-pretty tabular-nums">
-                {megabytes(progress.sent)} of {megabytes(progress.size)}. If this stops, choose the same file again and it carries on from here.
+                {t("moveWorkspace.sentOf", { sent: megabytes(progress.sent), size: megabytes(progress.size) })}
               </div>
             </div>
           )}
           {!progress && !arriving && resumable && status.partSize && (
             <p className="mt-2 text-pretty text-small text-muted-foreground">
-              A send of {resumable.name} stopped part way. Choose the same file to carry on from where it was.
+              {t("moveWorkspace.stoppedPartWay", { name: resumable.name })}
             </p>
           )}
           {arriving && (
             <div role="status" className="mt-3 rounded-xl bg-muted/60 px-3 py-2.5 text-small leading-relaxed text-muted-foreground">
               <div className="flex items-center gap-2 font-medium text-foreground">
-                {!note && <Loader2 size={13} className="animate-spin" />}
-                {note ?? "Putting the workspace in place. Bloks restarts in a moment."}
+                {!stuck && <Loader2 size={13} className="animate-spin" />}
+                {stuck ? t("moveWorkspace.restartToFinish") : t("moveWorkspace.puttingTheWorkspaceInPlace")}
               </div>
               <div className="mt-1 text-pretty">{keysToEnter(arriving.toEnter)}</div>
             </div>

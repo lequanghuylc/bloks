@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/confirm";
 import { toast } from "@/components/ui/toast";
 import { said, useHostingMove } from "./useHostingMove";
+import { t } from "@/lib/i18n";
 
 interface Mark {
   to: "hosted" | "mac";
@@ -23,11 +24,8 @@ interface Mark {
 
 /** The banner's sentence for a mark (the same words as server/moved-mark.ts). */
 export function movedLine(mark: Mark): string {
-  const where = mark.to === "hosted" ? "your hosted machine" : "this Mac";
-  if (mark.pending) return `This workspace is moving to ${where}. Its routines, watchers, workflows and chat bots have stopped here while it does.`;
-  return mark.to === "hosted"
-    ? "This workspace moved to your hosted machine. Its routines, watchers, workflows and chat bots run there now, not on this Mac."
-    : `This workspace moved to ${mark.name} on this Mac. Its routines, watchers, workflows and chat bots run there now, not here.`;
+  if (mark.pending) return mark.to === "hosted" ? t("movedBanner.line.movingHosted") : t("movedBanner.line.movingMac");
+  return mark.to === "hosted" ? t("movedBanner.line.movedHosted") : t("movedBanner.line.movedMac", { name: mark.name });
 }
 
 export function MovedBanner() {
@@ -62,11 +60,9 @@ export function MovedBannerView({ mark, hostedId }: { mark: Mark; hostedId: stri
     if (!here) return;
     const personal = here.kind === "personal";
     const ok = await confirm({
-      title: `Remove ${here.name} from this Mac?`,
-      body: personal
-        ? "Personal starts fresh, empty, and its folder is set aside whole beside it rather than deleted. Your work is on your hosted machine."
-        : `${here.name}'s folder goes to the Trash, so it can still be brought back from there. Your work is on your hosted machine.`,
-      confirmLabel: "Remove from this Mac",
+      title: t("movedBanner.remove.title", { name: here.name }),
+      body: personal ? t("movedBanner.remove.personal") : t("movedBanner.remove.other", { name: here.name }),
+      confirmLabel: t("movedBanner.removeFromThisMac"),
       destructive: true,
     });
     if (!ok) return;
@@ -81,18 +77,18 @@ export function MovedBannerView({ mark, hostedId }: { mark: Mark; hostedId: stri
       <span className="flex shrink-0 items-center gap-2">
         {mark.pending ? (
           <Button size="sm" variant="ghost" className="h-7" onClick={() => void said(window.bloks?.hostingMoveStop?.("later")).catch(() => {})}>
-            Not now
+            {t("common.notNow")}
           </Button>
         ) : (
           <>
             {goTo && window.bloks?.workspaceSwitch && (
               <Button size="sm" variant="secondary" className="h-7" onClick={open}>
-                {mark.to === "hosted" ? "Open hosted" : `Open ${mark.name}`}
+                {mark.to === "hosted" ? t("movedBanner.openHosted") : t("movedBanner.openNamed", { name: mark.name })}
               </Button>
             )}
             {here && window.bloks?.hostingMoveRemoveCopy && (
               <Button size="sm" variant="ghost" className="h-7" onClick={() => void remove()}>
-                Remove from this Mac
+                {t("movedBanner.removeFromThisMac")}
               </Button>
             )}
           </>

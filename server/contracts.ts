@@ -156,8 +156,17 @@ export type RuntimeEvent = RuntimeEventBase &
         input?: unknown;
         summary: string;
         choices?: string[];
+        /** Nothing is waiting on this question: the engine was told it was
+         * taken and carried on (Codex's request_user_input_async). Its
+         * answer is said in the conversation, as the person's words. */
+        async?: true;
       }
-    | { type: "request.resolved"; behavior: string; source: string }
+    | {
+        type: "request.resolved"; behavior: string; source: string;
+        /** What the person answered an async question with, for the
+         * harness to say in the conversation that asked it. */
+        answer?: string;
+      }
     | {
         type: "thread.token-usage.updated";
         input: number;
@@ -348,6 +357,40 @@ export interface SendTurnInput {
   compactOnly?: boolean;
   /** Names found only in this segment's personal messages, before notes. */
   skillNames?: string[];
+  /**
+   * Set when the agent works somewhere else: in a Docker container or on
+   * another machine over SSH (server/workplace-run.ts). A driver that
+   * runs a process starts it with `place.spawn` instead of spawn, hands
+   * it files with `place.file` instead of writing them here, and points
+   * it at every MCP server through `place.mcp`, which keeps the server
+   * itself on this computer. `cwd` is then the folder there, and
+   * `extraDirs` are left out: they are folders on this computer.
+   */
+  place?: PlaceRun;
+}
+
+/** One turn's process on another side. See SendTurnInput.place. */
+export interface PlaceRun {
+  /** Where, for a sentence: "container bloks-scout", "build-box". */
+  label: string;
+  /** The working folder there. */
+  cwd: string;
+  /** The engine, started there with its stdio carried here. `command` is
+   * the program as this computer would run it; the place says what it is
+   * called there. Only the turn's own environment and the driver's own
+   * switches in `env` go with it, never this computer's. */
+  spawn: (command: string, args: string[], options?: { env?: Record<string, string | undefined> }) => import("node:child_process").ChildProcessWithoutNullStreams;
+  /** A private file there for this turn, written ahead of the engine;
+   * answers its path there. Call before spawn. */
+  file(name: string, content: string): string;
+  /** An MCP server, as the engine there reaches it: over HTTP, through
+   * Bloks' gate, with the turn's own gate token. The server runs here
+   * (stdio) or is called from here (HTTP), with its own keys added here.
+   * Null for one that cannot be carried. */
+  mcp(
+    name: string,
+    server: { transport?: string; command?: string; args?: string[]; env?: Record<string, string>; url?: string; headers?: Record<string, string> },
+  ): { url: string; headers: Record<string, string> } | null;
 }
 
 export interface TurnStartResult {
@@ -528,6 +571,9 @@ export interface ProviderInstance {
    * every message is allowed to use (server/delivery.ts); a slower or
    * dearer one is left to the work that is worth it. */
   smallText?: boolean;
+  /** The model generateText runs on, so a setting that spends it can
+   * say which. Absent where the engine does not say. */
+  textModel?: string;
   /** The latest the engine said about its plan's limits, kept in memory
    * on the instance and null until it says anything. Optional: only an
    * engine signed in to a subscription has limits to report. For the

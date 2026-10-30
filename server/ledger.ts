@@ -46,6 +46,8 @@ export type LedgerKind =
   | "agent.deleted"
   | "skill.installed"
   | "skill.deleted"
+  | "skill.changed"
+  | "team.installed"
   | "routine.ran"
   | "job.posted"
   | "workflow.ran"
@@ -54,7 +56,12 @@ export type LedgerKind =
   | "control.released"
   | "conversation.rewound"
   | "setup.imported"
-  | "sessions.imported";
+  | "setup.undone"
+  | "sessions.imported"
+  | "server.update"
+  | "home.call"
+  | "runs.exported"
+  | "settings.changed";
 
 export interface LedgerEntry {
   /** Counts from zero, one per entry, no gaps. */

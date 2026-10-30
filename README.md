@@ -213,12 +213,58 @@ last, reviews what came back and makes the call. An agent's memory
 follows it between rooms and one to ones, so you can ask your Chief of
 Staff privately what it thought of the group's plan.
 
+A room decides who answers a message that names nobody: everyone, only
+the lead, or **Auto**, where a small fast model picks the member whose
+role fits ("Scout picked: pricing question", above the reply, opens to
+why) and the lead answers whenever it is slow, unsure or unreachable.
+Naming someone with @ always wins, and the same choice is said in a room
+carried into Slack, Discord or WhatsApp. It uses an engine your agents
+already run on unless you pick one in Settings, Behaviour.
+
 A lead that needs more people can propose a team: who it wants, what each
 owns, which skills to give them. You approve or you don't. Agents can
-message each other, hire, open rooms, and stop a teammate they outrank,
-with a credential that ends with the turn. When something fails for
+message each other, hire, open rooms, start a new conversation for a
+teammate, and stop one they outrank, with a credential that ends with the
+turn. A built-in skill tells them which command fits what you asked,
+and which things only you can do. Another explains how each part of
+Bloks works, so an agent can answer "where do I turn that off" from the
+app's own settings index and leave a button in the chat that takes you
+there, or propose changing an everyday setting on a card where nothing
+changes until you tap Change. When something fails for
 good, an **incident desk** hands it to the lead to retry once, pass on,
 or bring to you, instead of letting it fail quietly or in a storm.
+
+### A browser you can watch
+
+The desktop app has a browser of its own, docked beside the chat, with
+tabs, an address bar and a downloads shelf. Agents drive it with
+`bloks browser` (and other AI apps through the MCP server): open a page,
+read it, list what is on it, click, type, choose, scroll, wait and take a
+picture. You watch it happen, each tab showing which agent drives it,
+and **Take over** whenever you like; the agent's next step waits until
+you **Give back**. Each workspace browses in a session of its own, so
+its sign-ins stay its own and never the app's.
+
+It is careful in the same way the rest of Bloks is. In Ask first, a site
+not on your list asks on a card the first time an agent goes there;
+blocked sites are never opened; a password, a card number or a file to
+upload always asks you, whatever the mode. What a page says reaches an
+agent framed as untrusted data, never as instructions. On your phone the
+conversation says the agent is browsing on the Mac, with a small live
+picture of the page.
+
+### Ready teams and skills
+
+The **Catalogue**, in Customize, holds teams (a launch crew, a research
+desk, a support desk, personal admin and more) and the skills they use,
+kept in this repository's [catalog/](catalog/README.md) folder. Before
+anything installs, a review says exactly what it creates: the agents,
+their room, each skill to read first, and the routines, which start
+paused. New agents start with connected apps, the browser and tool
+servers off. A newer version comes back as an update that shows what
+changed and keeps what you changed. Install from a raw GitHub link, a
+file or a `bloks://install?url=` link through the same review, and use
+**Share as file** on a room or a skill to send one back by pull request.
 
 ### Careful by default
 
@@ -243,6 +289,15 @@ or bring to you, instead of letting it fail quietly or in a storm.
   several agents try the same task and keep the best attempt.
 - **Rewind to here.** Take a conversation back to a message you sent, and
   the files with it.
+- **Work somewhere else.** An agent on Claude Code, Codex or another engine
+  that runs a program can work in a Docker container or on another
+  machine over SSH: a throwaway container that can break nothing here,
+  or the build server or GPU box the work needs. Its engine runs there
+  and talks to Bloks over the same stdio it always does. Set it under
+  the agent's Engine settings, where Test goes there and says exactly
+  what is missing. Your engine sign-in is never copied there unless you
+  say so on a card that names each file. Files it saves come back as
+  cards; undo works on a mounted folder and is said to be off elsewhere.
 - **Messages while it works.** Say something mid-turn and Bloks reads it:
   a stop stops, a correction goes in now, a new request waits its turn.
   One press changes its mind.
@@ -267,12 +322,29 @@ conversations, and says exactly what it was given.
   <img alt="Memory for the Head of Marketing: its topic files, and Recent changes, where the agent changed MEMORY.md during a conversation and you changed it after, each with an Undo button" src="docs/screenshots/memory.png">
 </p>
 
+### Skills that get better, and keep every version
+
+Skills are instructions your agents pick up, from the catalogue or
+written by you. Turn on suggestions and, after a turn that worked
+something out (many steps, a failure it got past, or you putting it
+right), Bloks offers it as a new skill; after a skill was used and you
+corrected it, it offers a change to that skill, shown as a diff with
+the reason. Nothing changes until you keep it, and every version stays:
+who changed it and why, any two compared, any one restored, with how
+often each was used and then corrected. Agents can ask for a change too
+(`bloks skill revise`), against the version they read.
+
 ### Work that runs without you
 
 - **Routines and check-ins** on a calendar you drag, that answer quietly
   when nothing needs you.
 - **Watchers** on a folder, a web page, a feed or a place: "when an
   invoice lands here, file it", "when I land, send me the hotel address".
+- **App watchers**: an agent starts when something happens in a
+  connected app. "Whenever I get an email from Acme, draft a reply",
+  "when an issue is labelled bug, triage it". An agent can propose one;
+  nothing listens until you say yes on its card, and what the app sends
+  reaches the agent as data, never as instructions.
 - **Standing intents**: words that come up in a conversation bring an
   agent in or message one.
 - **Workflows** with a trigger, some steps and a person who says yes, kept
@@ -308,26 +380,77 @@ conversations, and says exactly what it was given.
 - **Any browser.** With Bloks Cloud, the same app opens at
   [bloks.dev/web](https://bloks.dev/web), every request sealed in the
   browser for your computer alone.
-- **Chat and email.** Talk to agents from Telegram, or carry a room into
-  Slack, Discord or a WhatsApp group. With Bloks Cloud, each agent gets an
-  email address you can forward things to.
+- **Out loud.** Give an agent a voice and it reads replies aloud, and you
+  can call it, or call a room. Voices come from ElevenLabs, OpenAI, Fish
+  Audio or xAI with a key of yours (xAI's uses your Grok key if you have
+  one), from a Chatterbox server you run on your own machine or network,
+  or from the Mac's own voices with no key at all.
+- **Chat and email.** Talk to agents from Telegram or Signal, or carry a
+  room into Slack, Discord, or a WhatsApp or Signal group. On Signal an
+  agent answers on an account of its own, linked to signal-cli on your
+  computer like Signal Desktop, which keeps the keys; or on your own
+  account, where it reads only your Note to Self. People you let in talk
+  to it in a conversation of their own. With Bloks Cloud, each agent gets
+  an email address you can forward things to.
+- **Your home.** Connect Home Assistant and choose what agents may see.
+  They read states and history freely; every change asks you on a card
+  unless you let that entity change without asking, and locks, alarms
+  and garage doors always ask. Home Assistant can start an agent too: an
+  automation, or your voice assistant, posts to the agent's webhook with
+  YAML made for you in Settings.
 - **Your other AI apps.** Bloks is an MCP server: Claude Desktop, Claude
   Code or Cursor can hand your agents work and read their conversations,
-  but never approve, delete or change settings.
+  and use the Bloks browser on sites your rules allow, but never approve,
+  delete, change settings or fill in a password.
 - **Always on.** `bloks-server` runs a workspace on a machine that stays
   on, and the desktop app, the phone and the browser reach it the same
   way. Or let Bloks run one for you: managed hosting is a private machine
   of your own that stays on, and moves your agents over when you sign up
   at [bloks.dev/pricing](https://bloks.dev/pricing).
+- **Scripts, CI and a terminal.** `bloks-server run Ada "Review the open
+  pull requests"` hands an agent a job, waits until it and every teammate
+  it handed work to are done, and prints the answer, or one JSON document
+  with `--json`, with exit codes a script can branch on. `bloks-server
+  team apply team.md` keeps a room and its agents in line with a team
+  file, changing only what differs. `bloks-server chat Ada` is a chat in
+  the terminal, approvals included. See
+  [docs/SCRIPTING.md](docs/SCRIPTING.md), with a GitHub Actions example.
 
 ### Bring what you have
 
-Bring your instructions, skills and tool servers over from Claude Code,
-Codex, OpenClaw or Hermes, reviewing each item first. Bring your past
-Claude Code and Codex sessions over as conversations and carry one on.
-Your workspace is backed up every day, and a whole workspace can be
-written out to one file and taken into an empty one elsewhere. Keys
-never travel.
+Bring your subagents, instructions, skills, commands, tool servers, rules
+and chat bots over from Claude Code, Codex, Cursor, OpenClaw or Hermes,
+reviewing each item first, grouped by what it becomes here. A name that
+is taken is yours to settle, a key comes only when you tick it, and the
+whole import can be undone. `bloks-server import --dry-run` shows what
+would come over from a terminal. Bring your past Claude Code and Codex
+sessions over as conversations and carry one on. Your workspace is
+backed up every day, and a whole workspace can be written out to one
+file and taken into an empty one elsewhere. Keys never travel in either.
+
+### Your runs, for training
+
+Settings, Data, Export for training writes your agents' runs to a JSONL
+file on your computer, to fine-tune a model on: OpenAI's chat format with
+tools and tool calls, ShareGPT, or Bloks's own trajectory with every step
+timed. Pick the agents, conversations, dates and engines; keep only turns
+that finished well, that you did not correct, or that you gave a thumbs
+up. Keys, tokens and passwords are always taken out, and by default so
+are email addresses, phone numbers, your home folder and people's names.
+Other people's words (members, guests, people on Telegram and Signal,
+email and chat apps) stay out unless you ask for them. You preview the
+counts and the first record before anything is written, and nothing is
+sent anywhere. `bloks-server export-runs` does the same from a terminal.
+
+### In your language
+
+Bloks speaks English, Español, Français, Deutsch, Português (Brasil),
+日本語 and 简体中文. It follows your system's language, or the one you
+pick in Settings, General, Language, and so does the menu bar. Agents
+answer in whatever language you write to them. A few things the server
+writes, such as notices, errors and the morning brief, are still in
+English. Each language is one file in `src/locales`, and
+[src/locales/README.md](src/locales/README.md) says how to improve one.
 
 ## Install
 
@@ -380,10 +503,12 @@ picks its own.
 </p>
 
 The first-run check, and Settings, Engines and keys, install Claude Code,
-Codex, Gemini CLI, Pi, Antigravity and the Grok CLI with one button. They
-go into your own `~/.local`, so no admin password and no npm permission
-errors, and an engine that is installed but not signed in says so, with
-a button that opens Terminal at its sign-in. To do it by hand:
+Codex, Gemini CLI, Pi, Antigravity, the Grok CLI, Cursor and Cline with
+one button. They go into your own `~/.local`, so no admin password and no
+npm permission errors, and an engine that is installed but not signed in
+says so, with a button that opens Terminal at its sign-in. An engine
+installed somewhere else, or a build of your own, can be pointed at with
+**Use a different copy** under its row. To do it by hand:
 
 | Engine | How you connect | Works in your folders |
 | --- | --- | --- |
@@ -393,6 +518,8 @@ a button that opens Terminal at its sign-in. To do it by hand:
 | Pi | `npm i -g --prefix ~/.local --ignore-scripts @earendil-works/pi-coding-agent pi-acp`, then `pi` | yes |
 | OpenCode | `npm i -g --prefix ~/.local opencode-ai`, then `opencode auth login` | yes |
 | Grok CLI | `curl -fsSL https://x.ai/cli/install.sh \| bash`, then `grok login` | yes |
+| Cursor | `curl https://cursor.com/install -fsS \| bash`, then `cursor-agent login` (the Cursor CLI, not the editor) | yes |
+| Cline | `npm i -g --prefix ~/.local cline` (3.0.68 or newer), then `cline auth` | yes |
 | Antigravity | `curl -fsSL https://antigravity.google/cli/install.sh \| bash`, then `agy` | yes |
 | OpenRouter | Sign in from Settings, in your browser | no |
 | Gemini, Grok, Kimi, Llama, DeepSeek, Mistral, Groq | Paste a key in Settings | no |
@@ -491,6 +618,8 @@ Inside each workspace's folder:
 | `usage.json` | What each agent and engine used, by day |
 | `reads.json` | How far each person has read each conversation |
 | `skills/` | Installed skills, one markdown file each |
+| `skill-history/` | Every version of each of your skills, with who changed it and why |
+| `catalog/`, `catalog-installs.json` | The Catalogue's index and items as last fetched, checked by sha256, and the teams installed from it |
 | `workspaces/` | Each agent's own home folder, with its `MEMORY.md` and topic files |
 | `checkpoints/` | Each turn's before and after, kept once per file version, for undo |
 | `memory-journal/` | Every change to an agent's memory, with the text before and after |
@@ -498,6 +627,7 @@ Inside each workspace's folder:
 | `events/`, `native/` | The canonical event stream, and raw provider traffic |
 
 Backups go beside the folder, never in it: `~/.bloks-backups` for Personal.
+Exports for training go beside it too: `~/.bloks-exports`.
 
 ## Privacy
 
@@ -512,6 +642,9 @@ your conversations:
   release;
 - the skill catalog and the team gallery come from bloks.dev when you
   browse them;
+- the Catalogue of teams and skills is read from this repository on
+  GitHub when you open it, and kept on your computer so it opens
+  offline; a link you install from is fetched once, when you ask;
 - when an engine runs on a key of yours, the public model price list is
   fetched from OpenRouter at most once a day, to estimate costs, with
   nothing about you in the request;
@@ -567,8 +700,8 @@ yet. The short version:
   protocols that can carry a permission request for exactly that reason.
 - Everything a member's device may call is named in one file, and
   anything unnamed is refused.
-- A pairing code exists only once you ask for one at the computer, works
-  once, and lasts five minutes.
+- A pairing code exists only once you ask for one, at the computer or on
+  one of your own paired devices, works once, and lasts five minutes.
 - Keys sit in a `0600` file, not the Keychain. That is the top open item.
 - There is no analytics token in this repository.
 - Released macOS builds are signed and notarized. One you build yourself

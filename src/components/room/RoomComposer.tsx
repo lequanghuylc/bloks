@@ -14,6 +14,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type SetStateAction } from "react";
 import { CornerUpLeft } from "@/components/icons";
 import { File as FileIcon } from "@/components/icons";
+import { FileImage } from "@/components/icons";
 import { Mic } from "@/components/icons";
 import { Plus } from "@/components/icons";
 import { Undo2 } from "@/components/icons";
@@ -27,10 +28,8 @@ import { RANK, TrayButton, type Notice } from "@/components/composer/Tray";
 import { useQueuedNotice } from "@/components/WaitingStrip";
 import { useUnsentNotice } from "@/components/chat/HeldSends";
 import {
-  attachmentBasename,
   composeOutgoing,
   destination,
-  formatBytes,
   intakeFiles,
   isLongPaste,
   pasteAttachment,
@@ -38,6 +37,8 @@ import {
   uploadImageAttachment,
   type Attachment,
 } from "@/lib/attachments";
+import { heldLine } from "@/lib/pendingImages";
+import { AttachmentChips, usePendingImages } from "@/components/composer/Attachments";
 import {
   acceptDraft,
   boxFor,
@@ -60,6 +61,8 @@ import { cn } from "@/lib/cn";
 import { useDictation, VoiceMeter } from "./Dictation";
 import { ReachMenu } from "./ReachMenu";
 import { reachOf } from "./reach";
+import { answersOf } from "@/lib/roomRoute";
+import { t } from "@/lib/i18n";
 
 /** Fade whichever edges have more text beyond them, the marks too. */
 function shadeEdges(el: HTMLTextAreaElement) {
@@ -144,30 +147,6 @@ function mentionRuns(text: string, names: readonly string[]): Array<{ text: stri
   return runs;
 }
 
-function AttachmentChip({ attachment: a, onRemove }: { attachment: Attachment; onRemove?: () => void }) {
-  return (
-    <span className="flex max-w-[240px] animate-pop-in items-center gap-1.5 rounded-xl border bg-muted/50 py-1 pl-1.5 pr-1 text-small text-foreground">
-      {a.kind === "image" ? (
-        <img src={`/api/attachments/${attachmentBasename(a.path)}`} alt={a.name} className="size-7 shrink-0 rounded-lg object-cover" />
-      ) : (
-        <FileIcon size={14} className="shrink-0 text-muted-foreground" />
-      )}
-      <span className="min-w-0 flex-1 truncate">{a.kind === "paste" ? `Pasted text, ${a.lines} lines` : a.name}</span>
-      <span className="shrink-0 text-muted-foreground">{formatBytes(a.bytes)}</span>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          aria-label={`Remove ${a.kind === "paste" ? "pasted text" : a.name}`}
-        >
-          <X size={12} />
-        </button>
-      )}
-    </span>
-  );
-}
-
 /** What the next message answers, inside the box with the files. */
 function ReplyTag({ draft, onClear }: { draft: ReplyDraft; onClear: () => void }) {
   return (
@@ -179,7 +158,7 @@ function ReplyTag({ draft, onClear }: { draft: ReplyDraft; onClear: () => void }
         type="button"
         onClick={onClear}
         className="shrink-0 rounded-full p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-background/60 hover:text-foreground"
-        aria-label="Cancel reply"
+        aria-label={t("roomComposer.cancelReply")}
       >
         <X size={12} />
       </button>
@@ -255,6 +234,16 @@ export function RoomComposer({
   const [recoveries, setRecoveries] = useState(() => readRecoveries(draftKey));
   const [blockedRecovery, setBlockedRecovery] = useState<string | null>(null);
   const [attachNotice, setAttachNotice] = useState<string | null>(null);
+  // a picture is a chip from the moment it lands, as in a chat
+  const images = usePendingImages({
+    onReady: (ready) => setAttachments((current) => [...current, ...ready]),
+    onFailed: (name, error) => setAttachNotice(t("roomComposer.imageFailed", { name, error })),
+  });
+  const [sendHeld, setSendHeld] = useState(false);
+  const heldBy = heldLine(images.items);
+  useEffect(() => {
+    if (!heldBy) setSendHeld(false);
+  }, [heldBy]);
   const inputRef = useAutoSize(text);
   const pickerRef = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
@@ -273,7 +262,8 @@ export function RoomComposer({
     return () => {
       mounted.current = false;
       hide();
-      keepDraft(draftKey, latest.current);
+      const held = images.held();
+      keepDraft(draftKey, held.length ? { ...latest.current, attachments: [...latest.current.attachments, ...held] } : latest.current);
     };
   }, [draftKey]);
   // the keyboard follows from the box this one replaced (lib/drafts)
@@ -311,7 +301,7 @@ export function RoomComposer({
   // to the name they gave, which is what the server reads a mention by.
   const mentionable: Array<{ id: string; name: string; label?: string; title?: string; bot?: Bot }> = [
     ...answering.map((b) => ({ id: b.id, name: b.name, title: b.title, bot: b })),
-    ...people.map((p) => ({ id: p.id, name: p.name, label: nameOf?.(p.id), title: p.role === "viewer" ? "Viewer" : "Collaborator" })),
+    ...people.map((p) => ({ id: p.id, name: p.name, label: nameOf?.(p.id), title: p.role === "viewer" ? t("roomComposer.viewer") : t("roomComposer.collaborator") })),
   ];
   const query = mentionAt === null ? null : text.slice(mentionAt + 1, inputRef.current?.selectionStart ?? text.length);
   const matches =
@@ -368,10 +358,11 @@ export function RoomComposer({
       // a path from here is no use to a server elsewhere: the file goes
       uploadFile: (file) => uploadFileAttachment(file),
       sameComputer: async () => (await destination()).sameComputer,
-      onSending: (file) => setAttachNotice(`Sending ${file.name || "the file"}…`),
+      onSending: (file) => setAttachNotice(file.name ? t("roomComposer.sendingFile", { name: file.name }) : t("roomComposer.sendingTheFile")),
+      onImage: (file) => images.add([file]),
     }).then(({ attachments: added, refused }) => {
       if (added.length) setAttachments((current) => [...current, ...added]);
-      setAttachNotice(refused);
+      if (added.length || refused) setAttachNotice(refused);
     });
   };
   // A file dropped anywhere in the window attaches here, as in a chat:
@@ -435,6 +426,9 @@ export function RoomComposer({
 
   const send = (stopFirst = false) => {
     const { text, attachments } = latest.current;
+    // the message waits for a picture still on its way, as in a chat,
+    // rather than going without it
+    if (heldLine(images.now())) return setSendHeld(true);
     if (!text.trim() && !attachments.length) {
       if (stopFirst) stopAll();
       return;
@@ -496,14 +490,24 @@ export function RoomComposer({
           onDismiss: () => setAttachNotice(null),
         }
       : null,
+    sendHeld && heldBy
+      ? {
+          id: "images-held",
+          tone: "info",
+          rank: RANK.feedback,
+          icon: <FileImage size={14} />,
+          title: heldBy,
+          onDismiss: () => setSendHeld(false),
+        }
+      : null,
     ...recoveries.map(
       (item): Notice => ({
         id: `unsent:${item.id}`,
         tone: "warn",
         rank: RANK.unsent,
         icon: <Undo2 size={14} />,
-        title: "A message didn't send.",
-        detail: blockedRecovery === item.id ? "Finish or clear the current draft first." : "Check the room before sending again.",
+        title: t("roomComposer.unsent.title"),
+        detail: blockedRecovery === item.id ? t("roomComposer.unsent.finishDraftFirst") : t("roomComposer.unsent.checkRoom"),
         actions: (
           <>
             <TrayButton
@@ -513,10 +517,10 @@ export function RoomComposer({
                 setBlockedRecovery(null);
               }}
             >
-              Discard
+              {t("common.discard")}
             </TrayButton>
             <TrayButton strong onClick={() => restore(item.id)}>
-              Restore
+              {t("roomComposer.restore")}
             </TrayButton>
           </>
         ),
@@ -529,23 +533,27 @@ export function RoomComposer({
     ),
   ].filter((n): n is Notice => n !== null);
 
-  const canSend = Boolean(text.trim()) || attachments.length > 0;
+  const canSend = Boolean(text.trim()) || attachments.length > 0 || images.items.length > 0;
   const named = [...members.map((m) => m.name), ...people.map((p) => p.name), ...(ownerName ? [ownerName] : [])];
   const reach = reachOf(text, {
     members,
     lead: lead?.id ?? null,
     leadOnly: Boolean(blok.leadOnly),
+    // with only one who can answer there is nobody to choose between
+    auto: answersOf(blok) === "auto" && members.filter((m) => !m.archivedAt).length > 1,
     // only a shared room has people to name, and only there does naming
     // one and no agent keep the agents quiet
     people: blok.sharing ? [...people.map((p) => p.name), ...(ownerName ? [ownerName] : [])] : [],
   });
 
-  const chips = (replyTo || attachments.length > 0) && (
+  const chips = (replyTo || attachments.length > 0 || images.items.length > 0) && (
     <>
       {replyTo && <ReplyTag draft={replyTo} onClear={onClearReply} />}
-      {attachments.map((a) => (
-        <AttachmentChip key={a.id} attachment={a} onRemove={() => setAttachments((cur) => cur.filter((x) => x.id !== a.id))} />
-      ))}
+      <AttachmentChips
+        attachments={attachments}
+        images={images}
+        onRemove={(id) => setAttachments((cur) => cur.filter((x) => x.id !== id))}
+      />
     </>
   );
 
@@ -564,7 +572,7 @@ export function RoomComposer({
         dropping && (
           <div className="pointer-events-none fixed inset-2 z-50 flex animate-pop-in items-center justify-center rounded-2xl border-2 border-dashed border-brand/50 bg-background/70">
             <span className="rounded-xl bg-popover px-3.5 py-2 text-body text-foreground shadow-lg shadow-(color:--shadow-color)">
-              Drop to share with {blok.name}
+              {t("roomComposer.dropToShare", { name: blok.name })}
             </span>
           </div>
         )
@@ -572,7 +580,7 @@ export function RoomComposer({
       popover={
         matches.length > 0 && (
           <div className="animate-pop-in origin-bottom overflow-hidden rounded-xl border bg-popover shadow-lg shadow-(color:--shadow-color)">
-            <div role="listbox" aria-label="People in this room" className="p-1">
+            <div role="listbox" aria-label={t("roomComposer.peopleInThisRoom")} className="p-1">
               {matches.map((m, i) => (
                 <button
                   key={m.id}
@@ -594,13 +602,13 @@ export function RoomComposer({
                   <span className="text-body font-medium text-foreground">{m.label ?? m.name}</span>
                   {m.title && <span className="min-w-0 truncate text-small text-muted-foreground">{m.title}</span>}
                   {m.bot && m.id === lead?.id && answering.length > 1 && (
-                    <span className="ml-auto shrink-0 text-caption text-muted-foreground">Lead</span>
+                    <span className="ml-auto shrink-0 text-caption text-muted-foreground">{t("roomComposer.lead")}</span>
                   )}
                 </button>
               ))}
             </div>
             <div className="border-t px-3 py-1.5 text-caption text-muted-foreground max-sm:hidden" aria-hidden>
-              ↑↓ pick · Tab insert · Esc close
+              {t("roomComposer.pickTabInsertEscClose")}
             </div>
           </div>
         )
@@ -618,7 +626,7 @@ export function RoomComposer({
               e.target.value = "";
             }}
           />
-          <BoxButton title="Attach a file or image" onClick={() => pickerRef.current?.click()}>
+          <BoxButton title={t("roomComposer.attachAFileOrImage")} onClick={() => pickerRef.current?.click()}>
             <Plus size={18} />
           </BoxButton>
         </>
@@ -626,7 +634,7 @@ export function RoomComposer({
       trail={
         <>
           <BoxButton
-            title={dictation.recording ? "Stop dictation (Esc)" : "Dictate"}
+            title={dictation.recording ? t("roomComposer.stopDictationEsc") : t("roomComposer.dictate")}
             onClick={() => void dictation.toggle()}
             className={cn(
               dictation.recording &&
@@ -637,8 +645,8 @@ export function RoomComposer({
           </BoxButton>
           <SendStop
             mode={canSend ? "send" : busy ? "stop" : "idle"}
-            sendLabel={busy ? `Send, ${modKey()}Enter stops the room first` : "Send"}
-            stopLabel="Stop the room (Esc)"
+            sendLabel={busy ? t("roomComposer.sendStopsRoomFirst", { key: modKey() }) : t("roomComposer.send")}
+            stopLabel={t("roomComposer.stopTheRoomEsc")}
             onSend={() => send()}
             onStop={stopAll}
           />
@@ -684,7 +692,7 @@ export function RoomComposer({
           ref={inputRef}
           rows={1}
           value={text}
-          aria-label={`Message ${blok.name}`}
+          aria-label={t("roomComposer.messageTo", { name: blok.name })}
           onChange={(e) => {
             setText(e.target.value);
             readMention(e.target);
@@ -727,6 +735,7 @@ export function RoomComposer({
               !e.shiftKey &&
               !text &&
               !attachments.length &&
+              !images.items.length &&
               e.currentTarget.selectionStart === 0 &&
               editLast()
             ) {
@@ -749,10 +758,10 @@ export function RoomComposer({
           }}
           placeholder={
             dictation.recording
-              ? "Listening…"
+              ? t("roomComposer.listening")
               : replyTo
-                ? `Reply to ${replyTo.author}`
-                : `Message ${blok.name}, or @name someone`
+                ? t("roomComposer.replyTo", { name: replyTo.author })
+                : t("roomComposer.placeholder", { name: blok.name })
           }
           className="relative block w-full min-w-0 resize-none bg-transparent px-1 py-1 text-lead text-foreground outline-none placeholder:truncate placeholder:text-muted-foreground placeholder-shown:[mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
         />

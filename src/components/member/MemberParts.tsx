@@ -17,8 +17,11 @@ import { cardState, speaker, type MemberCard, type MemberMessage } from "@/lib/m
 import { receiptsAt, runs, senderOf, type Said } from "@/lib/participants";
 import { useReadPosition, useReads } from "@/lib/readReceipts";
 import { GroupMessage, PersonAvatar, SeenBy } from "@/components/chat/Group";
-import { richText } from "@/components/chat/Bubble";
+import { QuietCheckIns, richText } from "@/components/chat/Bubble";
+import { MessageGuard } from "@/components/chat/MessageGuard";
 import { formatTime } from "@/state/store";
+import { quietRunAt } from "@/lib/transcript";
+import { t } from "@/lib/i18n";
 
 export function AgentFace({ agent, size }: { agent: { id: string; name: string; color: string; shape: string | null }; size: number }) {
   return (
@@ -40,7 +43,7 @@ export function OnlyYou({ className }: { className?: string }) {
   return (
     <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-px text-caption font-medium text-muted-foreground", className)}>
       <Lock size={10} strokeWidth={2.2} aria-hidden />
-      Only you
+      {t("memberParts.onlyYou")}
     </span>
   );
 }
@@ -95,7 +98,7 @@ export function Transcript({ messages, me, people, owner, shared, agentName, str
   // Shared with other people (a room, a team conversation): every
   // message a bubble, a run as one, and "Seen by" under where each other
   // person has read to (src/lib/participants.ts).
-  const isBubble = (m: MemberMessage) => m.kind === "text" && !m.deleted;
+  const isBubble = (m: MemberMessage) => m.kind === "text" && !m.deleted && !m.quiet;
   const said = shown as unknown as Array<MemberMessage & Said>;
   const place = shared ? runs(said, isBubble) : null;
   const reads = useReads(shared ? threadId : null);
@@ -107,7 +110,7 @@ export function Transcript({ messages, me, people, owner, shared, agentName, str
     tick: messages.length,
   });
   const seenRows = place ? receiptsAt(said.map((m) => m.id), new Set(place.keys()), reads, me, new Map(said.map((m) => [m.id, senderOf(m)]))) : null;
-  const nameFor = (id: string) => (id === "owner" ? owner : (nameOf?.(id) ?? people[id] ?? "Someone"));
+  const nameFor = (id: string) => (id === "owner" ? owner : (nameOf?.(id) ?? people[id] ?? t("memberParts.someone")));
   const receiptsFor = (id: string) => {
     const who = seenRows?.get(id);
     return who?.length ? <SeenBy people={who.map((p) => ({ id: p, name: nameFor(p) }))} /> : undefined;
@@ -124,28 +127,35 @@ export function Transcript({ messages, me, people, owner, shared, agentName, str
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-5 px-6 pb-6 pt-6">
         {header}
         {!shown.length && !streaming && empty}
-        {shown.map((m, i) => {
-          const fresh = !first.current && !seen.current.has(m.id);
-          const prev = shown[i - 1];
-          const sameSpeaker = prev && prev.role === "user" && m.role === "user" && prev.author === m.author && m.at - prev.at < 5 * 60_000;
-          return (
-            <Line
-              key={m.id}
-              message={m}
-              fresh={fresh}
-              me={me}
-              people={people}
-              owner={owner}
-              shared={shared}
-              agentName={agentName}
-              compact={Boolean(sameSpeaker)}
-              onAnswer={onAnswer}
-              place={place?.get(m.id)}
-              receipts={receiptsFor(m.id)}
-              agentFace={agentFace}
-            />
-          );
-        })}
+        {/* each message inside its own guard: one that cannot be drawn
+            costs that message, not the conversation (src/lib/rowGuard.ts) */}
+        {shown.map((m, i) => (
+          <MessageGuard key={m.id} id={m.id} resetKey={m} render={() => {
+            if (m.quiet) {
+              const run = quietRunAt(shown, i);
+              return run ? <QuietCheckIns messages={run} /> : null;
+            }
+            const fresh = !first.current && !seen.current.has(m.id);
+            const prev = shown[i - 1];
+            const sameSpeaker = prev && !prev.quiet && prev.role === "user" && m.role === "user" && prev.author === m.author && m.at - prev.at < 5 * 60_000;
+            return (
+              <Line
+                message={m}
+                fresh={fresh}
+                me={me}
+                people={people}
+                owner={owner}
+                shared={shared}
+                agentName={agentName}
+                compact={Boolean(sameSpeaker)}
+                onAnswer={onAnswer}
+                place={place?.get(m.id)}
+                receipts={receiptsFor(m.id)}
+                agentFace={agentFace}
+              />
+            );
+          }} />
+        ))}
         {streaming && shared ? (
           <div aria-live="polite">
             <GroupMessage
@@ -166,7 +176,7 @@ export function Transcript({ messages, me, people, owner, shared, agentName, str
         ) : busy ? (
           <div className="flex items-center gap-2 text-body text-muted-foreground" role="status">
             <Loader2 size={14} className="animate-spin" />
-            Working on it
+            {t("memberParts.workingOnIt")}
           </div>
         ) : null}
       </div>
@@ -222,11 +232,11 @@ function Line({
         bubbleClassName={human ? "whitespace-pre-wrap" : undefined}
         bubble={
           <>
-            {m.onBehalf && <div className="mb-1 text-caption text-muted-foreground">Sent on {m.onBehalf.name}'s behalf</div>}
+            {m.onBehalf && <div className="mb-1 text-caption text-muted-foreground">{t("memberParts.onBehalf", { name: m.onBehalf.name })}</div>}
             {human ? m.text : <Markdownish text={m.text ?? ""} />}
           </>
         }
-        under={mine && m.queued ? <span className="mt-1 px-1 text-caption text-muted-foreground">Waiting for the reply before it</span> : undefined}
+        under={mine && m.queued ? <span className="mt-1 px-1 text-caption text-muted-foreground">{t("memberParts.waitingForTheReplyBefore")}</span> : undefined}
         receipts={receipts}
       />
     );
@@ -240,7 +250,7 @@ function Line({
           <div className="max-w-[82%] whitespace-pre-wrap rounded-2xl bg-secondary px-4 py-2.5 text-lead text-foreground [overflow-wrap:anywhere] sm:max-w-[68%]">
             {m.text}
           </div>
-          {m.queued && <span className="mt-1 px-1 text-caption text-muted-foreground">Waiting for the reply before it</span>}
+          {m.queued && <span className="mt-1 px-1 text-caption text-muted-foreground">{t("memberParts.waitingForTheReplyBefore")}</span>}
         </div>
       );
     }
@@ -266,7 +276,7 @@ function Line({
       <div className={cn("flex flex-col items-start", fresh && "animate-fade-in")}>
         {m.onBehalf && (
           <span className="mb-1.5 rounded-full bg-muted px-2 py-0.5 text-caption text-muted-foreground">
-            Sent on {m.onBehalf.name}'s behalf
+            {t("memberParts.onBehalf", { name: m.onBehalf.name })}
           </span>
         )}
         <div className="w-full min-w-0 text-lead text-foreground">
@@ -287,10 +297,10 @@ function Line({
     return <CardLine messageId={m.id} card={m.card} from={agentName(m.from)} people={people} me={me} owner={owner} onAnswer={onAnswer} fresh={fresh} />;
   }
   if (m.kind === "secret" && m.secret) {
-    return <Quiet>{agentName(m.from)} asked {owner} for {m.secret.label}. Keys are saved on {owner}'s computer, by {owner}.</Quiet>;
+    return <Quiet>{t("memberParts.secretAsked", { agent: agentName(m.from), owner, label: m.secret.label })}</Quiet>;
   }
   if (m.kind === "artifact" && m.artifact) {
-    return <Quiet>{agentName(m.from)} made {m.artifact.name}. It is kept on {owner}'s computer.</Quiet>;
+    return <Quiet>{t("memberParts.artifactMade", { agent: agentName(m.from), owner, name: m.artifact.name })}</Quiet>;
   }
   if (m.kind === "notice" && m.text) {
     if (m.event) return <div className="py-1 text-center text-small text-muted-foreground">{m.text}</div>;
@@ -332,7 +342,9 @@ function CardLine({
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const state = cardState(card);
-  const asker = card.askedFor ? (card.askedFor === me ? "you" : (people[card.askedFor] ?? "a member")) : null;
+  // who it was asked for: you, somebody by name, or nobody in particular
+  const forYou = card.askedFor === me;
+  const asker = card.askedFor && !forYou ? (people[card.askedFor] ?? t("memberParts.aMember")) : null;
   const answer = async (option: string) => {
     if (!onAnswer || sending) return;
     setSending(option);
@@ -348,7 +360,9 @@ function CardLine({
   return (
     <div className={cn("flex flex-col gap-3 rounded-2xl border bg-card px-4 py-3.5", fresh && "animate-receive-in")}>
       <div className="flex flex-col gap-0.5">
-        <span className="text-caption text-muted-foreground">{from}{asker ? `, for ${asker}` : ""}</span>
+        <span className="text-caption text-muted-foreground">
+          {card.askedFor ? (forYou ? t("memberParts.card.forYou", { from }) : t("memberParts.card.forName", { from, name: asker ?? "" })) : from}
+        </span>
         <span className="text-pretty text-ui font-medium text-foreground">{card.title}</span>
         {card.subtitle && <span className="text-pretty text-body text-muted-foreground">{card.subtitle}</span>}
       </div>
@@ -363,11 +377,11 @@ function CardLine({
         </div>
       )}
       {state === "waiting-on-others" && (
-        <span className="text-body text-muted-foreground">Waiting on {asker && asker !== "you" ? `${asker}, ` : ""}{owner} or an admin.</span>
+        <span className="text-body text-muted-foreground">{asker ? t("memberParts.card.waitingOnBoth", { name: asker, owner }) : t("memberParts.card.waitingOn", { owner })}</span>
       )}
       {state === "done" && (
         <span className="text-body text-muted-foreground">
-          {card.answered ? `${card.answeredBy ? `${card.answeredBy}: ` : ""}${card.answered}` : card.closed ?? "Closed"}
+          {card.answered ? (card.answeredBy ? t("memberParts.card.answeredBy", { name: card.answeredBy, answer: card.answered }) : card.answered) : card.closed ?? t("memberParts.closed")}
         </span>
       )}
       {error && <span role="alert" className="text-small text-destructive">{error}</span>}
@@ -450,7 +464,7 @@ export function MemberComposer({
               <AlertTriangle size={14} className={cn("mt-0.5 shrink-0", stopped ? "text-destructive" : "text-warning")} />
               <span className="flex-1 text-pretty">{notice.text}</span>
               {!stopped && (
-                <button type="button" aria-label="Put this away" onClick={() => setHidden(notice.text)} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                <button type="button" aria-label={t("memberParts.putThisAway")} onClick={() => setHidden(notice.text)} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
                   <X size={13} />
                 </button>
               )}
@@ -470,13 +484,13 @@ export function MemberComposer({
                 void send();
               }
             }}
-            placeholder={stopped ? "Your requests here are stopped for now" : placeholder}
+            placeholder={stopped ? t("memberParts.yourRequestsHereAreStopped") : placeholder}
             aria-label={placeholder}
             className="max-h-[220px] min-h-6 flex-1 resize-none bg-transparent py-1.5 text-lead text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <Button
             size="icon"
-            aria-label="Send"
+            aria-label={t("memberParts.send")}
             disabled={!text.trim() || sending || stopped}
             onClick={() => void send()}
             className="size-8 shrink-0 rounded-full"

@@ -22,6 +22,7 @@ import { goalNoteForPerson } from "@/lib/goalNote";
 import { redoLine, type RedoPreview } from "@/lib/redo";
 import { FailingNotice, IncidentNotice } from "./IncidentCard";
 import { GroupMessage } from "./Group";
+import { t } from "@/lib/i18n";
 
 /** How a message sits in a conversation of more than two
  * (src/lib/participants.ts): whose side, where in its sender's run, the
@@ -47,7 +48,29 @@ export function richText(text: string): boolean {
 /** The line over a goal turn: from Bloks, and which turn of how many. */
 export function goalLabel(text: string): string {
   const { turn } = goalNoteForPerson(text);
-  return turn ? `From Bloks, toward your goal · step ${turn.of} of ${turn.budget}` : "From Bloks, toward your goal";
+  return turn ? t("bubble.goalStep", { step: turn.of, budget: turn.budget }) : t("bubble.goal");
+}
+
+/** The line over a message that came from somewhere other than the
+ * person typing it: a routine, a watcher, an intent, a webhook, a goal,
+ * a failure, or email. */
+function viaLabel(message: Message): string {
+  switch (message.via) {
+    case "routine":
+      return message.routine?.name ? t("bubble.fromRoutineNamed", { name: message.routine.name }) : t("bubble.fromRoutine");
+    case "watcher":
+      return t("bubble.fromYourWatcher");
+    case "intent":
+      return message.intent?.name ? t("bubble.fromIntentNamed", { name: message.intent.name }) : t("bubble.fromIntent");
+    case "webhook":
+      return t("bubble.fromAWebhook");
+    case "goal":
+      return goalLabel(message.text ?? "");
+    case "incident":
+      return t("bubble.fromBloksAboutSomethingThat");
+    default:
+      return t("bubble.byEmail");
+  }
 }
 
 /**
@@ -65,7 +88,7 @@ export function UserText({ text, highlight }: { text: string; highlight?: string
         <div key={i} className="mb-1 flex flex-col gap-1">
           <span className="flex items-center gap-1 text-small opacity-80">
             <Mic size={12} />
-            Voice message, transcribed
+            {t("bubble.voiceMessageTranscribed")}
           </span>
           <audio controls preload="none" src={`/api/attachments/${attachmentBasename(path)}`} className="h-8 max-w-full" />
         </div>
@@ -76,7 +99,7 @@ export function UserText({ text, highlight }: { text: string; highlight?: string
             <img
               key={i}
               src={`/api/attachments/${attachmentBasename(path)}`}
-              alt="attached image"
+              alt={t("bubble.attachedImage")}
               className="max-h-[220px] max-w-full rounded-xl object-contain"
             />
           ))}
@@ -125,7 +148,7 @@ export function Rewound({ messages }: { messages: Message[] }) {
         {/* what was said, not the cards and notes around it */}
         {(() => {
           const n = words.length || messages.length;
-          return n === 1 ? "1 message rewound" : `${n} messages rewound`;
+          return t("bubble.rewound", { count: n });
         })()}
         {words.length > 0 && <ChevronDown size={12} className={cn("transition-transform duration-200", open && "rotate-180")} />}
       </button>
@@ -147,7 +170,7 @@ export function Rewound({ messages }: { messages: Message[] }) {
 /** A run of quiet check-ins as one muted line. It opens to show what was
  * asked and answered, for whoever wants to see that the routine really is
  * running, and stays out of the way otherwise. */
-export function QuietCheckIns({ messages }: { messages: Message[] }) {
+export function QuietCheckIns({ messages }: { messages: Array<Pick<Message, "id" | "at" | "role" | "text"> & { kind: string }> }) {
   const [open, setOpen] = useState(false);
   const words = messages.filter((m) => m.kind === "text" && m.text);
   return (
@@ -181,7 +204,7 @@ export function TakenBack({ user }: { user: boolean }) {
   return (
     <div className={cn("flex w-full", user ? "justify-end" : "justify-start")}>
       <div className="rounded-2xl border border-dashed px-3 py-1.5 text-body italic text-muted-foreground">
-        Message taken back
+        {t("bubble.messageTakenBack")}
       </div>
     </div>
   );
@@ -342,7 +365,7 @@ export function Bubble({
           <>
             {message.replyTo && <ReplyContext replyTo={message.replyTo} />}
             <Markdownish text={message.text ?? ""} highlight={highlight} />
-            {message.editedAt && <span className="ml-1.5 align-baseline text-caption text-muted-foreground">edited</span>}
+            {message.editedAt && <span className="ml-1.5 align-baseline text-caption text-muted-foreground">{t("bubble.edited")}</span>}
           </>
         }
         under={
@@ -390,7 +413,7 @@ export function Bubble({
         >
           {message.replyTo && <ReplyContext replyTo={message.replyTo} />}
           <Markdownish text={message.text ?? ""} highlight={highlight} />
-          {message.editedAt && <span className="ml-1.5 align-baseline text-caption text-muted-foreground">edited</span>}
+          {message.editedAt && <span className="ml-1.5 align-baseline text-caption text-muted-foreground">{t("bubble.edited")}</span>}
         </div>
         <Reactions
           reactions={message.reactions}
@@ -447,20 +470,20 @@ export function Bubble({
                       disabled={redoing}
                       className="font-medium text-foreground underline underline-offset-2 disabled:opacity-60"
                     >
-                      Redo
+                      {t("bubble.redo")}
                     </button>
                     {/* the smaller way out: the words change, and the
                         agent goes on with the ones it read */}
                     <button onClick={() => stopEditing(draft.trim() || undefined)} disabled={redoing} className="text-caption hover:text-foreground">
-                      Save only
+                      {t("bubble.saveOnly")}
                     </button>
                     <button onClick={() => stopEditing()} className="text-caption hover:text-foreground">
-                      Cancel
+                      {t("common.cancel")}
                     </button>
-                    <span>{redoing ? "Redoing…" : "Enter redoes, Escape cancels"}</span>
+                    <span>{redoing ? t("bubble.redoing") : t("bubble.enterRedoesEscapeCancels")}</span>
                   </div>
                   <div className="text-small leading-snug text-muted-foreground" role="status">
-                    {redoError ?? redoLine(offer, agentName ?? "the agent")}
+                    {redoError ?? redoLine(offer, agentName ?? t("bubble.theAgent"))}
                   </div>
                 </>
               ) : (
@@ -469,12 +492,12 @@ export function Bubble({
                     onClick={() => stopEditing(draft.trim() || undefined)}
                     className="font-medium text-foreground underline underline-offset-2"
                   >
-                    Save
+                    {t("common.save")}
                   </button>
                   <button onClick={() => stopEditing()} className="hover:text-foreground">
-                    Cancel
+                    {t("common.cancel")}
                   </button>
-                  <span>Enter saves, Escape cancels</span>
+                  <span>{t("bubble.enterSavesEscapeCancels")}</span>
                 </div>
               )}
             </div>
@@ -509,12 +532,12 @@ export function Bubble({
           <>
             {fromSomewhere && (
               <div className="mb-0.5 text-caption opacity-80">
-                {message.via === "routine" ? `From your routine${message.routine?.name ? ` ${message.routine.name}` : ""}` : message.via === "watcher" ? "From your watcher" : message.via === "intent" ? `From your standing intent${message.intent?.name ? ` ${message.intent.name}` : ""}` : message.via === "webhook" ? "From a webhook" : message.via === "goal" ? goalLabel(message.text ?? "") : message.via === "incident" ? "From Bloks, about something that failed" : "By email"}
+                {viaLabel(message)}
               </div>
             )}
             {message.replyTo && <ReplyContext replyTo={message.replyTo} onAccent={group.mine && editing === null && message.via !== "goal" && message.via !== "incident"} />}
             {editing !== null ? editor : words}
-            {message.editedAt && editing === null && <span className="ml-1.5 align-baseline text-caption opacity-75">edited</span>}
+            {message.editedAt && editing === null && <span className="ml-1.5 align-baseline text-caption opacity-75">{t("bubble.edited")}</span>}
           </>
         }
         under={
@@ -570,7 +593,7 @@ export function Bubble({
       <div className={cn("flex max-w-[82%] flex-col items-end sm:max-w-[68%]", editing !== null && "w-full")}>
         {(message.via === "watcher" || message.via === "email" || message.via === "webhook" || message.via === "routine" || message.via === "goal" || message.via === "intent" || message.via === "incident") && (
           <div className="mb-1 px-1 text-caption text-muted-foreground">
-            {message.via === "routine" ? `From your routine${message.routine?.name ? ` ${message.routine.name}` : ""}` : message.via === "watcher" ? "From your watcher" : message.via === "intent" ? `From your standing intent${message.intent?.name ? ` ${message.intent.name}` : ""}` : message.via === "webhook" ? "From a webhook" : message.via === "goal" ? goalLabel(message.text ?? "") : message.via === "incident" ? "From Bloks, about something that failed" : "By email"}
+            {viaLabel(message)}
           </div>
         )}
         <div
@@ -594,7 +617,7 @@ export function Bubble({
           {message.replyTo && <ReplyContext replyTo={message.replyTo} />}
           {editing !== null ? editor : words}
           {message.editedAt && editing === null && (
-            <span className="ml-1.5 align-baseline text-caption text-muted-foreground">edited</span>
+            <span className="ml-1.5 align-baseline text-caption text-muted-foreground">{t("bubble.edited")}</span>
           )}
         </div>
         <Reactions
@@ -653,7 +676,9 @@ export function IntentNote({ message, fresh }: { message: Message; fresh?: boole
       <div className="flex max-w-[560px] gap-2.5 rounded-2xl border bg-card px-3.5 py-2.5">
         <Zap size={15} className="mt-0.5 shrink-0 text-brand-ink" aria-hidden />
         <div className="min-w-0">
-          <div className="text-caption text-muted-foreground">Standing intent{message.intent?.name ? ` · ${message.intent.name}` : ""}</div>
+          <div className="text-caption text-muted-foreground">
+            {message.intent?.name ? t("bubble.intentNamed", { name: message.intent.name }) : t("bubble.intent")}
+          </div>
           <div className="whitespace-pre-wrap text-ui leading-relaxed text-foreground">{message.text}</div>
         </div>
       </div>

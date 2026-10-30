@@ -244,8 +244,10 @@ describe("the engine catalog", () => {
     assert.equal(byKind.opencode.auth, "cli");
     assert.equal(byKind.pi.auth, "cli");
     assert.equal(byKind.pi.agentic, true, "Pi runs tools through pi-acp");
-    assert.equal(byKind.cursorCli.auth, "cli");
-    assert.equal(byKind.cursorCli.agentic, true);
+    assert.equal(byKind.cursor.auth, "cli");
+    assert.equal(byKind.cursor.agentic, true);
+    assert.equal(byKind.cline.auth, "cli");
+    assert.equal(byKind.cline.agentic, true);
   });
 
   test("nothing is connected in a fresh install", async () => {
@@ -2318,9 +2320,19 @@ describe("agent voices", () => {
   test("without keys the catalog is honest about it: only the Mac's own voices", async () => {
     const r = await h.json("/api/speech/voices");
     const mac = process.platform === "darwin";
-    assert.deepEqual(r.configured, { elevenlabs: false, openai: false, system: mac });
-    assert.ok(r.voices.every((v: any) => v.provider === "system"), "no paid voice without its key");
-    if (!mac) assert.deepEqual(r.voices, []);
+    // Grok was connected by a test above, and xAI speaks with that key
+    // when none is saved for speech, so its voices are the one paid set here
+    assert.deepEqual(r.configured, {
+      elevenlabs: false,
+      openai: false,
+      fish: false,
+      xai: true,
+      xaiSource: "grok",
+      chatterbox: false,
+      system: mac,
+    });
+    assert.ok(r.voices.every((v: any) => v.provider === "system" || v.provider === "xai"), "no paid voice without its key");
+    if (!mac) assert.ok(r.voices.every((v: any) => v.provider === "xai"));
   });
 
   test("discovered-key consent persists as a boolean and never invents a key", async () => {
@@ -2462,6 +2474,21 @@ describe("the resumable event stream", () => {
     const replay = await sip(second);
     assert.match(replay, /"resumed":true/);
     assert.match(replay, /Retitled while offline/);
+  });
+
+  test("the agent list says where on the stream it was made, so a slow one cannot undo newer frames", async () => {
+    // GitHub 398: a client applies every frame past this over the list
+    const { bots } = await h.json("/api/bots");
+    const id = bots[0].id;
+    await h.fetch(`/api/bots/${id}`, { method: "PATCH", body: JSON.stringify({ title: "Before the list" }) });
+    const listed = await h.json("/api/bots");
+    assert.equal(typeof listed.seq, "number");
+    assert.equal(listed.bots.find((b: any) => b.id === id).title, "Before the list");
+    await h.fetch(`/api/bots/${id}`, { method: "PATCH", body: JSON.stringify({ title: "After the list" }) });
+    const past = await sip(await h.fetch(`/api/events?since=${listed.seq}`));
+    assert.match(past, /"resumed":true/);
+    assert.match(past, /After the list/);
+    assert.doesNotMatch(past, /Before the list/, "a frame the list already holds was counted as newer");
   });
 });
 

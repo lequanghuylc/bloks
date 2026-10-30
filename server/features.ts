@@ -154,4 +154,21 @@ export const FEATURES: readonly string[] = [
   // (server/relay-link.ts, servePart); `openMaxBytes` on
   // GET /api/attachments/where for a caller through Bloks Cloud
   "raw-parts",
+  // POST /api/viewing { viewer, threadId, seq }: what a window or a paired
+  // phone has in front of the person, said again every thirty seconds
+  // while it does and null when it stops; an answer the person was
+  // waiting on wakes their phones (reason "reply", category "reply") only
+  // while no client shows its conversation (server/answer-ready.ts)
+  "viewing",
+  // GET and PUT /api/workspace/attention { mute, notify }: the workspace's
+  // mute (null, "forever" or when it ends) and notification level, which
+  // an answer's wake keeps to, set by the owner from any device of theirs
+  // and kept by this server across restarts (server/attention.ts)
+  "attention",
+  // watchers of kind "app": an event in a connected app starts a turn
+  // (server/app-watch.ts). GET /api/app-triggers/:toolkit and its
+  // /accounts, POST /api/watchers/:id/confirm and /decline for an agent's
+  // proposal, `app` on each such watcher with its run history, and `apps`
+  // on GET /api/watchers saying whether events can be heard
+  "app-watchers",
 ];

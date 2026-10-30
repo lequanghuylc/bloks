@@ -135,3 +135,51 @@ test("the npm packages the server imports ship beside it, in the app and in blok
     }
   }
 });
+
+test("the English words the server names places in ship beside it, in the app and in bloks-server", () => {
+  // server/where.ts reads the catalogue relative to its own module, and a
+  // package without it fails nothing anyone sees: `bloks where` and the
+  // card `bloks open` leaves call every Settings page "label", and a row
+  // asked for by its English name is refused.
+  const tried = [...read("server/where.ts").matchAll(/"(\.\.\/[^"]*en\.json)"/g)].map((m) => m[1]);
+  assert.ok(tried.length, "server/where.ts no longer reads its catalogue by a literal relative path; update this test");
+  const looksAt = (serverDir: string, file: string) => tried.some((at) => resolve(serverDir, at) === file);
+  assert.ok(existsSync(join(root, "src/locales/en.json")), "src/locales/en.json is missing from the repository");
+
+  // In the app the compiled server is Resources/server, and the
+  // catalogues are copied to Resources/locales.
+  assert.equal(shippedAs("dist-server"), "server");
+  assert.equal(shippedAs("src/locales"), "locales", "the packaged app leaves the catalogues behind");
+  assert.ok(looksAt("/Resources/server", "/Resources/locales/en.json"), "the app's server looks for its words where they are not");
+
+  // In bloks-server it stays dist-server, with the catalogue copied to
+  // locales/ beside it.
+  assert.match(
+    read("scripts/pack-server.mjs"),
+    /cpSync\(join\(root, "src", "locales", "en\.json"\), join\(stage, "locales", "en\.json"\)\)/,
+    "bloks-server is packed without the English catalogue",
+  );
+  assert.ok(looksAt("/bloks-server/dist-server", "/bloks-server/locales/en.json"), "bloks-server's server looks for its words where they are not");
+});
+
+test("the line a network-off container runs ships beside the server, in the app and in bloks-server", () => {
+  // server/index.ts sends it into the container from beside its own
+  // module. A package without it fails every turn in a Docker image place
+  // with the network off, and nothing else.
+  const at = read("server/index.ts").match(/LINE_SCRIPT\s*=\s*fileURLToPath\(new URL\("([^"]+)"/)?.[1];
+  assert.ok(at, "LINE_SCRIPT is no longer a literal relative URL; update this test");
+  assert.ok(existsSync(join(root, "bin/bloks-line.mjs")), "bin/bloks-line.mjs is missing from the repository");
+  // In the app the compiled server is Resources/server, and bin/ is
+  // copied to Resources/bin.
+  assert.equal(shippedAs("dist-server"), "server");
+  assert.equal(shippedAs("bin"), "bin", "the packaged app leaves bin/ behind");
+  assert.equal(resolve("/Resources/server", at), "/Resources/bin/bloks-line.mjs");
+  // In bloks-server it stays dist-server, with the line copied to bin/
+  // beside it.
+  assert.match(
+    read("scripts/pack-server.mjs"),
+    /cpSync\(join\(root, "bin", "bloks-line\.mjs"\), join\(stage, "bin", "bloks-line\.mjs"\)\)/,
+    "bloks-server is packed without the line",
+  );
+  assert.equal(resolve("/bloks-server/dist-server", at), "/bloks-server/bin/bloks-line.mjs");
+});

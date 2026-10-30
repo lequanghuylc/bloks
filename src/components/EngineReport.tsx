@@ -7,6 +7,7 @@ import { api, useStore, type Bot } from "@/state/store";
 import { AgentAvatar } from "./Avatar";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 interface EngineRow {
   key: string;
@@ -57,7 +58,7 @@ export function EngineSuggestionCard({ s, bot, compact }: { s: EngineSuggestion;
   const { dispatch } = useStore();
   const [done, setDone] = useState(false);
   if (done) {
-    return <div className="rounded-xl bg-muted px-3 py-2 text-body text-muted-foreground">Switched to {s.to.label}.</div>;
+    return <div className="rounded-xl bg-muted px-3 py-2 text-body text-muted-foreground">{t("engineReport.switchedTo", { engine: s.to.label })}</div>;
   }
   return (
     <div className={cn("flex items-start gap-3 rounded-xl border border-brand/30 bg-brand-soft/30 px-3 py-2.5", compact && "py-2")}>
@@ -65,7 +66,7 @@ export function EngineSuggestionCard({ s, bot, compact }: { s: EngineSuggestion;
       <div className="min-w-0 flex-1 text-body leading-relaxed text-foreground">
         {!compact && bot && <span className="font-medium">{bot.name}: </span>}
         {s.why}
-        {s.saves ? ` About $${s.saves.toFixed(3)} less per reply.` : ""}
+        {s.saves ? ` ${t("engineReport.saves", { amount: s.saves.toFixed(3) })}` : ""}
       </div>
       <Button
         variant="brand"
@@ -75,7 +76,7 @@ export function EngineSuggestionCard({ s, bot, compact }: { s: EngineSuggestion;
           setDone(true);
         }}
       >
-        Switch
+        {t("engineReport.switch")}
       </Button>
     </div>
   );
@@ -90,10 +91,10 @@ export function EngineReport() {
     <div className="mb-9 overflow-hidden rounded-2xl border bg-card last:mb-0">
       <div className="px-4 pb-3 pt-4">
         <div className="flex items-center gap-2 text-ui font-semibold text-foreground">
-          <Gauge size={14} className="text-muted-foreground" /> How your engines are doing
+          <Gauge size={14} className="text-muted-foreground" /> {t("engineReport.howYourEnginesAreDoing")}
         </div>
         <div className="mt-0.5 text-body leading-relaxed text-muted-foreground">
-          Based on what you keep. Undone, rewound or discarded work counts against an engine. Stays on this computer.
+          {t("engineReport.basedOnWhatYouKeep")}
         </div>
       </div>
       {report.suggestions.length > 0 && (
@@ -105,18 +106,18 @@ export function EngineReport() {
       )}
       {judged.length === 0 ? (
         <div className="border-t px-4 py-4 text-body text-muted-foreground">
-          Fills in as your agents work.
+          {t("engineReport.fillsInAsYourAgents")}
         </div>
       ) : (
         <div className="overflow-x-auto border-t">
           <table className="w-full text-left text-body">
             <thead className="text-caption uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="px-4 py-2 font-medium">Engine</th>
-                <th className="px-2 py-2 text-right font-medium">Replies</th>
-                <th className="px-2 py-2 text-right font-medium">Kept</th>
-                <th className="px-2 py-2 text-right font-medium">Tokens each</th>
-                <th className="px-4 py-2 text-right font-medium">Cost</th>
+                <th className="px-4 py-2 font-medium">{t("common.engine")}</th>
+                <th className="px-2 py-2 text-right font-medium">{t("engineReport.replies")}</th>
+                <th className="px-2 py-2 text-right font-medium">{t("engineReport.kept")}</th>
+                <th className="px-2 py-2 text-right font-medium">{t("engineReport.tokensEach")}</th>
+                <th className="px-4 py-2 text-right font-medium">{t("engineReport.cost")}</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -126,13 +127,13 @@ export function EngineReport() {
                   <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{e.turns}</td>
                   <td
                     className="px-2 py-2 text-right tabular-nums text-foreground"
-                    title={`Undone ${e.undone}, rewound ${e.rewound}, discarded ${e.discarded}, failed ${e.failed}, ran out ${e.out}`}
+                    title={t("engineReport.outcomes", { undone: String(e.undone), rewound: String(e.rewound), discarded: String(e.discarded), failed: String(e.failed), out: String(e.out) })}
                   >
                     {e.keptRate === null ? "-" : `${e.keptRate}%`}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">{tokens(e.tokensPerTurn)}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
-                    {e.costTurns ? `$${e.cost.toFixed(2)}` : "not reported"}
+                    {e.costTurns ? `$${e.cost.toFixed(2)}` : t("engineReport.notReported")}
                   </td>
                 </tr>
               ))}

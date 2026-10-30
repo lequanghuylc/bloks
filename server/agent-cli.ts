@@ -142,6 +142,21 @@ export const RULES: Rule[] = [
   // credentials as configured or not, and a device's settings as it last
   // said them (docs/ARCHITECTURE.md, Settings inspection).
   { method: "GET", path: "/api/agent/settings", why: "inspect safe settings observations and their owner controls without changing them" },
+  // Where something lives in the app, so an agent can tell the person the
+  // way rather than guess at it, and a button that takes them there. The
+  // answer is the app's own settings index (server/where.ts); the button
+  // only opens a page, and the person changes whatever is on it.
+  { method: "GET", path: "/api/agent/where", why: "find where something lives in the app: the Settings page or panel, the path in words and the rows that match" },
+  { method: "POST", path: "/api/agent/open", why: "put a card in the conversation with one button that opens a page of the app for the person; it changes nothing" },
+  // A change to one of a short list of everyday preferences, proposed on
+  // a card the person answers (server/settings-proposals.ts). Proposing
+  // is all it is: the change is made by the person's tap, through the
+  // request the Settings page sends, and the route that takes the tap
+  // (/api/settings-proposals) is on NEVER. Approvals, keys, people,
+  // devices, money and anything that could be lost are refused by name.
+  { method: "GET", path: "/api/agent/settings/proposals", why: "list the everyday settings it may propose changing, with their current values" },
+  { method: "POST", path: "/api/agent/settings/proposals", why: "propose changing one everyday setting, on a card the person answers with Change or Keep; nothing changes until they tap Change" },
+  { method: "GET", path: "/api/agent/settings/proposals/:id", why: "wait for the person's answer to a setting it proposed" },
   // The goal the person set for the conversation this turn runs in, if
   // any. Reading only: a goal starts turns unattended and can run a
   // command on the person's computer, so setting one is theirs alone,
@@ -152,6 +167,14 @@ export const RULES: Rule[] = [
   // owner's own conversations: the route refuses the rest. The report
   // itself, and forgetting it, are the person's (NEVER below).
   { method: "GET", path: "/api/agent/location", why: "read where the person's iPhone last placed them, how long ago and how exactly, or ask it for a fresh reading" },
+  // The browser inside the Bloks window, signed in as the owner, which
+  // the person watches and can take over (server/app-browser.ts). The
+  // route refuses any turn the owner did not start, a site the workspace
+  // denies, and a password, payment or upload field until the person
+  // says yes on a card. Not counted against the turn's changes: a page
+  // takes dozens of steps, and none of them changes the workspace.
+  { method: "GET", path: "/api/agent/browser", why: "see the Bloks browser's tabs, who has it, its site rules and its downloads" },
+  { method: "POST", path: "/api/agent/browser", why: "browse in the Bloks browser while the person watches: open, read, snapshot, click, type, select, scroll, wait, screenshot and switch tabs" },
 
   // Who is here, so an agent can address someone by name rather than
   // guessing. Names, roles and skills only: the roster route already
@@ -167,6 +190,11 @@ export const RULES: Rule[] = [
   // between one agent and one person into a workspace.
   { method: "POST", path: "/api/bots/:id/messages", why: "say something to another agent" },
   { method: "POST", path: "/api/bots/:id/take-back", why: "take back its own messages still waiting for another agent" },
+  // A new conversation is only ever opened by saying something in it, to
+  // itself or to an agent it may message, and the words go through every
+  // check `say`'s do (GitHub 408). The person's own route for an empty
+  // one, POST /api/bots/:id/tasks, stays off this list.
+  { method: "POST", path: "/api/agent/conversations", why: "open a new conversation, a tab of its own, for itself or another agent it may message, with the first message in it" },
   { method: "POST", path: "/api/bloks/:room/messages", why: "say something in a room it is in" },
   { method: "GET", path: "/api/bloks/:room/messages", why: "read what was said in a room it is in" },
 
@@ -181,9 +209,14 @@ export const RULES: Rule[] = [
   { method: "PATCH", path: "/api/routines/:id", why: "change a routine" },
   { method: "DELETE", path: "/api/routines/:id", why: "drop a routine" },
   { method: "GET", path: "/api/watchers", why: "see its own watchers" },
-  { method: "POST", path: "/api/watchers", why: "watch a folder, a web page or a feed, run a cheap check, or wait for the person to arrive at or leave a place, and act when it finds something" },
+  // An app watcher an agent files is only ever a proposal: the route puts
+  // a card in front of the person and nothing listens until they say yes
+  // (POST /api/watchers/:id/confirm is not on this list, and the route
+  // refuses an agent's PATCH of one).
+  { method: "POST", path: "/api/watchers", why: "watch a folder, a web page or a feed, run a cheap check, wait for the person to arrive at or leave a place, or propose acting on an event in a connected app, and act when it finds something" },
   { method: "PATCH", path: "/api/watchers/:id", why: "change one of its own watchers without replacing it" },
-  { method: "DELETE", path: "/api/watchers/:id", why: "stop one of its own watchers" },
+  { method: "DELETE", path: "/api/watchers/:id", why: "stop one of its own watchers, or withdraw an app watcher it proposed" },
+  { method: "GET", path: "/api/app-triggers/:id", why: "see the events a connected app can start work on, and the config each asks for" },
   // Standing intents (server/intents.ts): an agent proposes, the person
   // approves. Nothing on this list approves, pauses or changes one; the
   // route files an agent's as a proposal whatever the body says.
@@ -231,16 +264,36 @@ export const RULES: Rule[] = [
   // app on any device. The command reads the file, as the agent, and
   // sends its bytes; the route never reads a path it is given.
   { method: "POST", path: "/api/bots/:me/artifacts", why: "share one file into the conversation as a card the person can open, and get a link to it" },
-  // One file to the person's Telegram chat with this agent's own bot,
-  // whatever started the turn. Its own bot and its own paired chat only,
-  // and a file from its own folders only: the route judges the path it
-  // is given and the pairing as it stands. Its Telegram settings stay the
-  // person's (/api/bots/:id/telegram is not on this list).
-  { method: "POST", path: "/api/bots/:me/telegram/send", why: "send one file from its working folder or its own files to the person's Telegram chat with its own bot, while that bot is paired with them" },
+  // One file or one text to the person's Telegram chat with this agent's
+  // own bot, whatever started the turn. Its own bot and its own paired
+  // chat only, and a file from its own folders only: the route judges the
+  // path it is given and the pairing as it stands. Its Telegram settings
+  // stay the person's (/api/bots/:id/telegram is not on this list).
+  { method: "POST", path: "/api/bots/:me/telegram/send", why: "send one file from its working folder or its own files, or a text, to the person's Telegram chat with its own bot, while that bot is paired with them" },
+  // The home, through the owner's Home Assistant (server/home-assistant.ts):
+  // only the entities the owner listed, only for an agent the owner let
+  // in, only in the owner's own turns. Reading is free. A change runs
+  // only on the owner's yes on a card, unless the owner marked it auto;
+  // locks, alarms and garage doors ask every time. The settings, the
+  // token and the list stay the owner's (/api/home is on NEVER).
+  { method: "GET", path: "/api/bots/:me/home/entities", why: "see the Home Assistant entities the owner listed for you, with their states" },
+  { method: "GET", path: "/api/bots/:me/home/history", why: "read one listed Home Assistant entity's recent history" },
+  { method: "POST", path: "/api/bots/:me/home/call", why: "ask to run a Home Assistant service on listed entities, which waits for the owner's yes unless they marked it auto" },
+  { method: "GET", path: "/api/bots/:me/home/requests/:id", why: "wait for the owner's answer to a change to the home you asked for" },
 
   // Skills it can consult, and its own settings.
   { method: "GET", path: "/api/skills", why: "see the skill library" },
-  { method: "GET", path: "/api/skills/:id", why: "read one of its skills in full" },
+  { method: "GET", path: "/api/skills/:id", why: "read one of its skills in full, as it stands or at an earlier version" },
+  // A skill's versions, and asking for a change. Asking is all it is: the
+  // route stages the change for the person whatever the body says, and
+  // refuses one written against a version that has moved on. Editing,
+  // restoring, keeping a suggestion and installing stay the person's
+  // (PUT /api/skills/:id, .../restore, .../fork, /api/skills/proposals,
+  // /api/skills/registry are not on this list, and refuse an agent too).
+  { method: "GET", path: "/api/skills/:id/history", why: "see who changed a skill, when and why, version by version, and how often each version was used" },
+  { method: "GET", path: "/api/skills/:id/history/:id", why: "read one earlier version of a skill in full" },
+  { method: "GET", path: "/api/skills/:id/diff", why: "see what changed in a skill between two versions" },
+  { method: "POST", path: "/api/skills/:id/revisions", why: "propose a revision of a skill against the version it read, for the person to keep, edit or dismiss; it never changes the skill by itself" },
 
   // Answering with something other than a paragraph.
   { method: "POST", path: "/api/bots/:me/show", why: "answer with a chart, a table or another component" },
@@ -253,6 +306,8 @@ export const RULES: Rule[] = [
   { method: "PATCH", path: "/api/bots/:me/tasks/:id", why: "rename one of its own conversations" },
   { method: "DELETE", path: "/api/bots/:me/tasks/:id", why: "close one of its own conversations, once its turn there ends" },
   { method: "POST", path: "/api/bots/:me/tasks/:id/fresh", why: "start a fresh engine session in the conversation it is in, keeping the transcript" },
+  { method: "GET", path: "/api/bots/:me/tasks/:id/summary", why: "read what the older messages of the conversation it is in were summarised into" },
+  { method: "DELETE", path: "/api/bots/:me/tasks/:id/summary", why: "drop a stale summary of the conversation it is in, so the next turn replays and summarises again" },
 ];
 
 /**
@@ -268,6 +323,8 @@ export const NEVER = [
   "/api/providers",
   "/api/custom-endpoints",
   "/api/instances",
+  // which engine an Auto room spends, read for Settings and changed there
+  "/api/room-router",
   // installing software and opening Terminal are the person's to start
   "/api/engines",
   "/api/pair",
@@ -287,14 +344,37 @@ export const NEVER = [
   "/api/profile",
   // a backup is the whole workspace, and a restore replaces it
   "/api/backups",
+  // every conversation in the workspace in one file, to train on
+  "/api/training-export",
+  // which version of Bloks runs the workspace is the person's to choose
+  "/api/server-update",
   // a map of what reaches the person's keys and screen, and its fixes
   "/api/security",
   // the secrets saved for agents, by name, and forgetting one: the
   // person's to keep or drop, never a turn's
   "/api/secrets",
+  // the connections agents use without the credential, who may use them,
+  // and their audit log: what a turn gets is an address, never a say in
+  // what it reaches (server/connections.ts)
+  "/api/connections",
+  // gh and git on this computer: installing, signing in and setting git
+  // up are the person's to start (server/cli-plugins.ts)
+  "/api/cli-plugins",
   // where the person is, as their phone says it: an agent reads it through
   // /api/agent/location and never says it, changes it or forgets it
   "/api/location",
+  // the Bloks browser's settings, its picture for a phone and another
+  // app's way in: an agent drives it through /api/agent/browser only, and
+  // what sites it may use is the person's to say
+  "/api/browser",
+  // Home Assistant's address, token and list, and the other AI apps' way
+  // in: the owner's. An agent reaches the home through its own routes.
+  "/api/home",
+  // which Signal accounts answer for which agent, and who is let in
+  "/api/signal",
+  // the person's answer to a setting an agent proposed: proposing is an
+  // agent's, the Change is theirs
+  "/api/settings-proposals",
 ];
 
 const PATH_PART = /^[\w.-]+$/;
@@ -385,7 +465,7 @@ export function allows(botId: string, method: string, path: string, inRoom: InRo
     return { ok: false, reason: "an agent can only read and write its own memory and files" };
   }
   if (/^\/api\/bots\/[\w-]+\/telegram\/send$/.test(clean)) {
-    return { ok: false, reason: "an agent can only send files to its own Telegram chat" };
+    return { ok: false, reason: "an agent can only send files and texts to its own Telegram chat" };
   }
   return { ok: false, reason: `${verb} ${clean} is not on the list of things an agent can do` };
 }
@@ -405,7 +485,7 @@ export function capabilities(): string[] {
  * them rather than excluding the two obvious ones means a driver added
  * later gets nothing until somebody has decided it should.
  */
-export const CLI_DRIVERS = new Set(["claudeAgent", "codex", "antigravity", "opencode", "grokCli", "pi", "cursorCli"]);
+export const CLI_DRIVERS = new Set(["claudeAgent", "codex", "antigravity", "opencode", "grokCli", "pi", "cursor", "cline"]);
 
 export function runsAProcess(driverKind: string): boolean {
   return CLI_DRIVERS.has(driverKind);

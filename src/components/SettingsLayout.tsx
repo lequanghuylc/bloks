@@ -25,6 +25,7 @@ import { InfoTip } from "@/components/ui/info-tip";
 import { Skeleton, SkeletonLines } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { rowKey } from "@/lib/settingsPages";
+import { t } from "@/lib/i18n";
 
 export function SettingsPageHeader({
   title,
@@ -188,7 +189,7 @@ export function SettingsEmpty({ title, body, action, icon }: { title: string; bo
 }
 
 /** A group's shape while it loads: rows with a control where one will be. */
-export function SettingsSkeleton({ rows = 3, title = true, label = "Loading" }: { rows?: number; title?: boolean; label?: string }) {
+export function SettingsSkeleton({ rows = 3, title = true, label = t("common.loading2") }: { rows?: number; title?: boolean; label?: string }) {
   return (
     <section aria-busy="true" aria-label={label} className="mb-9 last:mb-0">
       {title && <Skeleton className="mb-3.5 ml-1 h-3 w-28 rounded-full" />}
@@ -216,7 +217,7 @@ export function SavedMark({ on }: { on: boolean }) {
     >
       {on && (
         <>
-          <Check size={12} /> Saved
+          <Check size={12} /> {t("common.saved")}
         </>
       )}
     </span>

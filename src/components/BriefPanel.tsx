@@ -6,6 +6,12 @@
 // you comes first because it is the only part that needs you to do
 // anything; the rest is there to be read, in any order, or not at all.
 //
+// Above that come the cards (BriefCards.tsx): what the routines and
+// watchers the person set up last reported, which is what most mornings
+// are opened for (GitHub 378). The person arranges the page
+// (BriefCustomize.tsx), and nothing arranged is the order it always had,
+// with the cards first.
+//
 // Play reads it as a round: an opening, then each agent in its own voice,
 // then what is waiting. While it plays, the part being read stays lit and
 // the rest steps back, so the page follows the voice. Every line links
@@ -32,8 +38,12 @@ import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cn";
-import { plural } from "@/lib/plural";
 import { SkeletonAvatar } from "@/components/ui/skeleton";
+import { SlidersHorizontal } from "@/components/icons";
+import { ResultCard, type BriefResult } from "./BriefCards";
+import { BriefCustomize, type ArrangedSection } from "./BriefCustomize";
+import { DEFAULT_SECTIONS, layoutOf } from "@/lib/briefLayout";
+import { formatDate, formatNumber, t, tr, type MessageKey } from "@/lib/i18n";
 
 interface BriefPart {
   botId: string | null;
@@ -66,13 +76,22 @@ export interface Brief {
    * what had stopped for failing. Absent on a brief from before. */
   incidents?: Array<{ id: string; title: string; why: string; state: string; threadId?: string; needs?: string }>;
   failing?: Array<{ kind: "routine" | "watcher"; id: string; name: string; error: string; since: number }>;
+  /** The cards as they stood when it was made. Absent on a brief from
+   * before there were cards. */
+  results?: BriefResult[];
   quiet: boolean;
   readAt?: number;
 }
 
 interface BriefList {
   briefs: Brief[];
-  settings: { enabled: boolean; time: string };
+  /** `notify`, `allClear` and `layout` are absent from a server older
+   * than the arranging, which then shows the brief as it always did. */
+  settings: { enabled: boolean; time: string; notify?: boolean; allClear?: boolean };
+  /** Every section in the person's order, hidden ones too. */
+  sections?: ArrangedSection[];
+  /** The cards as they stand now, for the newest brief. */
+  live?: BriefResult[];
   audio: boolean;
 }
 
@@ -85,7 +104,8 @@ export function useBriefs() {
       .then((r) => setData(r))
       .catch(() => setData({ briefs: [], settings: { enabled: true, time: "08:00" }, audio: false }));
   }, []);
-  useEffect(reload, [reload, state.ticks.brief]);
+  // a routine or a watcher reporting, or being changed, moves its card
+  useEffect(reload, [reload, state.ticks.brief, state.ticks.routines, state.ticks.watchers]);
   return { data, reload };
 }
 
@@ -97,13 +117,13 @@ const startOfDay = (at: number) => {
 /** "Today", "Yesterday", or "Thu, Oct 15": a day as you would say it. */
 function dayLabel(at: number, now = Date.now()): string {
   const days = Math.round((startOfDay(now) - startOfDay(at)) / 86_400_000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
-  return new Date(at).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  if (days === 0) return t("briefPanel.today");
+  if (days === 1) return t("briefPanel.yesterday");
+  return formatDate(at, { weekday: "short", month: "short", day: "numeric" });
 }
 
-const fullDay = (at: number) => new Date(at).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
-const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const fullDay = (at: number) => formatDate(at, { weekday: "long", month: "long", day: "numeric" });
+const clock = (at: number) => formatDate(at, { hour: "numeric", minute: "2-digit" });
 
 /** "Since 6:40 PM yesterday": the stretch of time the brief covers. */
 function sinceLine(brief: Brief): string {
@@ -111,20 +131,17 @@ function sinceLine(brief: Brief): string {
   const days = Math.round((startOfDay(brief.at) - startOfDay(brief.since)) / 86_400_000);
   // the stepper already says which day this is, so the evening before is
   // only a weekday, and "yesterday" when the brief is today's
-  const when =
-    days === 0
-      ? ""
-      : days === 1 && dayLabel(brief.at) === "Today"
-        ? " yesterday"
-        : ` ${new Date(brief.since).toLocaleDateString([], { weekday: "long" })}`;
-  return `Since ${clock(brief.since)}${when}`;
+  const today = startOfDay(Date.now()) === startOfDay(brief.at);
+  if (days === 0) return t("briefPanel.since", { time: clock(brief.since) });
+  if (days === 1 && today) return t("briefPanel.sinceYesterday", { time: clock(brief.since) });
+  return t("briefPanel.sinceWeekday", { time: clock(brief.since), day: formatDate(brief.since, { weekday: "long" }) });
 }
 
 /** "08:30" as the clock on the wall says it: "8:30 AM", and "8 AM" on the hour. */
 function sayTime(time: string): string {
   const [hour, minute] = time.split(":").map(Number);
   const at = new Date(2000, 0, 1, hour, minute);
-  return at.toLocaleTimeString([], minute ? { hour: "numeric", minute: "2-digit" } : { hour: "numeric" });
+  return formatDate(at, minute ? { hour: "numeric", minute: "2-digit" } : { hour: "numeric" });
 }
 
 /**
@@ -148,6 +165,16 @@ function readItem(text: string): { lane: string; said: string; files: string } {
 /** "4 quiet check-ins, nothing needed you." is a footnote, not news. */
 const QUIET = /^\d+ quiet check-ins?, nothing needed you\.$/;
 
+/** "3 replies, about $1.20": what the night cost, as far as it is known. */
+function spendLine(spend: Brief["spend"]): string {
+  const count = spend.turns;
+  if (!spend.costKnown || spend.cost <= 0) return t("briefPanel.spend.replies", { count });
+  const cost = formatNumber(spend.cost, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (spend.estimated ?? 0) > 0
+    ? t("briefPanel.spend.repliesEstimated", { count, cost })
+    : t("briefPanel.spend.repliesAbout", { count, cost });
+}
+
 /** The times most people want; anything else is a tap on Other away. */
 const PRESET_TIMES = ["07:00", "08:00", "09:00"];
 
@@ -158,6 +185,22 @@ const PRESET_TIMES = ["07:00", "08:00", "09:00"];
  * conversation it opened, and, kept on this device, after a restart.
  */
 const HANDLED_KEY = "bloks-brief-handled";
+
+/** What became of a waiting card. Kept as a word of code, not of English,
+ * so a tick reads in whatever language the reader has now; the English
+ * labels an older version kept read the same once lowercased. */
+type Handled = "allowed" | "denied" | "answered" | "closed" | "opened";
+const HANDLED_WORDS: Record<Handled, MessageKey> = {
+  allowed: "briefPanel.handled.allowed",
+  denied: "briefPanel.handled.denied",
+  answered: "briefPanel.handled.answered",
+  closed: "briefPanel.handled.closed",
+  opened: "briefPanel.handled.opened",
+};
+const handledWords = (done: string) => {
+  const code = done.toLowerCase();
+  return code in HANDLED_WORDS ? t(HANDLED_WORDS[code as Handled]) : done;
+};
 const handled = new Map<string, string>(readHandled());
 
 function readHandled(): Array<[string, string]> {
@@ -180,10 +223,10 @@ function keepHandled() {
 
 /** A card answered in its conversation counts as handled here too, even
  * when it was answered somewhere the brief never saw. */
-function answeredLabel(card: { answered?: string; closed?: string; dismissed?: boolean } | undefined, kind: "approval" | "question") {
+function answeredLabel(card: { answered?: string; closed?: string; dismissed?: boolean } | undefined, kind: "approval" | "question"): Handled | null {
   if (!card) return null;
-  if (card.answered) return kind === "approval" ? (/deny|reject|decline/i.test(card.answered) ? "Denied" : "Allowed") : "Answered";
-  if (card.closed || card.dismissed) return "Closed";
+  if (card.answered) return kind === "approval" ? (/deny|reject|decline/i.test(card.answered) ? "denied" : "allowed") : "answered";
+  if (card.closed || card.dismissed) return "closed";
   return null;
 }
 
@@ -215,6 +258,14 @@ export function BriefPanel() {
   const briefs = data?.briefs ?? [];
   const index = Math.max(0, briefs.findIndex((b) => b.id === pick));
   const brief = briefs[index] ?? null;
+
+  // A notification opens the brief it was about, even when a newer one
+  // has been made since: yesterday's tap is yesterday's brief.
+  useEffect(() => {
+    if (!state.briefFocus) return;
+    setPick(state.briefFocus);
+    dispatch({ type: "openBrief", id: null });
+  }, [state.briefFocus, dispatch]);
 
   // opening it is reading it
   useEffect(() => {
@@ -256,7 +307,7 @@ export function BriefPanel() {
   // plays, so the round has no gaps.
   const fetchPart = (id: string, at: number): Promise<string> =>
     fetch(`/api/briefs/${id}/parts/${at}/audio`).then(async (res) => {
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? "Couldn't play this part");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? t("briefPanel.couldntPlayPart"));
       return URL.createObjectURL(await res.blob());
     });
 
@@ -285,7 +336,7 @@ export function BriefPanel() {
         return player.play();
       })
       .catch((e: Error) => {
-        setError(e.message || "Playback was blocked. Press play again.");
+        setError(e.message || t("briefPanel.playbackBlocked"));
         stop();
       });
   };
@@ -345,7 +396,7 @@ export function BriefPanel() {
       .finally(() => setMaking(false));
   };
 
-  const markDone = (id: string, label: string) => {
+  const markDone = (id: string, label: Handled) => {
     handled.set(id, label);
     keepHandled();
     setDone(new Map(handled));
@@ -359,7 +410,7 @@ export function BriefPanel() {
     if (!w.requestId) return;
     setBusy(w.messageId);
     api(`/api/bots/${w.botId}/respond`, { method: "POST", body: JSON.stringify({ requestId: w.requestId, behavior }) })
-      .then(() => markDone(w.messageId, behavior === "allow" ? "Allowed" : "Denied"))
+      .then(() => markDone(w.messageId, behavior === "allow" ? "allowed" : "denied"))
       .catch((e: Error) => setError(e.message))
       .finally(() => setBusy(null));
   };
@@ -379,6 +430,52 @@ export function BriefPanel() {
   const enabled = want.enabled ?? data?.settings.enabled ?? true;
   const time = want.time ?? data?.settings.time ?? "08:00";
 
+  // ── arranging ──
+  const [customizing, setCustomizing] = useState(false);
+  // the arrangement answers at once too, and the server's catches up
+  const [arranged, setArranged] = useState<ArrangedSection[] | null>(null);
+  useEffect(() => setArranged(null), [data?.sections]);
+  const sections: ArrangedSection[] =
+    arranged ?? data?.sections ?? DEFAULT_SECTIONS.map((key) => ({ key, kind: key, pinned: false, hidden: false }));
+  const [notifyWant, setNotifyWant] = useState<{ notify?: boolean; allClear?: boolean }>({});
+  useEffect(() => setNotifyWant({}), [data?.settings.notify, data?.settings.allClear]);
+  const arrange = (next: ArrangedSection[]) => {
+    setArranged(next);
+    api("/api/briefs/settings", { method: "PATCH", body: JSON.stringify({ layout: layoutOf(next) }) })
+      .then(reload)
+      .catch((e: Error) => {
+        setArranged(null);
+        setError(e.message);
+      });
+  };
+  const notifySettings = (patch: { notify?: boolean; allClear?: boolean }) => {
+    setNotifyWant((w) => ({ ...w, ...patch }));
+    api("/api/briefs/settings", { method: "PATCH", body: JSON.stringify(patch) })
+      .then(reload)
+      .catch((e: Error) => {
+        setNotifyWant({});
+        setError(e.message);
+      });
+  };
+  const briefOnly = (routineId: string, on: boolean) => {
+    setArranged(sections.map((x) => (x.key === `routine:${routineId}` ? { ...x, briefOnly: on } : x)));
+    api(`/api/routines/${routineId}`, { method: "PATCH", body: JSON.stringify({ briefOnly: on }) })
+      .then(reload)
+      .catch((e: Error) => {
+        setArranged(null);
+        setError(e.message);
+      });
+  };
+
+  // The cards: as they stand now on the newest brief, where a report that
+  // came in late updates its card, and as they stood on an older one.
+  const newest = index === 0;
+  const cards = new Map<string, BriefResult>(((newest ? data?.live : undefined) ?? brief?.results ?? []).map((r) => [r.key, r]));
+  // a card from an older brief whose routine has gone since is still
+  // what that morning said, so it comes first rather than not at all
+  const orphans = newest ? [] : (brief?.results ?? []).filter((r) => !sections.some((x) => x.key === r.key));
+  const openCard = (r: BriefResult) => r.botId && r.threadId && open(r.botId, r.threadId);
+
   const bot = (id: string | null) => (id ? state.bots.find((b) => b.id === id) : undefined);
   const closing = brief ? brief.parts.findIndex((p, i) => i > 0 && !p.botId) : -1;
   // while it plays, everything but the part being read steps back
@@ -392,13 +489,13 @@ export function BriefPanel() {
     return answeredLabel(card, w.kind) ?? undefined;
   };
   const waitingLeft = brief ? brief.waiting.filter((w) => !doneFor(w)).length : 0;
-  const reader = playing === null || !brief ? "" : playing === 0 ? "Overview" : brief.parts[playing]?.name ?? "";
+  const reader = playing === null || !brief ? "" : playing === 0 ? t("briefPanel.overview") : brief.parts[playing]?.name ?? "";
 
   return (
-    <section aria-label="Morning brief" className="flex min-w-0 flex-col">
+    <section aria-label={t("briefPanel.morningBrief")} className="flex min-w-0 flex-col">
       <PanelHeader
         icon={<Sunrise size={17} />}
-        title="Morning brief"
+        title={t("briefPanel.morningBrief")}
         actions={
           <>
             {briefs.length > 1 && (
@@ -406,7 +503,7 @@ export function BriefPanel() {
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="Earlier brief"
+                  aria-label={t("briefPanel.earlierBrief")}
                   disabled={index >= briefs.length - 1}
                   onClick={() => step(1)}
                 >
@@ -419,20 +516,25 @@ export function BriefPanel() {
                 >
                   {brief ? dayLabel(brief.at) : ""}
                 </span>
-                <Button variant="ghost" size="icon-sm" aria-label="Later brief" disabled={index === 0} onClick={() => step(-1)}>
+                <Button variant="ghost" size="icon-sm" aria-label={t("briefPanel.laterBrief")} disabled={index === 0} onClick={() => step(-1)}>
                   <ChevronRight size={15} />
                 </Button>
               </div>
             )}
             {brief && data?.audio && playing === null && (
-              <Button variant="secondary" size="sm" onClick={() => playFrom(0)} aria-label="Listen to the brief">
+              <Button variant="secondary" size="sm" onClick={() => playFrom(0)} aria-label={t("briefPanel.listenToTheBrief")}>
                 <Play size={13} />
-                <span className="max-sm:hidden">Listen</span>
+                <span className="max-sm:hidden">{t("briefPanel.listen")}</span>
               </Button>
             )}
             {brief && (
-              <Button variant="ghost" size="icon-sm" disabled={making} onClick={make} title="Make a fresh brief now" aria-label="Make a fresh brief now">
+              <Button variant="ghost" size="icon-sm" disabled={making} onClick={make} title={t("briefPanel.makeAFreshBriefNow")} aria-label={t("briefPanel.makeAFreshBriefNow")}>
                 {making ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              </Button>
+            )}
+            {data?.sections && (
+              <Button variant="ghost" size="icon-sm" onClick={() => setCustomizing(true)} title={t("briefPanel.customizeTheBrief")} aria-label={t("briefPanel.customizeTheBrief")}>
+                <SlidersHorizontal size={14} />
               </Button>
             )}
           </>
@@ -443,7 +545,7 @@ export function BriefPanel() {
         {error && (
           <div role="alert" className="mb-5 flex items-start gap-2 rounded-xl bg-destructive/10 px-3 py-2 text-body text-destructive">
             <span className="min-w-0 flex-1">{error}</span>
-            <button onClick={() => setError(null)} aria-label="Dismiss" className="mt-0.5 shrink-0 opacity-70 transition-opacity hover:opacity-100">
+            <button onClick={() => setError(null)} aria-label={t("common.dismiss")} className="mt-0.5 shrink-0 opacity-70 transition-opacity hover:opacity-100">
               <X size={13} />
             </button>
           </div>
@@ -454,14 +556,14 @@ export function BriefPanel() {
         ) : !brief ? (
           <div className="flex flex-col items-start gap-4 py-2">
             <p className="text-balance text-heading font-semibold text-foreground">
-              {enabled ? `Your first brief comes at ${sayTime(time)}.` : "No brief yet."}
+              {enabled ? t("briefPanel.firstBriefAt", { time: sayTime(time) }) : t("briefPanel.noBriefYet")}
             </p>
             <p className="max-w-md text-pretty text-ui leading-relaxed text-muted-foreground">
-              Each morning, a short read on what your agents did overnight and what is waiting on you.
+              {t("briefPanel.eachMorningAShortRead")}
             </p>
             <Button onClick={make} disabled={making}>
               {making ? <Loader2 size={13} className="animate-spin" /> : <Sunrise size={14} />}
-              Make one now
+              {t("briefPanel.makeOneNow")}
             </Button>
           </div>
         ) : (
@@ -480,10 +582,9 @@ export function BriefPanel() {
                 <p className="mt-2 text-body text-muted-foreground">
                   {[
                     sinceLine(brief),
-                    brief.spend.turns > 0
-                      ? `${plural(brief.spend.turns, "reply", "replies")}${brief.spend.costKnown && brief.spend.cost > 0 ? (brief.spend.estimated ?? 0) > 0 ? `, ~$${brief.spend.cost.toFixed(2)}` : `, about $${brief.spend.cost.toFixed(2)}` : ""}`
-                      : "",
-                    ...brief.ready.map((r) => `${r.count} ${r.count === 1 ? r.label : (r.many ?? `${r.label}s`)} ready`),
+                    brief.spend.turns > 0 ? spendLine(brief.spend) : "",
+                    // the server names what is ready, so its noun stays as it wrote it
+                    ...brief.ready.map((r) => t("briefPanel.ready", { count: r.count, what: r.count === 1 ? r.label : (r.many ?? `${r.label}s`) })),
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -498,14 +599,14 @@ export function BriefPanel() {
                     exit={{ opacity: 0, y: -4, transition: { duration: 0.12 } }}
                     className="mt-5 flex items-center gap-3 rounded-full bg-muted/70 py-1 pl-1 pr-1.5"
                     role="group"
-                    aria-label="Brief player"
+                    aria-label={t("briefPanel.briefPlayer")}
                   >
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       className="rounded-full text-foreground"
                       onClick={togglePause}
-                      aria-label={paused ? "Resume" : "Pause"}
+                      aria-label={paused ? t("briefPanel.resume") : t("common.pause")}
                     >
                       {buffering && !paused ? (
                         <Loader2 size={14} className="animate-spin" />
@@ -521,153 +622,198 @@ export function BriefPanel() {
                     <span className="max-w-[9rem] truncate text-small text-muted-foreground" aria-live="polite">
                       {reader}
                     </span>
-                    <Button variant="ghost" size="icon-sm" className="rounded-full" onClick={stop} aria-label="Stop">
+                    <Button variant="ghost" size="icon-sm" className="rounded-full" onClick={stop} aria-label={t("common.stop")}>
                       <X size={14} />
                     </Button>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {brief.waiting.length > 0 && (
-                <div className={cn("mt-8 transition-opacity duration-200", closing >= 0 && dim(closing) && "opacity-45")}>
-                  <SubHead className="flex items-center gap-1.5">
-                    {waitingLeft ? (
-                      <>Waiting on you</>
-                    ) : (
-                      <>
-                        <Check size={12} className="text-success" />
-                        All handled
-                      </>
-                    )}
-                  </SubHead>
-                  <ul className="-mx-3 flex flex-col">
-                    {brief.waiting.map((w) => (
-                      <WaitingRow
-                        key={w.messageId}
-                        item={w}
-                        agent={bot(w.botId)}
-                        done={doneFor(w)}
-                        busy={busy === w.messageId}
-                        onAnswer={(behavior) => answer(w, behavior)}
-                        onOpen={() => {
-                          if (!w.requestId) markDone(w.messageId, "Opened");
-                          open(w.botId, w.threadId);
-                        }}
-                      />
-                    ))}
-                  </ul>
+              {/* The sections in the person's order (server/brief.ts
+                  arrangeSections): the cards, then the brief's own. */}
+              {orphans.length > 0 && (
+                <div className="mt-8 flex flex-col gap-3">
+                  {orphans.map((r) => (
+                    <ResultCard key={r.key} result={r} onOpen={openCard} />
+                  ))}
                 </div>
               )}
-
-              {(brief.incidents?.length || brief.failing?.length) ? (
-                <div className={cn("mt-8 transition-opacity duration-200", closing >= 0 && dim(closing) && "opacity-45")}>
-                  <SubHead>Something failed</SubHead>
-                  <ul className="flex flex-col gap-2">
-                    {(brief.incidents ?? []).map((i) => (
-                      <li key={i.id} className="text-body text-foreground">
-                        {i.title} failed: <span className="text-muted-foreground">{i.why}.</span>
-                        {i.needs ? <span className="text-warning"> Needs you: {i.needs}</span> : null}
-                      </li>
-                    ))}
-                    {(brief.failing ?? []).map((f) => (
-                      <li key={f.id} className="text-body text-foreground">
-                        The {f.kind} {f.name} kept failing, so it is paused:{" "}
-                        <span className="text-muted-foreground">{f.error}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              <div className="mt-8 flex flex-col gap-8">
-                {brief.parts.map((part, at) => {
-                  if (!part.botId) return null;
-                  const agent = bot(part.botId);
-                  const reading = playing === at;
+              {sections.map((section, at) => {
+                if (section.hidden) return null;
+                const card = cards.get(section.key);
+                if (card) {
+                  // cards that follow one another sit close, as one group
+                  const prev = sections.slice(0, at).reverse().find((x) => !x.hidden && (cards.has(x.key) || x.kind !== "routine" && x.kind !== "watcher"));
+                  const grouped = Boolean(prev && cards.has(prev.key));
                   return (
-                    <section key={at} className={cn("transition-opacity duration-200", dim(at) && "opacity-45")}>
-                      <div className="flex items-center gap-2">
-                        {agent && <AgentAvatar bot={agent} size={20} />}
-                        <h3 className="text-ui font-semibold text-foreground">{part.name}</h3>
-                        {agent?.title && <span className="truncate text-small text-muted-foreground">{agent.title}</span>}
-                        {reading && <AudioLines size={13} className="shrink-0 text-brand-ink" aria-label="Reading now" />}
-                      </div>
-                      <div className="mt-2 flex flex-col gap-1.5">
-                        {part.items.map((item, i) => {
-                          if (QUIET.test(item.text)) {
-                            return (
-                              <p key={i} className="text-body text-muted-foreground">
-                                {item.text}
-                              </p>
-                            );
-                          }
-                          const { lane, said, files } = readItem(item.text);
+                    <div key={section.key} className={grouped ? "mt-3" : "mt-8"}>
+                      <ResultCard result={card} after={newest && Boolean(card.at && card.at > brief.at)} onOpen={openCard} />
+                    </div>
+                  );
+                }
+                if (section.key === "waiting" && brief.waiting.length > 0) {
+                  return (
+                    <div key="waiting" className={cn("mt-8 transition-opacity duration-200", closing >= 0 && dim(closing) && "opacity-45")}>
+                      <SubHead className="flex items-center gap-1.5">
+                        {waitingLeft ? (
+                          <>{t("briefPanel.waitingOnYou")}</>
+                        ) : (
+                          <>
+                            <Check size={12} className="text-success" />
+                            {t("briefPanel.allHandled")}
+                          </>
+                        )}
+                      </SubHead>
+                      <ul className="-mx-3 flex flex-col">
+                        {brief.waiting.map((w) => (
+                          <WaitingRow
+                            key={w.messageId}
+                            item={w}
+                            agent={bot(w.botId)}
+                            done={doneFor(w)}
+                            busy={busy === w.messageId}
+                            onAnswer={(behavior) => answer(w, behavior)}
+                            onOpen={() => {
+                              if (!w.requestId) markDone(w.messageId, "opened");
+                              open(w.botId, w.threadId);
+                            }}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                }
+                if (section.key === "failed" && (brief.incidents?.length || brief.failing?.length)) {
+                  return (
+                    <div key="failed" className={cn("mt-8 transition-opacity duration-200", closing >= 0 && dim(closing) && "opacity-45")}>
+                      <SubHead>{t("briefPanel.somethingFailed")}</SubHead>
+                      <ul className="flex flex-col gap-2">
+                        {(brief.incidents ?? []).map((i) => (
+                          <li key={i.id} className="text-body text-foreground">
+                            {tr("briefPanel.incidentFailed", { title: i.title, why: <span className="text-muted-foreground">{i.why}</span> })}
+                            {i.needs ? <span className="text-warning"> {t("briefPanel.needsYou", { needs: i.needs })}</span> : null}
+                          </li>
+                        ))}
+                        {(brief.failing ?? []).map((f) => (
+                          <li key={f.id} className="text-body text-foreground">
+                            {tr(f.kind === "watcher" ? "briefPanel.failingWatcher" : "briefPanel.failingRoutine", {
+                              name: f.name,
+                              error: <span className="text-muted-foreground">{f.error}</span>,
+                            })}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                }
+                if (section.key === "agents") {
+                  return (
+                    <div key="agents" className="mt-8 flex flex-col gap-8">
+                      {cards.size > 0 && brief.parts.some((p) => p.botId) && <SubHead className="-mb-6">{t("briefPanel.whatYourAgentsDid")}</SubHead>}
+                      {brief.parts.map((part, at) => {
+                        if (!part.botId) return null;
+                        const agent = bot(part.botId);
+                        const reading = playing === at;
+                        return (
+                          <section key={at} className={cn("transition-opacity duration-200", dim(at) && "opacity-45")}>
+                            <div className="flex items-center gap-2">
+                              {agent && <AgentAvatar bot={agent} size={20} />}
+                              <h3 className="text-ui font-semibold text-foreground">{part.name}</h3>
+                              {agent?.title && <span className="truncate text-small text-muted-foreground">{agent.title}</span>}
+                              {reading && <AudioLines size={13} className="shrink-0 text-brand-ink" aria-label={t("briefPanel.readingNow")} />}
+                            </div>
+                            <div className="mt-2 flex flex-col gap-1.5">
+                              {part.items.map((item, i) => {
+                                if (QUIET.test(item.text)) {
+                                  return (
+                                    <p key={i} className="text-body text-muted-foreground">
+                                      {item.text}
+                                    </p>
+                                  );
+                                }
+                                const { lane, said, files } = readItem(item.text);
+                                return (
+                                  <button
+                                    key={i}
+                                    onClick={() => part.botId && open(part.botId, item.threadId)}
+                                    className="group -mx-2 rounded-lg px-2 py-1 text-left text-lead text-pretty text-foreground/90 transition-colors duration-150 hover:bg-accent/60 hover:text-foreground"
+                                  >
+                                    {lane && <span className="font-medium text-foreground">{lane}. </span>}
+                                    {said}
+                                    {files && <span className="text-body text-muted-foreground"> · {files}</span>}
+                                    <ArrowUpRight
+                                      size={13}
+                                      className="ml-1 inline-block -translate-y-px text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                                    />
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+                if (section.key === "memory" && (brief.memory?.length ?? 0) > 0) {
+                  return (
+                    <div key="memory" className="mt-8">
+                      <SubHead className="flex items-center gap-1.5">
+                        <Moon size={12} />
+                        {t("briefPanel.memoryTidiedOvernight")}
+                      </SubHead>
+                      <ul className="-mx-2 flex flex-col">
+                        {brief.memory!.map((line) => {
+                          const agent = bot(line.botId);
                           return (
-                            <button
-                              key={i}
-                              onClick={() => part.botId && open(part.botId, item.threadId)}
-                              className="group -mx-2 rounded-lg px-2 py-1 text-left text-lead text-pretty text-foreground/90 transition-colors duration-150 hover:bg-accent/60 hover:text-foreground"
-                            >
-                              {lane && <span className="font-medium text-foreground">{lane}. </span>}
-                              {said}
-                              {files && <span className="text-body text-muted-foreground"> · {files}</span>}
-                              <ArrowUpRight
-                                size={13}
-                                className="ml-1 inline-block -translate-y-px text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                              />
-                            </button>
+                            <li key={line.runId}>
+                              <button
+                                onClick={() => dispatch({ type: "openMemory", target: line.botId })}
+                                className="group flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-accent/60"
+                              >
+                                {agent ? <AgentAvatar bot={agent} size={20} /> : null}
+                                <span className="min-w-0 flex-1 text-pretty text-body text-foreground/90">
+                                  <span className="font-medium text-foreground">{line.name}: </span>
+                                  {line.text}
+                                  <span className="ml-1 whitespace-nowrap text-muted-foreground transition-colors duration-150 group-hover:text-foreground">
+                                    {t("briefPanel.reviewOrUndo")}
+                                    <ArrowUpRight size={12} className="ml-0.5 inline-block -translate-y-px" />
+                                  </span>
+                                </span>
+                              </button>
+                            </li>
                           );
                         })}
-                      </div>
-                    </section>
+                      </ul>
+                    </div>
                   );
-                })}
-              </div>
-              {/* Housekeeping, so it comes last and is never read aloud:
-                  a line per agent, each leading to that agent's Memory
-                  page, where last night's changes open with their Undo. */}
-              {(brief.memory?.length ?? 0) > 0 && (
-                <div className="mt-8">
-                  <SubHead className="flex items-center gap-1.5">
-                    <Moon size={12} />
-                    Memory, tidied overnight
-                  </SubHead>
-                  <ul className="-mx-2 flex flex-col">
-                    {brief.memory!.map((line) => {
-                      const agent = bot(line.botId);
-                      return (
-                        <li key={line.runId}>
-                          <button
-                            onClick={() => dispatch({ type: "openMemory", target: line.botId })}
-                            className="group flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-150 hover:bg-accent/60"
-                          >
-                            {agent ? <AgentAvatar bot={agent} size={20} /> : null}
-                            <span className="min-w-0 flex-1 text-pretty text-body text-foreground/90">
-                              <span className="font-medium text-foreground">{line.name}: </span>
-                              {line.text}
-                              <span className="ml-1 whitespace-nowrap text-muted-foreground transition-colors duration-150 group-hover:text-foreground">
-                                Review or undo
-                                <ArrowUpRight size={12} className="ml-0.5 inline-block -translate-y-px" />
-                              </span>
-                            </span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
+                }
+                return null;
+              })}
             </motion.article>
           </AnimatePresence>
+        )}
+
+        {data?.sections && (
+          <BriefCustomize
+            open={customizing}
+            onOpenChange={setCustomizing}
+            sections={sections}
+            notify={notifyWant.notify ?? data.settings.notify ?? true}
+            allClear={notifyWant.allClear ?? data.settings.allClear ?? false}
+            onArrange={arrange}
+            onSettings={notifySettings}
+            onBriefOnly={briefOnly}
+          />
         )}
 
         {data && (
           <div className="mt-10 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-5 text-body text-muted-foreground">
             <label className="flex items-center gap-2">
-              <Switch checked={enabled} onCheckedChange={(on) => settings({ enabled: on })} aria-label="A brief every morning" />
-              {enabled ? "Every morning at" : "Daily brief is off"}
+              <Switch checked={enabled} onCheckedChange={(on) => settings({ enabled: on })} aria-label={t("briefPanel.aBriefEveryMorning")} />
+              {enabled ? t("briefPanel.everyMorningAt") : t("briefPanel.dailyBriefIsOff")}
             </label>
-            {enabled && <BriefTime time={time} onChange={(t) => settings({ time: t })} />}
+            {enabled && <BriefTime time={time} onChange={(next) => settings({ time: next })} />}
           </div>
         )}
       </div>
@@ -708,7 +854,7 @@ function WaitingRow({
             <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
               <Check size={11} strokeWidth={2.5} />
             </span>
-            <span className="shrink-0 text-foreground/80">{done}</span>
+            <span className="shrink-0 text-foreground/80">{handledWords(done)}</span>
             <span className="min-w-0 truncate">{item.title}</span>
           </motion.div>
         ) : (
@@ -722,7 +868,7 @@ function WaitingRow({
               <span className="min-w-0">
                 <span className="block text-ui text-foreground">{item.title}</span>
                 <span className="block text-small text-muted-foreground">
-                  {item.name} {item.kind === "approval" ? "wants your OK" : "has a question"}
+                  {t(item.kind === "approval" ? "briefPanel.wantsYourOk" : "briefPanel.hasAQuestion", { name: item.name })}
                 </span>
               </span>
             </button>
@@ -730,16 +876,16 @@ function WaitingRow({
               {item.kind === "approval" && item.requestId ? (
                 <>
                   <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAnswer("deny")}>
-                    Deny
+                    {t("briefPanel.deny")}
                   </Button>
                   <Button size="sm" disabled={busy} onClick={() => onAnswer("allow")}>
                     {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={13} />}
-                    Allow
+                    {t("briefPanel.allow")}
                   </Button>
                 </>
               ) : (
                 <Button size="sm" variant="secondary" onClick={onOpen}>
-                  Answer
+                  {t("briefPanel.answer")}
                 </Button>
               )}
             </div>
@@ -770,9 +916,9 @@ function BriefTime({ time, onChange }: { time: string; onChange: (time: string) 
     <div className="flex flex-wrap items-center gap-2">
       <Segmented
         size="sm"
-        aria-label="Brief time"
+        aria-label={t("briefPanel.briefTime")}
         value={value}
-        options={[...PRESET_TIMES.map((t) => ({ value: t, label: sayTime(t) })), { value: "other", label: "Other" }]}
+        options={[...PRESET_TIMES.map((preset) => ({ value: preset, label: sayTime(preset) })), { value: "other", label: t("briefPanel.otherTime") }]}
         onChange={(v) => {
           if (v === "other") return setOther(true);
           commit(v);
@@ -789,7 +935,7 @@ function BriefTime({ time, onChange }: { time: string; onChange: (time: string) 
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}
           className="h-7 rounded-md border bg-background px-2 text-body tabular-nums text-foreground"
-          aria-label="Custom brief time"
+          aria-label={t("briefPanel.customBriefTime")}
         />
       )}
     </div>
@@ -799,7 +945,7 @@ function BriefTime({ time, onChange }: { time: string; onChange: (time: string) 
 /** The shape of a brief, while the real one is on its way. */
 function BriefSkeleton() {
   return (
-    <div role="status" aria-label="Loading the brief" className="flex flex-col">
+    <div role="status" aria-label={t("briefPanel.loadingTheBrief")} className="flex flex-col">
       <Bone className="h-5 w-11/12" />
       <Bone className="mt-2.5 h-5 w-3/5" />
       <Bone className="mt-4 w-2/5" />

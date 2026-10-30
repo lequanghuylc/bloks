@@ -26,17 +26,93 @@
 //                                holds your saved keys
 //   bloks-server restore FILE    put a backup back. The workspace it replaces is
 //                                backed up and moved aside first, never deleted
+//   bloks-server update [--check]
+//                                install the latest release beside this one,
+//                                switch to it and restart, or go back if it
+//                                does not start; --check only says if there is
+//                                one. The app's About page does the same
+//   bloks-server import [TOOL] --dry-run [--json]
+//                                what Bring your setup would find from Claude
+//                                Code, Codex, Cursor, OpenClaw or Hermes on this
+//                                machine, and what each becomes. Reads only;
+//                                the import itself is chosen in the app
+//   bloks-server stop            stop the running server
+//   bloks-server export-runs [--format openai|sharegpt|trajectory] [--dry-run]
+//                                write agents' runs to a file on this computer
+//                                to train a model on, cleaned of keys and, by
+//                                default, of emails, phone numbers, home
+//                                folder paths and people's names; --help for
+//                                the rest. Works with Bloks stopped too
+//
+// And for scripts, CI and a terminal (server/scripting-cli.ts):
+//
+//   bloks-server run AGENT "TASK" [--json] [--export DIR] [--timeout 30m]
+//                                give an agent a job, wait until it and any
+//                                teammate it handed work to are done, and
+//                                print the answer
+//   bloks-server team apply FILE [--dry-run]
+//                                make or update a room and its agents from
+//                                a team file, changing only what differs
+//   bloks-server chat AGENT      talk to an agent in this terminal
+//   bloks-server token --server URL --code 123456
+//                                trade a pairing code for a device token,
+//                                for the three above on another computer
 //
 // The rest talk to the running server, so run them in a second shell on
 // the same machine. backup and restore work with Bloks stopped too.
 // A passphrase is asked for in the terminal, or read from
 // BLOKS_BACKUP_PASSPHRASE where nobody is there to type it.
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+//
+// An update from the app unpacks the new version under versions/ in this
+// folder and points versions/current at it (server/server-update.ts).
+// This file, run from here, then hands over to that version, so the way
+// it was started before keeps working. A newer release unpacked over this
+// folder by hand wins over an older one an update put there.
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** Whether one stable version is later than another. */
+function newer(a, b) {
+  const parts = (v) => (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v) ? v.split(".").map(Number) : null);
+  const x = parts(a);
+  const y = parts(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+
+/** The version an update put beside this one, to hand over to: only from
+ * the folder the release was unpacked into (a version handed over to
+ * never looks again), only inside its versions/ folder, and only when it
+ * is newer than this folder's own. */
+function updatedCopy() {
+  if (process.env.BLOKS_SERVER_HOME) return null;
+  try {
+    const read = (dir) => JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const own = read(root);
+    if (own.name !== "bloks-server") return null;
+    // twice if need be: macOS can fail a read that races the rename
+    // switching the link, though the link is there throughout
+    let there;
+    for (let tries = 0; !there; tries++) {
+      try {
+        there = realpathSync(join(root, "versions", "current"));
+      } catch (e) {
+        if (e.code !== "EINVAL" || tries >= 5) throw e;
+      }
+    }
+    if (!there.startsWith(realpathSync(join(root, "versions")) + sep)) return null;
+    const theirs = read(there);
+    const entry = join(there, "bin", "bloks-server.mjs");
+    return theirs.name === "bloks-server" && newer(theirs.version, own.version) && existsSync(entry) ? entry : null;
+  } catch {
+    return null;
+  }
+}
 /** The data folder, the way the server decides it (server/config.ts
  * dataDirFrom): BLOKS_DATA_DIR when set, else ~/.bloks. */
 function dataDir() {
@@ -101,6 +177,35 @@ async function answering() {
 async function backupCode() {
   const source = join(root, "server", "backup.ts");
   return import(pathToFileURL(existsSync(source) ? source : join(root, "dist-server", "backup.js")).href);
+}
+
+/** export-runs, which reads the data folder itself, like backup. */
+async function exportRuns() {
+  const source = join(root, "server", "run-export-cli.ts");
+  const code = await import(pathToFileURL(existsSync(source) ? source : join(root, "dist-server", "run-export-cli.js")).href);
+  const exitCode = await code.exportRunsMain(args, { stdout: process.stdout, stderr: process.stderr, env: process.env, dataDir: dataDir() });
+  process.stdout.write("", () => process.exit(exitCode));
+}
+
+/** run, team, chat and token, which live with the server's code so the
+ * tests read them as they read the rest: its source in a checkout, the
+ * compiled copy in the download. */
+async function scripting(name) {
+  const source = join(root, "server", "scripting-cli.ts");
+  const code = await import(pathToFileURL(existsSync(source) ? source : join(root, "dist-server", "scripting-cli.js")).href);
+  const exitCode = await code.main(name, args, {
+    base: BASE,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    env: process.env,
+    onInterrupt(handler) {
+      process.on("SIGINT", handler);
+      return () => process.off("SIGINT", handler);
+    },
+  });
+  // what was written goes out before the process does
+  process.stdout.write("", () => process.exit(exitCode));
 }
 
 /** Typed without showing it, the way a password prompt is. */
@@ -184,14 +289,29 @@ async function status(waitMs = 0) {
   );
 }
 
-switch (command) {
+// From the folder the release was unpacked into, a newer version an
+// update put beside it runs instead of this one; otherwise this one does.
+const handOver = updatedCopy();
+if (handOver) {
+  process.env.BLOKS_SERVER_HOME = root;
+  await import(pathToFileURL(handOver).href);
+} else switch (command) {
   case "start": {
     // Loopback, always: a server on a public machine must not be the one
     // place Bloks listens on the network.
     process.env.BLOKS_LOOPBACK_ONLY = "1";
     process.env.BLOKS_PORT = String(PORT);
+    // which folder this version is, and the folder updates go beside, so
+    // the server can tell it was started here and may restart itself
+    process.env.BLOKS_SERVER_HOME ||= root;
+    process.env.BLOKS_SERVER_ROOT = root;
     const ui = join(root, "dist");
-    if (!process.env.BLOKS_STATIC_DIR && existsSync(join(ui, "index.html"))) process.env.BLOKS_STATIC_DIR = ui;
+    if (!process.env.BLOKS_STATIC_DIR && existsSync(join(ui, "index.html"))) {
+      process.env.BLOKS_STATIC_DIR = ui;
+      // set here for this version's own page, so the next version is not
+      // handed this one's
+      process.env.BLOKS_SERVER_STATIC = "1";
+    }
     // a checkout runs its source; the packaged download ships only the
     // compiled server, which is what a checkout's dist-server may be a
     // stale copy of
@@ -362,6 +482,102 @@ switch (command) {
     }
     break;
   }
+  case "update": {
+    let state = await call("POST", "/api/server-update/check");
+    if (state.check?.error) fail(state.check.error);
+    const latest = state.check?.latest;
+    if (!state.check?.newer || !latest) {
+      console.log(`Bloks ${state.version} is the latest.`);
+      break;
+    }
+    console.log(`Bloks ${latest.version} is out. This server runs ${state.version}.`);
+    console.log(`Release notes: ${latest.page}`);
+    if (args.includes("--check")) break;
+    if (!state.install.canInstall) {
+      console.log(`\n${state.install.why}`);
+      if (state.steps?.length) console.log(`\n${state.steps.map((line) => `  ${line}`).join("\n")}`);
+      process.exit(1);
+    }
+    state = await call("POST", "/api/server-update/install", { version: latest.version });
+    let said = "";
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const now = await fetch(`${BASE}/api/server-update`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const job = now?.job;
+      // no answer: it has stopped to hand over, which is the last step
+      if (!now || job?.phase === "restarting") break;
+      const line =
+        job?.phase === "downloading"
+          ? `Downloading ${job.version}${job.percent ? ` (${job.percent}%)` : ""}`
+          : job?.phase === "unpacking"
+            ? "Checked. Unpacking it beside this version."
+            : job?.phase === "draining"
+              ? `Waiting for ${job.running ?? 0} running ${job.running === 1 ? "turn" : "turns"} to finish first.`
+              : "";
+      if (line && line !== said) console.log((said = line));
+      if (job?.phase === "failed") fail(`The update stopped: ${job.error} Nothing was changed.`);
+      if (job?.phase === "cancelled") fail("The update was called off. Nothing was changed.");
+    }
+    console.log(`Restarting into ${latest.version}. Waiting for it to answer.`);
+    // the helper writes down how it went once the new version answers, or
+    // once it has gone back to this one
+    for (let waited = 0; waited < 300; waited++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const now = await fetch(`${BASE}/api/server-update`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const last = now?.last;
+      if (!last || last.to !== latest.version || last.pending) continue;
+      if (last.ok) {
+        console.log(`Bloks ${last.to} is running. Its output goes to ${last.log}.`);
+        break;
+      }
+      fail(`${last.error}${last.rolledBack ? ` Bloks ${last.from} is running again.` : ""}`);
+    }
+    break;
+  }
+  case "stop": {
+    const health = await fetch(`${BASE}/api/health`)
+      .then((r) => r.json())
+      .catch(() => null);
+    if (health?.app !== "bloks" || !Number.isInteger(health.pid)) fail(`Bloks is not running on this machine (nothing answered on port ${PORT}).`);
+    process.kill(health.pid, "SIGTERM");
+    for (let i = 0; i < 40 && (await answering()); i++) await new Promise((r) => setTimeout(r, 250));
+    console.log((await answering()) ? "Asked Bloks to stop. It is still finishing up." : "Bloks has stopped.");
+    break;
+  }
+  case "export-runs":
+    await exportRuns();
+    break;
+  case "run":
+  case "team":
+  case "chat":
+  case "token":
+    await scripting(command);
+    break;
+  case "import": {
+    // What bringing a setup over would find in this machine's home
+    // folder, read here with the server's own reader and nothing written.
+    // The import itself is a list to tick in the app, where each value a
+    // server or a chat app needs is typed or copied on purpose, so from
+    // here there is only the look.
+    const sources = ["claude", "codex", "cursor", "openclaw", "hermes"];
+    const source = args.find((a) => !a.startsWith("-"));
+    if (source && source !== "all" && !sources.includes(source)) fail(`Which tool? One of: ${sources.join(", ")}, or all.`);
+    if (!args.includes("--dry-run")) {
+      fail("Only a look from here: bloks-server import [claude|codex|cursor|openclaw|hermes] --dry-run. To bring things over, open Bloks, Settings, Bring your setup.");
+    }
+    const file = join(root, "server", "setup-import.ts");
+    const code = await import(pathToFileURL(existsSync(file) ? file : join(root, "dist-server", "setup-import.js")).href);
+    const scan = code.detectSetup(homedir(), source && source !== "all" ? source : undefined);
+    if (args.includes("--json")) {
+      // the same shape the app's review is made from, which holds no values
+      console.log(JSON.stringify(scan, null, 2));
+    } else process.stdout.write(code.dryRunReport(scan));
+    break;
+  }
   default:
-    fail("Commands: bloks-server [start], activate KEY, pair, status, drain, backup, restore FILE");
+    fail("Commands: bloks-server [start], activate KEY, pair, status, drain, backup, restore FILE, update, import --dry-run, stop, export-runs, run AGENT TASK, team apply FILE, chat AGENT, token");
 }

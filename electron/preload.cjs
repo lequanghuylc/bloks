@@ -45,6 +45,13 @@ const boot = (() => {
       if (mine) ipcRenderer.invoke("prefs:theme", mine).catch(() => {});
     }
     if (said.accent) localStorage.setItem("bloks-accent", said.accent);
+    // the language the same way, except that none kept means "System",
+    // which is what an empty storage already says
+    if (said.language) localStorage.setItem("bloks-language", said.language);
+    else {
+      const mine = localStorage.getItem("bloks-language");
+      if (mine) ipcRenderer.invoke("prefs:language", mine).catch(() => {});
+    }
   } catch {
     /* storage refused; the page falls back to its defaults */
   }
@@ -90,8 +97,16 @@ contextBridge.exposeInMainWorld("bloks", {
   hostingMoveTargets: () => ipcRenderer.invoke("hosting:move-targets"),
   hostingMovePreview: (id) => ipcRenderer.invoke("hosting:move-preview", id),
   prefsTheme: (theme) => ipcRenderer.invoke("prefs:theme", theme),
+  prefsLanguage: (language) => ipcRenderer.invoke("prefs:language", language),
+  onLanguage: subscription("prefs:language"),
   prefsAccent: (accent) => ipcRenderer.invoke("prefs:accent", accent),
   prefsSameAccent: (on, showing) => ipcRenderer.invoke("prefs:same-accent", on, showing),
+  prefsNotch: (on) => ipcRenderer.invoke("prefs:notch", on),
+  // the island in the notch (electron/notch.mjs)
+  notchHover: (over) => ipcRenderer.invoke("notch:hover", over),
+  notchOpen: (target) => ipcRenderer.invoke("notch:open", target),
+  notchGeometry: () => ipcRenderer.invoke("notch:geometry"),
+  onNotchGeometry: subscription("notch:geometry"),
   /** What a banner clicked before this page loaded was about. */
   pendingNotifyTarget: () => ipcRenderer.invoke("notify:pending"),
 
@@ -127,6 +142,13 @@ contextBridge.exposeInMainWorld("bloks", {
   quickOpenMain: () => ipcRenderer.invoke("quick:open-main"),
   // an agent's terminal in a window of its own (electron/terminal-window.mjs)
   terminalWindow: (botId) => ipcRenderer.invoke("terminal:window", botId),
+  // the Bloks browser beside the chat (electron/app-browser.mjs): where
+  // its panel is, what the person does in it, and what it is showing
+  browserState: () => ipcRenderer.invoke("browser:state"),
+  browserBounds: (rect) => ipcRenderer.invoke("browser:bounds", rect),
+  browserDo: (action, arg) => ipcRenderer.invoke("browser:do", action, arg),
+  onBrowserState: subscription("browser:state"),
+  onBrowserReveal: subscription("browser:reveal"),
   onQuickOpened: subscription("quick:opened"),
   onNotifyActivate: subscription("notify:activate"),
   // bloks:// links from the website (electron/main.mjs)

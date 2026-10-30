@@ -15,6 +15,7 @@ import { useStore } from "@/state/store";
 import { cycle, prune, sameView, visit, type Viewed } from "@/lib/recent";
 import { AgentAvatar } from "./Avatar";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 /** How long a conversation has to stay on screen to count as seen.
  * Passing through on the way somewhere is not a visit: ⌥↓ held down, or
@@ -69,7 +70,7 @@ export function Switcher({ shown }: { shown: Viewed | null }) {
       const { bots, bloks } = live.current.state;
       if (bloks.some((room) => room.id === v.id)) return true;
       const bot = bots.find((b) => b.id === v.id && !b.hidden);
-      return Boolean(bot && (!v.lane || !bot.tasks || bot.tasks.some((t) => t.id === v.lane)));
+      return Boolean(bot && (!v.lane || !bot.tasks || bot.tasks.some((task) => task.id === v.lane)));
     };
 
     const open = (to: Viewed) => {
@@ -151,14 +152,14 @@ export function Switcher({ shown }: { shown: Viewed | null }) {
     <div className="pointer-events-none fixed inset-0 z-50 flex items-start justify-center pt-[14vh]">
       <div
         role="listbox"
-        aria-label="Recent conversations"
+        aria-label={t("switcher.recentConversations")}
         className="w-[340px] max-w-[92vw] rounded-2xl border bg-popover p-1.5 shadow-2xl"
       >
         {choosing.list.map((v, index) => {
           const room = state.bloks.find((r) => r.id === v.id);
           const bot = room ? undefined : state.bots.find((b) => b.id === v.id);
           // which conversation, once the agent has more than one
-          const lane = bot && (bot.tasks?.length ?? 0) > 1 ? bot.tasks?.find((t) => t.id === v.lane)?.title : undefined;
+          const lane = bot && (bot.tasks?.length ?? 0) > 1 ? bot.tasks?.find((task) => task.id === v.lane)?.title : undefined;
           const active = index === choosing.at;
           return (
             <div

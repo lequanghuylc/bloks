@@ -20,6 +20,7 @@ import { InlineMarkdown } from "./Markdown";
 import { TableScroll } from "./TableScroll";
 import { useRef, useState } from "react";
 import { api, useStore, type Message } from "@/state/store";
+import { formatNumber, t } from "@/lib/i18n";
 
 interface Bar {
   label: string;
@@ -83,7 +84,7 @@ export function MessageComponent({ message, threadId }: { message: Message; thre
       });
       dispatch({ type: "messagePatched", threadId, message: result.message });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send your answer.");
+      setError(e instanceof Error ? e.message : t("gallery.couldntSendAnswer"));
     } finally {
       sending.current = false;
       setPending(false);
@@ -152,7 +153,7 @@ function Chart({ component }: { component: Extract<Component, { kind: "chart" }>
                 style={{ width: width(bar.value) }}
               />
               <span className="shrink-0 text-small tabular-nums text-foreground">
-                {bar.value.toLocaleString()}
+                {formatNumber(bar.value)}
               </span>
             </span>
           </div>
@@ -237,7 +238,7 @@ function Decision({ component, onChoose, chosen, pending }: {
             <span className="min-w-0 flex-1">
               <span className="block break-words text-body text-foreground [overflow-wrap:anywhere]">
                 {option.label}
-                {option.pick && <span className="ml-2 text-caption text-brand-ink">Recommended</span>}
+                {option.pick && <span className="ml-2 text-caption text-brand-ink">{t("gallery.recommended")}</span>}
               </span>
               {option.detail && (
                 <span className="mt-0.5 block break-words text-small leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">

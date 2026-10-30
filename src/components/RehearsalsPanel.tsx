@@ -13,9 +13,9 @@ import { api, useStore, type Message } from "@/state/store";
 import { AgentAvatar } from "./Avatar";
 import { ChangesCard } from "./ChangesCard";
 import { cn } from "@/lib/cn";
-import { plural } from "@/lib/plural";
 import { Button } from "@/components/ui/button";
 import { EmptyState, PanelHeader, SkeletonRows } from "./OverviewParts";
+import { formatDate, t, type MessageKey } from "@/lib/i18n";
 
 interface Attempt {
   id: string;
@@ -30,13 +30,13 @@ interface Attempt {
   changes: Message["changes"] | null;
 }
 
-const STATE: Record<Attempt["state"], string> = {
-  running: "Rehearsing",
-  ready: "Ready to review",
-  empty: "Changed nothing",
-  applied: "Applied",
-  discarded: "Discarded",
-  failed: "Did not finish",
+const STATE: Record<Attempt["state"], MessageKey> = {
+  running: "rehearsalsPanel.state.running",
+  ready: "rehearsalsPanel.state.ready",
+  empty: "rehearsalsPanel.state.empty",
+  applied: "rehearsalsPanel.state.applied",
+  discarded: "rehearsalsPanel.state.discarded",
+  failed: "rehearsalsPanel.state.failed",
 };
 
 export function RehearsalsPanel() {
@@ -68,29 +68,29 @@ export function RehearsalsPanel() {
   const last = state.bots.find((b) => b.id === state.selectedId && !b.hidden) ?? state.bots.find((b) => !b.hidden);
 
   return (
-    <section aria-label="Rehearsals" className="flex min-w-0 flex-col">
+    <section aria-label={t("rehearsalsPanel.rehearsals")} className="flex min-w-0 flex-col">
       <PanelHeader
         icon={<FlaskConical size={17} />}
-        title="Rehearsals"
-        hint="Work done on a copy, ready to review. Applying one discards the rest."
+        title={t("rehearsalsPanel.rehearsals")}
+        hint={t("rehearsalsPanel.workDoneOnACopy")}
       />
 
       <div className="mt-5">
         {error && <div className="mb-3 rounded-xl bg-destructive/10 px-3 py-2 text-body text-destructive">{error}</div>}
         {attempts === null ? (
-          error ? null : <SkeletonRows rows={2} label="Loading rehearsals" />
+          error ? null : <SkeletonRows rows={2} label={t("rehearsalsPanel.loadingRehearsals")} />
         ) : groups.length === 0 ? (
           <EmptyState
             action={
               last && (
                 <Button variant="secondary" size="sm" onClick={() => dispatch({ type: "select", id: last.id })}>
                   <MessageSquare size={13} />
-                  Open {last.name}
+                  {t("rehearsalsPanel.openAgent", { name: last.name })}
                 </Button>
               )
             }
           >
-            Nothing rehearsed yet. Press the flask in any chat to try a task on a copy first.
+            {t("rehearsalsPanel.nothingRehearsedYetPressThe")}
           </EmptyState>
         ) : (
           <div className="flex flex-col gap-6">
@@ -102,14 +102,14 @@ export function RehearsalsPanel() {
                     <div className="min-w-0">
                       <div className="line-clamp-2 text-ui font-medium text-foreground">{first.text}</div>
                       <div className="mt-0.5 truncate text-small text-muted-foreground">
-                        {new Date(first.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                        {formatDate(first.at, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                         {" · "}
                         <span className="font-mono">{first.dir}</span>
                       </div>
                     </div>
                     {group.length > 1 && (
                       <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-caption text-muted-foreground">
-                        {plural(group.length, "attempt")}
+                        {t("rehearsalsPanel.attempts", { count: group.length })}
                       </span>
                     )}
                   </div>
@@ -121,7 +121,7 @@ export function RehearsalsPanel() {
                           <div className="flex items-center gap-2">
                             {agent && <AgentAvatar bot={agent} size={22} />}
                             <span className="min-w-0 flex-1 truncate text-body font-semibold text-foreground">
-                              {agent?.name ?? "An agent"}
+                              {agent?.name ?? t("common.anAgent")}
                             </span>
                             <span
                               className={cn(
@@ -130,7 +130,7 @@ export function RehearsalsPanel() {
                               )}
                             >
                               {a.state === "running" && <Loader2 size={10} className="animate-spin" />}
-                              {STATE[a.state]}
+                              {t(STATE[a.state])}
                             </span>
                           </div>
                           {a.changes && (
@@ -146,7 +146,7 @@ export function RehearsalsPanel() {
                             className="mt-auto flex items-center gap-1.5 self-start rounded-lg px-1.5 py-1 text-small text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                           >
                             <MessageSquare size={13} />
-                            Open chat
+                            {t("rehearsalsPanel.openChat")}
                           </button>
                         </div>
                       );

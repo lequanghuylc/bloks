@@ -40,11 +40,10 @@ import { api, useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { shortTokens } from "@/lib/contextCard";
 import {
-  ACCOUNT_WIDE,
   BLOKS_AI_ENGINE,
   METRICS,
-  PRICES_NOTE,
   RANGES,
+  accountWide,
   deltaLine,
   figure,
   figureOf,
@@ -55,6 +54,7 @@ import {
   planTitle,
   planUses,
   planWithoutPrice,
+  pricesNote,
   readView,
   saveView,
   seePlanTitle,
@@ -71,6 +71,7 @@ import {
 } from "@/lib/usagePage";
 import { ChartLegend, UsageChart, type ChartLine } from "./usage/UsageChart";
 import { PLANS_ID, PlanLine, UsageLimits, usePlanUsage } from "./usage/UsageLimits";
+import { formatNumber, t, useLanguage } from "@/lib/i18n";
 
 /** Engines drawn as lines over the total: as many as there are series
  * colours after the brand's own, which the total wears. */
@@ -88,13 +89,15 @@ const arrive = (order: number) => ({
  * still named by its id rather than dropped: its turns happened. */
 function useNames() {
   const { state } = useStore();
+  // the fallbacks are words, so a change of language makes new ones
+  const language = useLanguage();
   return useMemo(() => {
     const engine = (id: string) =>
       state.instances.find((i) => i.instanceId === id)?.displayName ?? (id === BLOKS_AI_ENGINE ? "Bloks AI" : id);
     const kind = (id: string) => state.instances.find((i) => i.instanceId === id)?.driverKind ?? id;
-    const agent = (id: string) => state.bots.find((b) => b.id === id)?.name ?? "A removed agent";
+    const agent = (id: string) => state.bots.find((b) => b.id === id)?.name ?? t("usagePage.removedAgent");
     return { engine, kind, agent };
-  }, [state.instances, state.bots]);
+  }, [state.instances, state.bots, language]);
 }
 
 /** The report for the view, kept while the next one is asked for, so a
@@ -145,7 +148,7 @@ function Menu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" aria-label={`${label}: ${chosen.label}`} className="h-8 max-w-[200px] gap-1.5 px-2.5 font-normal text-foreground">
+        <Button variant="outline" size="sm" aria-label={t("usagePage.menuLabel", { label, chosen: chosen.label })} className="h-8 max-w-[200px] gap-1.5 px-2.5 font-normal text-foreground">
           {icon ?? chosen.icon}
           <span className="min-w-0 truncate">{chosen.label}</span>
           <ChevronDown size={13} className="text-muted-foreground" />
@@ -194,11 +197,11 @@ function Controls({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Menu
-        label="Agent"
+        label={t("common.agent")}
         value={view.bot ?? ALL}
         onChange={(v) => set({ bot: v === ALL ? null : v })}
         options={[
-          { value: ALL, label: "All agents" },
+          { value: ALL, label: t("usagePage.allAgents") },
           ...agents
             .map((id) => ({
               value: id,
@@ -209,11 +212,11 @@ function Controls({
         ]}
       />
       <Menu
-        label="Engine"
+        label={t("common.engine")}
         value={view.engine ?? ALL}
         onChange={(v) => set({ engine: v === ALL ? null : v })}
         options={[
-          { value: ALL, label: "All engines" },
+          { value: ALL, label: t("usagePage.allEngines") },
           ...engines
             .map((id) => ({ value: id, label: names.engine(id), icon: <ProviderMark driverKind={names.kind(id)} size={14} /> }))
             .sort((a, b) => a.label.localeCompare(b.label)),
@@ -221,13 +224,13 @@ function Controls({
       />
       <Segmented
         size="sm"
-        aria-label="Measure"
+        aria-label={t("usagePage.measure")}
         value={view.metric}
-        options={METRICS}
+        options={METRICS.map((m) => ({ value: m.value, label: t(m.label) }))}
         onChange={(metric) => set({ metric })}
       />
-      <Menu label="Span" value={view.range} onChange={(v) => set({ range: v as UsageView["range"] })} options={RANGES} />
-      <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" onClick={onRefresh} className="size-8">
+      <Menu label={t("usagePage.span")} value={view.range} onChange={(v) => set({ range: v as UsageView["range"] })} options={RANGES.map((r) => ({ value: r.value, label: t(r.label) }))} />
+      <Button variant="ghost" size="icon" aria-label={t("usagePage.refresh")} title={t("usagePage.refresh")} onClick={onRefresh} className="size-8">
         <RefreshCw size={15} className={cn(loading && "animate-spin motion-reduce:animate-none")} />
       </Button>
     </div>
@@ -237,7 +240,7 @@ function Controls({
 // ── the headline ───────────────────────────────────────────────────────
 
 function spanWords(view: Pick<UsageView, "range">, days: number): string {
-  return view.range === "month" ? "this month" : `the last ${days} days`;
+  return view.range === "month" ? t("usagePage.thisMonth") : t("usagePage.lastDays", { count: days });
 }
 
 function Headline({ report, view, onMetric }: { report: UsageReport; view: UsageView; onMetric: (metric: UsageView["metric"]) => void }) {
@@ -246,19 +249,17 @@ function Headline({ report, view, onMetric }: { report: UsageReport; view: Usage
   const value = valueOf(report.total, metric);
   const delta = unpriced ? null : deltaLine(value, valueOf(report.previous, metric), report.days);
   const estimated = metric === "cost" && isEstimate(report.total);
-  const label = METRICS.find((m) => m.value === metric)!.label;
+  const label = t(METRICS.find((m) => m.value === metric)!.label);
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-body text-muted-foreground">
-        {label}, {spanWords(view, report.days)}
-      </p>
+      <p className="text-body text-muted-foreground">{t("usagePage.metricInSpan", { metric: label, span: spanWords(view, report.days) })}</p>
       {unpriced ? (
         <>
-          <p className="text-balance text-heading font-semibold text-foreground">No price reported</p>
+          <p className="text-balance text-heading font-semibold text-foreground">{t("usagePage.noPriceReported")}</p>
           <p className="max-w-[60ch] text-pretty text-body text-muted-foreground">
-            The engines in view report tokens, not prices, so there is no honest dollar figure to show.{" "}
+            {t("usagePage.noHonestFigure")}{" "}
             <button type="button" onClick={() => onMetric("tokens")} className="font-medium text-foreground underline underline-offset-2">
-              Show tokens
+              {t("usagePage.showTokens")}
             </button>
           </p>
         </>
@@ -266,7 +267,7 @@ function Headline({ report, view, onMetric }: { report: UsageReport; view: Usage
         <>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <p className="text-[40px] font-semibold leading-[44px] tabular-nums text-foreground">{figure(value, metric, estimated)}</p>
-            {metric === "tokens" && <span className="text-ui text-muted-foreground">tokens</span>}
+            {metric === "tokens" && <span className="text-ui text-muted-foreground">{t("usagePage.tokens")}</span>}
             {delta && (
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-small tabular-nums text-muted-foreground">
                 {delta.direction === "up" ? <ArrowUp size={12} /> : delta.direction === "down" ? <ArrowDown size={12} /> : null}
@@ -275,7 +276,7 @@ function Headline({ report, view, onMetric }: { report: UsageReport; view: Usage
             )}
           </div>
           <p className="text-pretty text-small tabular-nums text-muted-foreground">{headlineNotes(report, metric).join(" · ")}</p>
-          {estimated && <p className="text-pretty text-small text-muted-foreground">{PRICES_NOTE}</p>}
+          {estimated && <p className="text-pretty text-small text-muted-foreground">{pricesNote()}</p>}
         </>
       )}
     </div>
@@ -304,34 +305,34 @@ function PlanUseCard({
 }) {
   const names = useNames();
   const name = names.engine(use.id);
-  const here = view.bot ? `${name}, for ${names.agent(view.bot)}` : `${name}, in this workspace`;
+  const here = view.bot ? t("usagePage.engineForAgent", { engine: name, agent: names.agent(view.bot) }) : t("usagePage.engineInWorkspace", { engine: name });
   return (
-    <section aria-label={`${name} on a plan`} className="grid grid-cols-1 gap-4 rounded-xl border p-4 sm:grid-cols-2 sm:gap-6">
+    <section aria-label={t("usagePage.engineOnPlan", { engine: name })} className="grid grid-cols-1 gap-4 rounded-xl border p-4 sm:grid-cols-2 sm:gap-6">
       <div className="flex min-w-0 flex-col gap-1">
         <p className="flex min-w-0 items-center gap-2 text-small text-muted-foreground">
           <ProviderMark driverKind={names.kind(use.id)} size={13} />
           <span className="min-w-0 truncate">{here}</span>
         </p>
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <span className="text-title font-semibold tabular-nums text-foreground" title={use.tokens.toLocaleString("en-US")}>
+          <span className="text-title font-semibold tabular-nums text-foreground" title={formatNumber(use.tokens)}>
             {shortTokens(use.tokens)}
           </span>
-          <span className="text-ui text-muted-foreground">tokens</span>
+          <span className="text-ui text-muted-foreground">{t("usagePage.tokens")}</span>
         </p>
         <p className="text-small tabular-nums text-muted-foreground">
-          {turnsText(use.turns)}, {spanWords(view, days)}
+          {t("usagePage.turnsInSpan", { turns: turnsText(use.turns), span: spanWords(view, days) })}
         </p>
       </div>
       <div className="flex min-w-0 flex-col gap-3">
         <p className="text-small text-muted-foreground">{planTitle(use.plan)}</p>
         {reading ? (
-          <p className="text-small text-muted-foreground">Reading...</p>
+          <p className="text-small text-muted-foreground">{t("usagePage.reading")}</p>
         ) : use.windows.length ? (
           <>
             {use.windows.map((row) => (
               <PlanLine key={row.id} row={row} />
             ))}
-            <p className="text-pretty text-small text-muted-foreground">{ACCOUNT_WIDE}</p>
+            <p className="text-pretty text-small text-muted-foreground">{accountWide()}</p>
           </>
         ) : (
           <p className="text-pretty text-body text-foreground">{noPlanReading(name)}</p>
@@ -341,7 +342,7 @@ function PlanUseCard({
           onClick={onPlans}
           className="self-start text-small font-medium text-foreground underline underline-offset-2"
         >
-          See Plans in Limits
+          {t("usagePage.seePlansInLimits")}
         </button>
       </div>
     </section>
@@ -349,12 +350,12 @@ function PlanUseCard({
 }
 
 function Totals({ report }: { report: UsageReport }) {
-  const t = report.total;
+  const total = report.total;
   const items = [
-    { label: "Input tokens", value: shortTokens(t.input), title: t.input.toLocaleString("en-US") },
-    { label: "Output tokens", value: shortTokens(t.output), title: t.output.toLocaleString("en-US") },
-    { label: "All tokens", value: shortTokens(t.input + t.output), title: (t.input + t.output).toLocaleString("en-US") },
-    { label: "Turns", value: t.turns.toLocaleString("en-US"), title: undefined },
+    { label: t("usagePage.inputTokens"), value: shortTokens(total.input), title: formatNumber(total.input) },
+    { label: t("usagePage.outputTokens"), value: shortTokens(total.output), title: formatNumber(total.output) },
+    { label: t("usagePage.allTokens"), value: shortTokens(total.input + total.output), title: formatNumber(total.input + total.output) },
+    { label: t("libUsagePage.metric.turns"), value: formatNumber(total.turns), title: undefined },
   ];
   return (
     <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-4">
@@ -413,7 +414,7 @@ function HeaderCell({
 
 /** Where a cost would be for Bloks AI, or for an engine on a plan, which
  * have none: a way to what each has left instead, in Limits. */
-function ToLimits({ label, onLimits, title = "See what Bloks AI has left, in Limits" }: { label: string; onLimits: () => void; title?: string }) {
+function ToLimits({ label, onLimits, title = t("usagePage.seeBloksAiLeft") }: { label: string; onLimits: () => void; title?: string }) {
   return (
     <button
       type="button"
@@ -442,6 +443,8 @@ function Breakdown({
   const { state } = useStore();
   const names = useNames();
   const [sort, setSort] = useState<{ key: SortKey; descending: boolean }>({ key: "value", descending: true });
+  // the day tab's names are dates, written in the reader's language
+  const language = useLanguage();
   const metric = view.metric;
   const tab = view.tab;
 
@@ -473,17 +476,17 @@ function Breakdown({
     return report.daily
       .filter((d) => d.turns > 0)
       .map((d) => ({ ...d, id: d.date, name: longDay(d.date), priced: d.cost > 0 }));
-  }, [tab, report, names, state.bots, view.bot, view.engine, set]);
+  }, [tab, report, names, state.bots, view.bot, view.engine, set, language]);
 
   // a day's name is a date, which sorts by its id rather than its words
   const sorted = sortRows(rows, sort.key, sort.descending, metric, (r) => (tab === "day" ? r.id : r.name));
   const whole = rows.reduce((sum, r) => sum + (metric === "cost" && (!r.priced || r.bloksAi) ? 0 : valueOf(r, metric)), 0);
   const onSort = (next: SortKey) =>
     setSort((was) => (was.key === next ? { key: next, descending: !was.descending } : { key: next, descending: next !== "name" }));
-  const fourth = metric === "tokens" ? "Turns" : "Tokens";
+  const fourth = metric === "tokens" ? t("libUsagePage.metric.turns") : t("libUsagePage.metric.tokens");
 
   const valueCell = (row: Line) => {
-    if (metric === "cost" && row.bloksAi) return <ToLimits label="In Limits" onLimits={onLimits} />;
+    if (metric === "cost" && row.bloksAi) return <ToLimits label={t("usagePage.inLimits")} onLimits={onLimits} />;
     // an agent that only ever ran on Bloks AI had nothing to report: it
     // runs on an allowance, which Limits shows
     if (metric === "cost" && !row.priced && row.turns > 0 && row.bloksAiTurns === row.turns) {
@@ -493,9 +496,9 @@ function Breakdown({
     // page is narrowed to it: what the plan has left is in Limits
     const plan = tab === "engine" ? row.id : view.engine;
     if (metric === "cost" && !row.priced && row.turns > 0 && plan && planWithoutPrice(names.kind(plan))) {
-      return <ToLimits label="See plan" title={seePlanTitle(names.engine(plan))} onLimits={onPlans} />;
+      return <ToLimits label={t("usagePage.seePlan")} title={seePlanTitle(names.engine(plan))} onLimits={onPlans} />;
     }
-    if (metric === "cost" && !row.priced) return <span className="text-muted-foreground">Not reported</span>;
+    if (metric === "cost" && !row.priced) return <span className="text-muted-foreground">{t("usagePage.notReported")}</span>;
     return figureOf(row, metric);
   };
   const shareOf = (row: Line) => (metric === "cost" && (!row.priced || row.bloksAi) ? 0 : valueOf(row, metric));
@@ -504,30 +507,30 @@ function Breakdown({
     <section aria-labelledby="usage-breakdown" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 id="usage-breakdown" className="text-lead font-semibold text-foreground">
-          Breakdown
+          {t("usagePage.breakdown")}
         </h2>
         <Segmented
           size="sm"
-          aria-label="Break down by"
+          aria-label={t("usagePage.breakDownBy")}
           value={tab}
           onChange={(next: BreakdownTab) => set({ tab: next })}
           options={[
-            { value: "agent", label: "Agent" },
-            { value: "engine", label: "Engine" },
-            { value: "day", label: "Day" },
+            { value: "agent", label: t("common.agent") },
+            { value: "engine", label: t("common.engine") },
+            { value: "day", label: t("usagePage.day") },
           ]}
         />
       </div>
       {sorted.length === 0 ? (
-        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-body text-muted-foreground">Nothing in this span.</p>
+        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-body text-muted-foreground">{t("usagePage.nothingInThisSpan")}</p>
       ) : (
         <div className="overflow-hidden rounded-xl border">
           <table className="w-full table-fixed text-body">
             <thead className="border-b bg-muted/40">
               <tr className="text-left">
-                <HeaderCell label={tab === "day" ? "Day" : tab === "agent" ? "Agent" : "Engine"} sortKey="name" sort={sort} onSort={onSort} className="pl-2.5" />
-                <HeaderCell label={METRICS.find((m) => m.value === metric)!.label} sortKey="value" sort={sort} onSort={onSort} className="w-[30%] text-right sm:w-[22%]" />
-                <HeaderCell label="Share" sortKey="share" sort={sort} onSort={onSort} className="hidden w-[24%] pl-3 sm:table-cell" />
+                <HeaderCell label={tab === "day" ? t("usagePage.day") : tab === "agent" ? t("common.agent") : t("common.engine")} sortKey="name" sort={sort} onSort={onSort} className="pl-2.5" />
+                <HeaderCell label={t(METRICS.find((m) => m.value === metric)!.label)} sortKey="value" sort={sort} onSort={onSort} className="w-[30%] text-right sm:w-[22%]" />
+                <HeaderCell label={t("usagePage.share")} sortKey="share" sort={sort} onSort={onSort} className="hidden w-[24%] pl-3 sm:table-cell" />
                 <HeaderCell label={fourth} sortKey="tokens" sort={sort} onSort={onSort} className="w-[22%] pr-2.5 text-right sm:w-[14%]" />
               </tr>
             </thead>
@@ -547,7 +550,7 @@ function Breakdown({
                         <button
                           type="button"
                           onClick={row.pick}
-                          title={`Show only ${row.name}`}
+                          title={t("usagePage.showOnly", { name: row.name })}
                           className="-mx-1.5 -my-1 flex w-[calc(100%+12px)] min-w-0 rounded-md px-1.5 py-1 text-left"
                         >
                           {name}
@@ -572,7 +575,7 @@ function Breakdown({
                       )}
                     </td>
                     <td className="py-2 pl-2 pr-4 text-right tabular-nums text-muted-foreground">
-                      {metric === "tokens" ? row.turns.toLocaleString("en-US") : shortTokens(row.input + row.output)}
+                      {metric === "tokens" ? formatNumber(row.turns) : shortTokens(row.input + row.output)}
                     </td>
                   </tr>
                 );
@@ -598,13 +601,13 @@ function FilterChips({ view, set }: { view: UsageView; set: (patch: Partial<Usag
   if (!chips.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-small text-muted-foreground">Showing only</span>
+      <span className="text-small text-muted-foreground">{t("usagePage.showingOnly")}</span>
       {chips.map((chip) => (
         <button
           key={chip.key}
           type="button"
           onClick={chip.clear}
-          aria-label={`Stop showing only ${chip.label}`}
+          aria-label={t("usagePage.stopShowingOnly", { name: chip.label })}
           className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-small text-foreground transition-[background-color,transform] duration-150 ease-out hover:bg-accent/70 active:scale-[0.97]"
         >
           {chip.label}
@@ -617,7 +620,7 @@ function FilterChips({ view, set }: { view: UsageView; set: (patch: Partial<Usag
 
 function Loading() {
   return (
-    <SkeletonGroup label="Loading usage" className="flex flex-col gap-8">
+    <SkeletonGroup label={t("usagePage.loadingUsage")} className="flex flex-col gap-8">
       <div className="flex flex-col gap-2">
         <Skeleton className="h-4 w-40" />
         <Skeleton className="h-10 w-48" />
@@ -638,12 +641,14 @@ function Empty({ view }: { view: UsageView }) {
   const { dispatch } = useStore();
   return (
     <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed px-6 py-14 text-center">
-      <p className="text-lead font-semibold text-foreground">Nothing used in {view.range === "month" ? "this month" : `the last ${view.range.replace("d", "")} days`}</p>
+      <p className="text-lead font-semibold text-foreground">
+        {view.range === "month" ? t("usagePage.nothingUsedThisMonth") : t("usagePage.nothingUsedLastDays", { count: Number(view.range.replace("d", "")) })}
+      </p>
       <p className="max-w-[44ch] text-pretty text-body text-muted-foreground">
-        Every turn an agent takes is counted here, by what its engine reports. Give one something to do and it shows up.
+        {t("usagePage.everyTurnAnAgentTakes")}
       </p>
       <Button className="mt-1" onClick={() => dispatch({ type: "openPage", page: null })}>
-        Go to chat
+        {t("usagePage.goToChat")}
       </Button>
     </div>
   );
@@ -703,7 +708,6 @@ export function UsagePage() {
   );
 
   const empty = report && report.agents.length === 0;
-  const metricLabel = METRICS.find((m) => m.value === view.metric)!.label.toLowerCase();
 
   return (
     <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -711,17 +715,17 @@ export function UsagePage() {
         <div className="mx-auto w-full max-w-[1040px] px-4 pb-20 pt-9 max-md:pt-16 sm:px-6 lg:px-10">
           <motion.header {...arrive(0)} className="mb-8 flex flex-col gap-4">
             <div>
-              <h1 className="text-balance text-display font-semibold text-foreground">Usage</h1>
-              <p className="mt-1 text-pretty text-ui text-muted-foreground">What your agents used, by what each engine reports, and what is left.</p>
+              <h1 className="text-balance text-display font-semibold text-foreground">{t("usagePage.usage")}</h1>
+              <p className="mt-1 text-pretty text-ui text-muted-foreground">{t("usagePage.whatYourAgentsUsedBy")}</p>
             </div>
             <Controls view={view} set={set} report={report} loading={loading} onRefresh={refresh} />
           </motion.header>
 
           {failed && !report ? (
             <p className="rounded-xl border border-dashed px-4 py-6 text-center text-body text-muted-foreground">
-              Usage could not be read just now.{" "}
+              {t("usagePage.couldNotRead")}{" "}
               <button type="button" onClick={refresh} className="font-medium text-foreground underline underline-offset-2">
-                Try again
+                {t("common.tryAgain")}
               </button>
             </p>
           ) : !report ? (
@@ -738,12 +742,12 @@ export function UsagePage() {
                 ))}
               </div>
               <Totals report={report} />
-              <section aria-label="By day" className="flex flex-col gap-3 rounded-xl border p-4 pb-3">
+              <section aria-label={t("usagePage.byDay")} className="flex flex-col gap-3 rounded-xl border p-4 pb-3">
                 <UsageChart
                   days={report.daily}
                   metric={view.metric}
                   lines={lines}
-                  label={`Daily ${metricLabel}, ${spanWords(view, report.days)}`}
+                  label={t(`usagePage.daily.${view.metric}`, { span: spanWords(view, report.days) })}
                 />
                 {lines.length > 0 && <ChartLegend lines={lines} onPick={(engine) => set({ engine })} />}
               </section>
@@ -760,9 +764,9 @@ export function UsagePage() {
           >
             <div>
               <h2 id="usage-limits-title" className="text-lead font-semibold text-foreground">
-                Limits
+                {t("usagePage.limits")}
               </h2>
-              <p className="mt-0.5 text-pretty text-body text-muted-foreground">What each plan, allowance and key of yours has left.</p>
+              <p className="mt-0.5 text-pretty text-body text-muted-foreground">{t("usagePage.whatEachPlanAllowanceAnd")}</p>
             </div>
             <UsageLimits focusBot={view.bot} plans={plans} />
           </motion.section>

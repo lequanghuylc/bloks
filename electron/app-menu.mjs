@@ -14,75 +14,121 @@
 // rule the window keeps on Windows and Linux: they are for working on the
 // app, and an installed one has no use for them.
 //
+// The conversation tabs' keys are the exception, because a Mac lists a
+// tab's keys in its menus (GitHub 401): New Conversation ⌘T and Close
+// Conversation ⌘W under File, the window's Close moved to ⌘⇧W beside
+// them, and Previous and Next Conversation ⌘⇧[ and ⌘⇧] under Window.
+// These choices are played to the page as the keys they name
+// (src/lib/conversationKeys.ts), so the page's own rules still decide
+// what each press does, the terminal's tabs and a dialog's included,
+// whichever of the two hears the key first.
+//
 // Built by a function with no Electron in it, so a test can read the
-// template without starting the app. The roles bring their own labels and
-// keys (⌘Z, ⌘C, ⌘Q and so on), exactly as the stock menu had them.
+// template without starting the app. The roles bring their own keys (⌘Z,
+// ⌘C, ⌘Q and so on), exactly as the stock menu had them. Their labels are
+// given here, in the person's language (electron/menu-words.mjs): the
+// stock ones are English whatever the app is set to read in.
+
+/** The menu's words for the conversation tabs, carried to the window in
+ * front rather than to the workspace's (electron/main.mjs). */
+export const TAB_COMMANDS = ["newConversation", "closeConversation", "previousConversation", "nextConversation"];
 
 /**
- * @param {{ name: string; packaged: boolean; command: (word: "settings" | "shortcuts") => void }} options
- *   `command` carries a menu choice to the workspace window.
+ * @param {{ name: string; packaged: boolean; command: (word: "settings" | "shortcuts" | (typeof TAB_COMMANDS)[number]) => void; words: (key: string, params?: Record<string, string>) => string }} options
+ *   `command` carries a menu choice to the window it is for; `words`
+ *   says each label in the person's language.
  */
-export function appMenuTemplate({ name, packaged, command }) {
+export function appMenuTemplate({ name, packaged, command, words: w }) {
   return [
     {
       // macOS names this menu after the app whatever the label says
       label: name,
       submenu: [
-        { role: "about" },
+        { role: "about", label: w("menu.about", { name }) },
         { type: "separator" },
-        { label: "Settings…", accelerator: "CmdOrCtrl+,", click: () => command("settings") },
+        { label: w("menu.settings"), accelerator: "CmdOrCtrl+,", click: () => command("settings") },
         { type: "separator" },
-        { role: "services" },
+        { role: "services", label: w("menu.services") },
         { type: "separator" },
-        { role: "hide" },
-        { role: "hideOthers" },
-        { role: "unhide" },
+        { role: "hide", label: w("menu.hide", { name }) },
+        { role: "hideOthers", label: w("menu.hideOthers") },
+        { role: "unhide", label: w("menu.showAll") },
         { type: "separator" },
-        { role: "quit" },
+        { role: "quit", label: w("menu.quit", { name }) },
       ],
     },
-    { label: "File", submenu: [{ role: "close" }] },
+    {
+      label: w("menu.file"),
+      submenu: [
+        { label: w("menu.newConversation"), accelerator: "CmdOrCtrl+T", click: () => command("newConversation") },
+        { type: "separator" },
+        { label: w("menu.closeConversation"), accelerator: "CmdOrCtrl+W", click: () => command("closeConversation") },
+        // the stock ⌘W, moved aside the way a browser's Close Window is
+        { role: "close", label: w("menu.closeWindow"), accelerator: "CmdOrCtrl+Shift+W" },
+      ],
+    },
     {
       // Copy and paste in every text field live here: on a Mac the
       // keys are the menu's, and without these items they do nothing.
-      label: "Edit",
+      label: w("menu.edit"),
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        { role: "undo", label: w("menu.undo") },
+        { role: "redo", label: w("menu.redo") },
         { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "pasteAndMatchStyle" },
-        { role: "delete" },
-        { role: "selectAll" },
+        { role: "cut", label: w("menu.cut") },
+        { role: "copy", label: w("menu.copy") },
+        { role: "paste", label: w("menu.paste") },
+        { role: "pasteAndMatchStyle", label: w("menu.pasteAndMatchStyle") },
+        { role: "delete", label: w("menu.delete") },
+        { role: "selectAll", label: w("menu.selectAll") },
         { type: "separator" },
-        { label: "Speech", submenu: [{ role: "startSpeaking" }, { role: "stopSpeaking" }] },
+        {
+          label: w("menu.speech"),
+          submenu: [
+            { role: "startSpeaking", label: w("menu.startSpeaking") },
+            { role: "stopSpeaking", label: w("menu.stopSpeaking") },
+          ],
+        },
       ],
     },
     {
-      label: "View",
+      label: w("menu.view"),
       submenu: [
         ...(packaged
           ? []
-          : [{ role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" }]),
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
+          : [
+              { role: "reload", label: w("menu.reload") },
+              { role: "forceReload", label: w("menu.forceReload") },
+              { role: "toggleDevTools", label: w("menu.toggleDevTools") },
+              { type: "separator" },
+            ]),
+        { role: "resetZoom", label: w("menu.actualSize") },
+        { role: "zoomIn", label: w("menu.zoomIn") },
+        { role: "zoomOut", label: w("menu.zoomOut") },
         { type: "separator" },
-        { role: "togglefullscreen" },
+        { role: "togglefullscreen", label: w("menu.toggleFullScreen") },
       ],
     },
     {
       // the window role is what makes macOS list the open windows here
       role: "window",
-      submenu: [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }],
+      label: w("menu.window"),
+      submenu: [
+        { role: "minimize", label: w("menu.minimize") },
+        { role: "zoom", label: w("menu.zoom") },
+        { type: "separator" },
+        { label: w("menu.previousConversation"), accelerator: "CmdOrCtrl+Shift+[", click: () => command("previousConversation") },
+        { label: w("menu.nextConversation"), accelerator: "CmdOrCtrl+Shift+]", click: () => command("nextConversation") },
+        { type: "separator" },
+        { role: "front", label: w("menu.bringAllToFront") },
+      ],
     },
     {
       // No key here: ⌘/ belongs to the window, which also has to hear it
       // in a browser and on Windows and Linux, where there is no menu.
       role: "help",
-      submenu: [{ label: "Keyboard Shortcuts", click: () => command("shortcuts") }],
+      label: w("menu.help"),
+      submenu: [{ label: w("menu.keyboardShortcuts"), click: () => command("shortcuts") }],
     },
   ];
 }

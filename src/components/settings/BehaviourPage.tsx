@@ -7,7 +7,7 @@
 // what each is for: what agents carry between conversations, how a turn
 // behaves while it runs and what it leaves running after, who handles a
 // failure, and what happens to a conversation that grows long.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, useStore } from "@/state/store";
 import { DEFAULT_TURN_LIMIT, MAX_TASK_BUDGET, MAX_TURN_LIMIT, MIN_TURN_LIMIT } from "@/lib/turn-limit";
 import { DELIVERY_MODES, modeWords, type DeliveryMode } from "@/lib/deliveryModes";
@@ -18,6 +18,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { Slider, numberStops } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { SettingRow, SettingsGroup, SettingsSelect } from "../SettingsLayout";
+import { inEnglish, t } from "@/lib/i18n";
 
 /**
  * How a long conversation is kept inside the model's window.
@@ -42,10 +43,10 @@ function Compaction() {
 
   return (
     <SettingRow
-      label="Summarise as you go"
-      info="Long chats get summarised to keep fitting. Off: all at once when full, with a short pause. On: a little after each reply, so no pause, but the provider can't reuse its cache, which costs more on some. Your own messages are never summarised."
-      description="Summarise a little after each reply, not all at once."
-      control={<Switch aria-label="Summarise as you go" checked={on} disabled={saving} onCheckedChange={set} />}
+      label={t("behaviourPage.summariseAsYouGo")}
+      info={t("behaviourPage.longChatsGetSummarisedTo")}
+      description={t("behaviourPage.summariseALittleAfterEach")}
+      control={<Switch aria-label={t("behaviourPage.summariseAsYouGo")} checked={on} disabled={saving} onCheckedChange={set} />}
     />
   );
 }
@@ -70,21 +71,21 @@ function IdleCompaction() {
 
   return (
     <SettingRow
-      label="Compact while idle"
-      info="Claude Code keeps a chat cached for an hour. The first message after that re-sends the whole chat, which costs the most. With this on, a Claude Code chat over 100k tokens that has been quiet for 55 minutes is compacted while still cached. Some detail is lost, and the chat marks where."
-      description="Compact long Claude Code chats before their cache expires."
-      control={<Switch aria-label="Compact while idle" checked={on} disabled={saving} onCheckedChange={set} />}
+      label={t("behaviourPage.compactWhileIdle")}
+      info={t("behaviourPage.claudeCodeKeepsAChat")}
+      description={t("behaviourPage.compactLongClaudeCodeChats")}
+      control={<Switch aria-label={t("behaviourPage.compactWhileIdle")} checked={on} disabled={saving} onCheckedChange={set} />}
     />
   );
 }
 
 // smallest to largest, with Never as the far end of "later": a slider
 // reads left to right as sooner to never
-const BEFORE_TURN_CEILINGS = [
+const beforeTurnCeilings = () => [
   { value: "100000", label: "100k" },
   { value: "200000", label: "200k" },
   { value: "400000", label: "400k" },
-  { value: "0", label: "Never" },
+  { value: "0", label: t("behaviourPage.never") },
 ];
 
 function SharedChanges() {
@@ -102,9 +103,9 @@ function SharedChanges() {
 
   return (
     <SettingRow
-      label="Show other changed files"
-      description="Also show files that changed while an agent was working, not only its own."
-      control={<Switch aria-label="Show other changed files" checked={on} disabled={saving} onCheckedChange={set} />}
+      label={t("behaviourPage.showOtherChangedFiles")}
+      description={t("behaviourPage.alsoShowFilesThatChanged")}
+      control={<Switch aria-label={t("behaviourPage.showOtherChangedFiles")} checked={on} disabled={saving} onCheckedChange={set} />}
     />
   );
 }
@@ -120,6 +121,7 @@ function BeforeTurnCompaction() {
   const { state, dispatch } = useStore();
   const ceiling = String(state.config?.compaction?.beforeTurn ?? 200_000);
   const [saving, setSaving] = useState(false);
+  const ceilings = beforeTurnCeilings();
 
   const set = (next: string) => {
     setSaving(true);
@@ -131,16 +133,16 @@ function BeforeTurnCompaction() {
 
   return (
     <SettingRow
-      label="Compact long chats"
-      info="Claude Code, Codex and Pi re-send the whole chat with every tool call, so one reply in a long chat can use millions of tokens. Past this size, or 60% of the model's limit, the chat is compacted before your next message. The chat marks where."
-      description="For Claude Code, Codex and Pi. Compact before the next message once a chat reaches this size."
+      label={t("behaviourPage.compactLongChats")}
+      info={t("behaviourPage.claudeCodeCodexAndPi")}
+      description={t("behaviourPage.forClaudeCodeCodexAnd")}
     >
       <div className="mt-3">
         <Slider
-          aria-label="Compact long chats"
+          aria-label={t("behaviourPage.compactLongChats")}
           className="max-w-[420px]"
-          stops={BEFORE_TURN_CEILINGS}
-          value={BEFORE_TURN_CEILINGS.some((o) => o.value === ceiling) ? ceiling : "200000"}
+          stops={ceilings}
+          value={ceilings.some((o) => o.value === ceiling) ? ceiling : "200000"}
           onCommit={(next) => !saving && set(next)}
         />
       </div>
@@ -148,12 +150,12 @@ function BeforeTurnCompaction() {
   );
 }
 
-const SILENT_CALL_LIMITS = [
-  { value: "5", label: "5 min" },
-  { value: "15", label: "15 min" },
-  { value: "30", label: "30 min" },
-  { value: "60", label: "1 hour" },
-  { value: "0", label: "Never" },
+const silentCallLimits = () => [
+  { value: "5", label: t("behaviourPage.minutesShort", { count: 5 }) },
+  { value: "15", label: t("behaviourPage.minutesShort", { count: 15 }) },
+  { value: "30", label: t("behaviourPage.minutesShort", { count: 30 }) },
+  { value: "60", label: t("behaviourPage.hours", { count: 1 }) },
+  { value: "0", label: t("behaviourPage.never") },
 ];
 
 /**
@@ -166,6 +168,7 @@ function SilentCallLimit() {
   const { state, dispatch } = useStore();
   const minutes = String(state.config?.turns?.stallMinutes ?? 15);
   const [saving, setSaving] = useState(false);
+  const limits = silentCallLimits();
 
   const set = (next: string) => {
     setSaving(true);
@@ -177,16 +180,16 @@ function SilentCallLimit() {
 
   return (
     <SettingRow
-      label="Stop stuck tool calls"
-      info="Sometimes a command waits on something that never answers. After this long with no progress, Bloks stops the reply and tells you and the agent which call it was. Thinking, writing and commands that keep reporting are never cut short. Time waiting on your approval doesn't count."
-      description="Stop when one call makes no progress for this long."
+      label={t("behaviourPage.stopStuckToolCalls")}
+      info={t("behaviourPage.sometimesACommandWaitsOn")}
+      description={t("behaviourPage.stopWhenOneCallMakes")}
     >
       <div className="mt-3">
         <Slider
-          aria-label="Stop stuck tool calls"
+          aria-label={t("behaviourPage.stopStuckToolCalls")}
           className="max-w-[420px]"
-          stops={SILENT_CALL_LIMITS}
-          value={SILENT_CALL_LIMITS.some((o) => o.value === minutes) ? minutes : "15"}
+          stops={limits}
+          value={limits.some((o) => o.value === minutes) ? minutes : "15"}
           onCommit={(next) => !saving && set(next)}
         />
       </div>
@@ -204,26 +207,49 @@ function SilentCallLimit() {
  */
 function ProposeSkills() {
   const { state, dispatch } = useStore();
-  const on = state.config?.skills?.propose ?? false;
+  const learn: SkillLearning = state.config?.skills?.learn ?? (state.config?.skills?.propose ? "suggest" : "off");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
-  const set = (propose: boolean) => {
+  const set = (next: SkillLearning) => {
     setSaving(true);
-    api("/api/config", { method: "PUT", body: JSON.stringify({ skills: { propose } }) })
+    setError("");
+    api("/api/config", { method: "PUT", body: JSON.stringify({ skills: { learn: next } }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch(() => {})
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveThat")))
       .finally(() => setSaving(false));
   };
+  const options = skillLearning();
 
   return (
     <SettingRow
-      label="Suggest skills"
-      info="Nothing installs on its own. Suggestions wait in Skills, ready to keep with one press. Each check costs one small call on your own key, so this starts off."
-      description="After a chat that worked something out, suggest it as a skill."
-      control={<Switch aria-label="Suggest skills" checked={on} disabled={saving} onCheckedChange={set} />}
-    />
+      label={t("behaviourPage.suggestSkills")}
+      info={t("behaviourPage.nothingChangesOnItsOwn")}
+      description={options.find((o) => o.value === learn)?.says}
+      error={error}
+    >
+      <div className="mt-3 max-w-[460px]">
+        <Segmented<SkillLearning>
+          aria-label={t("behaviourPage.suggestSkills")}
+          size="sm"
+          value={learn}
+          onChange={(next) => !saving && next !== learn && set(next)}
+          options={options.map((o) => ({ value: o.value, label: o.label }))}
+        />
+      </div>
+    </SettingRow>
   );
 }
+
+type SkillLearning = "off" | "suggest" | "more";
+
+/** The three settings, and what each costs. The ceilings are the
+ * server's DAILY_REVIEWS (server/proposals.ts). */
+const skillLearning = (): Array<{ value: SkillLearning; label: string; says: string }> => [
+  { value: "off", label: t("common.off"), says: t("behaviourPage.learn.offSays") },
+  { value: "suggest", label: t("behaviourPage.learn.suggest"), says: t("behaviourPage.learn.suggestSays", { count: 20 }) },
+  { value: "more", label: t("behaviourPage.learn.more"), says: t("behaviourPage.learn.moreSays", { count: 60 }) },
+];
 
 /**
  * How many turns in a row agents may start in one another before the
@@ -241,20 +267,20 @@ function AgentTurnLimit() {
     setError("");
     api("/api/config", { method: "PUT", body: JSON.stringify({ agents: { turnLimit: value } }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn't save the limit."))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveLimit")))
       .finally(() => setSaving(false));
   };
   return (
     <SettingRow
-      label="Agent-to-agent limit"
-      description="Agents stop after this many replies to each other, so they can't use up your plan on their own. Your next message resets the count."
+      label={t("behaviourPage.agentToAgentLimit")}
+      description={t("behaviourPage.agentsStopAfterThisMany")}
       error={error}
     >
       <div className="mt-3">
         <Slider
-          aria-label="Most agent replies in a row"
+          aria-label={t("behaviourPage.mostAgentRepliesInA")}
           className="max-w-[460px]"
-          stops={TURN_LIMIT_STOPS}
+          stops={turnLimitStops()}
           value={stored}
           onCommit={(value) => !saving && save(value)}
         />
@@ -282,7 +308,7 @@ function TaskBudget() {
     setError("");
     api("/api/config", { method: "PUT", body: JSON.stringify({ agents: { taskBudget } }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn't save the budget."))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveBudget")))
       .finally(() => setSaving(false));
   };
   // only numbers past the limit mean anything, and the one chosen stays
@@ -290,28 +316,28 @@ function TaskBudget() {
   const choices = [...new Set([...TASK_BUDGET_CHOICES.filter((n) => n > limit), ...(stored !== null ? [stored] : [])])].sort((a, b) => a - b);
   const description =
     stored === null
-      ? "Off. The limit above counts every reply in a row, whatever the task."
+      ? t("behaviourPage.budget.off")
       : stored <= limit
-        ? "No higher than the limit above, so that limit still counts every reply in a row."
-        : `Each task agents name gets ${limit} ${limit === 1 ? "reply" : "replies"} in a row, and all of them together stop at ${stored}.`;
+        ? t("behaviourPage.budget.noHigher")
+        : t("behaviourPage.budget.each", { count: limit, total: stored });
   return (
     <SettingRow
-      label="Separate tasks"
-      info="Agents can name the task when they hand work on. With this set, a reviewer moving from one task to the next isn't stopped as if it were one long exchange. Calling the same work by another name doesn't get past the total, and your next message resets both counts."
+      label={t("behaviourPage.separateTasks")}
+      info={t("behaviourPage.agentsCanNameTheTask")}
       description={description}
       error={error}
       control={
         <SettingsSelect
-          aria-label="Most agent replies in a row across separate tasks"
+          aria-label={t("behaviourPage.mostAgentRepliesInARow")}
           value={stored === null ? "off" : String(stored)}
           disabled={saving}
           onChange={(e) => save(e.target.value === "off" ? null : Number(e.target.value))}
           className="w-[220px]"
         >
-          <option value="off">Off</option>
+          <option value="off">{t("common.off")}</option>
           {choices.map((n) => (
             <option key={n} value={n}>
-              {n} replies in total
+              {t("behaviourPage.repliesInTotal", { count: n })}
             </option>
           ))}
         </SettingsSelect>
@@ -337,33 +363,33 @@ function IncidentDesk() {
     setError("");
     api("/api/config", { method: "PUT", body: JSON.stringify({ incidents }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn't save that."))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveThat")))
       .finally(() => setSaving(false));
   };
 
   return (
     <>
       <SettingRow
-        label="Incident desk"
-        info="When a reply fails, a tool call gets stuck, or a routine, watcher or workflow fails, whoever leads gets a quiet turn to deal with it: try it once more, pass it to a teammate, or ask you. Nothing is tried again more than once, and if many things fail in an hour you get one summary instead of a card each."
-        description="Hand failures to a lead, and show you what needs you."
-        control={<Switch aria-label="Incident desk" checked={desk.enabled} disabled={saving} onCheckedChange={(enabled) => save({ enabled })} />}
+        label={t("behaviourPage.incidentDesk")}
+        info={t("behaviourPage.whenAReplyFailsA")}
+        description={t("behaviourPage.handFailuresToALead")}
+        control={<Switch aria-label={t("behaviourPage.incidentDesk")} checked={desk.enabled} disabled={saving} onCheckedChange={(enabled) => save({ enabled })} />}
         error={error}
       />
       {desk.enabled && (
         <SettingRow
-          label="Who leads incidents"
-          description="In a room, the room's lead goes first. Elsewhere, this."
+          label={t("behaviourPage.whoLeadsIncidents")}
+          description={t("behaviourPage.inARoomTheRooms")}
           control={
             <SettingsSelect
-              aria-label="Who leads incidents"
+              aria-label={t("behaviourPage.whoLeadsIncidents")}
               value={desk.lead}
               disabled={saving}
               onChange={(e) => save({ lead: e.target.value })}
               className="w-[220px]"
             >
-              <option value="auto">The most senior agent</option>
-              <option value="person">Always me</option>
+              <option value="auto">{t("behaviourPage.theMostSeniorAgent")}</option>
+              <option value="person">{t("behaviourPage.alwaysMe")}</option>
               {agents.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -393,19 +419,19 @@ function MidTurnMessages() {
     setError("");
     api("/api/config", { method: "PUT", body: JSON.stringify({ delivery: next }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn't save that."))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveThat")))
       .finally(() => setSaving(false));
   };
   return (
     <SettingRow
-      label="Messages while an agent works"
-      info="A stop stops the agent. A correction or an answer goes into what it is doing, or restarts it if its engine can't take words midway. Each agent can choose for itself in its own settings."
+      label={t("behaviourPage.messagesWhileAnAgentWorks")}
+      info={t("behaviourPage.aStopStopsTheAgent")}
       description={modeWords(mode).says}
       error={error}
     >
       <div className="mt-3 max-w-[460px]">
         <Segmented<DeliveryMode>
-          aria-label="Messages while an agent works"
+          aria-label={t("behaviourPage.messagesWhileAnAgentWorks")}
           size="sm"
           value={mode}
           onChange={(next) => !saving && next !== mode && save({ mode: next })}
@@ -416,9 +442,9 @@ function MidTurnMessages() {
         // Only for words the rules cannot read, and only on an agent whose
         // own engine has a small model; each ask is one small call.
         <label className="mt-3 flex max-w-[460px] items-center justify-between gap-3">
-          <span className="text-body text-muted-foreground">When unsure, ask the agent's small model</span>
+          <span className="text-body text-muted-foreground">{t("behaviourPage.whenUnsureAskTheAgents")}</span>
           <Switch
-            aria-label="When unsure, ask the agent's small model"
+            aria-label={t("behaviourPage.whenUnsureAskTheAgents")}
             checked={askModel}
             disabled={saving}
             onCheckedChange={(on: boolean) => save({ askModel: on })}
@@ -426,6 +452,91 @@ function MidTurnMessages() {
         </label>
       )}
     </SettingRow>
+  );
+}
+
+/** An engine a room on Auto could ask (GET /api/room-router). */
+interface RouterChoice {
+  id: string;
+  name: string;
+  kind: string;
+  model: string | null;
+  small: boolean;
+  ready: boolean;
+  /** Bloks AI, which is paid from the plan's allowance. */
+  allowance: boolean;
+}
+
+/** What one choice costs, said before it is made. */
+function routerCost(choice: RouterChoice | null): string {
+  if (!choice) return t("behaviourPage.router.room");
+  const model = choice.model ?? t("behaviourPage.router.itsModel");
+  if (choice.allowance) return t("behaviourPage.router.allowance", { name: choice.name });
+  if (choice.kind === "claudeAgent") return t("behaviourPage.router.claude", { model });
+  if (choice.small) return t("behaviourPage.router.small", { model, name: choice.name });
+  return t("behaviourPage.router.large", { model, name: choice.name });
+}
+
+/** A choice as its option says it: the engine, and its model when it has one. */
+const routerName = (c: RouterChoice) => (c.model ? t("behaviourPage.router.engineModel", { name: c.name, model: c.model }) : c.name);
+
+/**
+ * Which engine a room set to Auto asks to pick who answers
+ * (server/room-route.ts). The room's own engines unless changed: the
+ * words go nowhere they were not already going, and a person who wants
+ * one fast model for every room can name it here.
+ */
+function RoomRouter() {
+  const { state, dispatch } = useStore();
+  const chosen = state.config?.rooms?.router ?? null;
+  const [choices, setChoices] = useState<RouterChoice[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    api("/api/room-router")
+      .then((r: { choices?: RouterChoice[] }) => live && setChoices(r.choices ?? []))
+      .catch(() => live && setChoices([]));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const save = (router: string | null) => {
+    setSaving(true);
+    setError("");
+    api("/api/config", { method: "PUT", body: JSON.stringify({ rooms: { router } }) })
+      .then((status) => dispatch({ type: "configStatus", config: status }))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveThat")))
+      .finally(() => setSaving(false));
+  };
+  const picked = chosen ? (choices?.find((c) => c.id === chosen) ?? null) : null;
+  // an engine chosen and since removed still shows, so the row says why
+  // every Auto room is on its lead
+  const gone = Boolean(chosen && choices && !picked);
+  return (
+    <SettingRow
+      label={t("behaviourPage.autoPicksWith")}
+      info={t("behaviourPage.inARoomSetTo")}
+      description={gone ? t("behaviourPage.thatEngineIsNoLonger") : routerCost(picked)}
+      error={error}
+      control={
+        <SettingsSelect
+          aria-label={t("behaviourPage.autoPicksWith")}
+          value={chosen ?? "room"}
+          disabled={saving || choices === null}
+          onChange={(e) => save(e.target.value === "room" ? null : e.target.value)}
+          className="w-[220px]"
+        >
+          <option value="room">{t("behaviourPage.theRoomsOwnEngines")}</option>
+          {gone && chosen && <option value={chosen}>{t("behaviourPage.anEngineSinceRemoved")}</option>}
+          {(choices ?? []).map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.ready ? routerName(c) : t("behaviourPage.notSignedIn", { choice: routerName(c) })}
+            </option>
+          ))}
+        </SettingsSelect>
+      }
+    />
   );
 }
 
@@ -446,25 +557,23 @@ function BackgroundWork() {
     setError("");
     api("/api/config", { method: "PUT", body: JSON.stringify({ turns: { backgroundWork } }) })
       .then((status) => dispatch({ type: "configStatus", config: status }))
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Couldn't save that."))
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : t("behaviourPage.couldntSaveThat")))
       .finally(() => setSaving(false));
   };
   return (
     <SettingsGroup
-      title="Background work an agent starts"
+      title={t("behaviourPage.backgroundWorkAnAgentStarts")}
       footnote={
         <>
-          For agents on Claude Code. While it waits, what you send goes into that turn or waits for it like any other, and a
-          background task that makes no progress for the time under Stop stuck tool calls is stopped. Each agent can choose for
-          itself in its own settings.
+          {t("behaviourPage.backgroundFootnote")}
           {error && <span className="mt-1 block text-destructive">{error}</span>}
         </>
       }
     >
       <div
         role="radiogroup"
-        aria-label="Background work an agent starts"
-        data-setting-row={rowKey("Background work an agent starts")}
+        aria-label={t("behaviourPage.backgroundWorkAnAgentStarts")}
+        data-setting-row={rowKey(inEnglish("behaviourPage.backgroundWorkAnAgentStarts"))}
         className="flex flex-col divide-y transition-colors duration-700"
       >
         {BACKGROUND_WORK.map((choice) => {
@@ -489,8 +598,8 @@ function BackgroundWork() {
                 {on && <span className="size-1.5 rounded-full bg-brand-foreground" />}
               </span>
               <span className="flex min-w-0 flex-col">
-                <span className="text-ui font-medium text-foreground">{choice.label}</span>
-                <span className="text-pretty text-body text-muted-foreground">{choice.says}</span>
+                <span className="text-ui font-medium text-foreground">{t(choice.label)}</span>
+                <span className="text-pretty text-body text-muted-foreground">{t(choice.says)}</span>
               </span>
             </button>
           );
@@ -500,7 +609,7 @@ function BackgroundWork() {
   );
 }
 
-const TURN_LIMIT_STOPS = numberStops(MIN_TURN_LIMIT, MAX_TURN_LIMIT, (n) => `${n} ${n === 1 ? "reply" : "replies"}`);
+const turnLimitStops = () => numberStops(MIN_TURN_LIMIT, MAX_TURN_LIMIT, (n) => t("behaviourPage.replies", { count: n }));
 /** What the budget across separate tasks offers, past whatever the limit is. */
 const TASK_BUDGET_CHOICES = [24, 36, 48, 60, 80, MAX_TASK_BUDGET];
 
@@ -525,10 +634,10 @@ function RecallBeforeTurn() {
 
   return (
     <SettingRow
-      label="Bring up other conversations"
-      info="Bloks searches the agent's other chats and notes for close matches to your message. Up to three short notes go with that message only, each saying where it came from, and your message shows what was added. Rooms and email from people you haven't listed never get them."
-      description="Remind an agent what it said elsewhere that matches your message."
-      control={<Switch aria-label="Bring up other conversations" checked={on} disabled={saving} onCheckedChange={set} />}
+      label={t("behaviourPage.bringUpOtherConversations")}
+      info={t("behaviourPage.bloksSearchesTheAgentsOther")}
+      description={t("behaviourPage.remindAnAgentWhatIt")}
+      control={<Switch aria-label={t("behaviourPage.bringUpOtherConversations")} checked={on} disabled={saving} onCheckedChange={set} />}
     />
   );
 }
@@ -554,10 +663,10 @@ function MemoryTidy() {
 
   return (
     <SettingRow
-      label="Tidy memory every night"
-      info="Between 1 and 5 in the morning, while an agent is idle: notes marked (until a date) go after that date, repeats are merged, and anything contradicted moves to an archive with why. Each night's changes are in that agent's Memory page, with Undo, and the morning brief mentions them."
-      description="Keep each agent's notes short and current while you sleep."
-      control={<Switch aria-label="Tidy memory every night" checked={on} disabled={saving} onCheckedChange={set} />}
+      label={t("behaviourPage.tidyMemoryEveryNight")}
+      info={t("behaviourPage.between1And5In")}
+      description={t("behaviourPage.keepEachAgentsNotesShort")}
+      control={<Switch aria-label={t("behaviourPage.tidyMemoryEveryNight")} checked={on} disabled={saving} onCheckedChange={set} />}
     />
   );
 }
@@ -565,12 +674,12 @@ function MemoryTidy() {
 export function BehaviourPage() {
   return (
     <>
-      <SettingsGroup title="Memory and learning">
+      <SettingsGroup title={t("behaviourPage.memoryAndLearning")}>
         <RecallBeforeTurn />
         <MemoryTidy />
         <ProposeSkills />
       </SettingsGroup>
-      <SettingsGroup title="While an agent works">
+      <SettingsGroup title={t("behaviourPage.whileAnAgentWorks")}>
         <MidTurnMessages />
         <AgentTurnLimit />
         <TaskBudget />
@@ -578,12 +687,15 @@ export function BehaviourPage() {
         <SharedChanges />
       </SettingsGroup>
       <BackgroundWork />
-      <SettingsGroup title="When something fails">
+      <SettingsGroup title={t("behaviourPage.rooms")} footnote={t("behaviourPage.eachRoomChoosesWhoAnswers")}>
+        <RoomRouter />
+      </SettingsGroup>
+      <SettingsGroup title={t("behaviourPage.whenSomethingFails")}>
         <IncidentDesk />
       </SettingsGroup>
       <SettingsGroup
-        title="Long conversations"
-        footnote="Your own messages are never summarised. Where a conversation was compacted, it says so."
+        title={t("behaviourPage.longConversations")}
+        footnote={t("behaviourPage.yourOwnMessagesAreNever")}
       >
         <BeforeTurnCompaction />
         <Compaction />

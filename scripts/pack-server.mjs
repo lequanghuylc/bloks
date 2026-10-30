@@ -4,11 +4,19 @@
 // The package is the compiled server with the few npm packages it imports
 // already beside it (dist-server/node_modules, staged by
 // scripts/stage-server-deps.mjs), the built UI it serves, the two command
-// line entry points, and a package.json to mark it as ES modules. Nothing
-// is installed after unpacking: anything with Node 22 runs it.
+// line entry points, the line a network-off container runs, the English
+// catalogue the server names the app's places in, and a package.json to
+// mark it as ES modules. Nothing is installed after unpacking: anything
+// with Node 22 runs it.
+//
+// Beside the tarball goes its sha256, in the form sha256sum -c and
+// shasum -a 256 -c read. A server updating itself from the app refuses a
+// download that does not match it (server/server-update.ts), so the
+// release has to carry both files.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,7 +24,7 @@ const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
 const out = join(root, "release");
 const stage = join(out, "bloks-server");
 
-for (const need of ["dist-server/index.js", "dist-server/node_modules", "dist/index.html", "bin/bloks-server.mjs", "bin/bloks.mjs"]) {
+for (const need of ["dist-server/index.js", "dist-server/node_modules", "dist/index.html", "bin/bloks-server.mjs", "bin/bloks.mjs", "bin/bloks-line.mjs"]) {
   if (!existsSync(join(root, need))) {
     console.error(`missing ${need}: run pnpm build and pnpm build:server first`);
     process.exit(1);
@@ -29,6 +37,14 @@ cpSync(join(root, "dist-server"), join(stage, "dist-server"), { recursive: true 
 cpSync(join(root, "dist"), join(stage, "dist"), { recursive: true });
 cpSync(join(root, "bin", "bloks-server.mjs"), join(stage, "bin", "bloks-server.mjs"));
 cpSync(join(root, "bin", "bloks.mjs"), join(stage, "bin", "bloks.mjs"));
+// The line a network-off container runs for a turn: the server sends it
+// there from bin/ beside itself (LINE_SCRIPT in server/index.ts).
+cpSync(join(root, "bin", "bloks-line.mjs"), join(stage, "bin", "bloks-line.mjs"));
+// Beside dist-server, where server/where.ts reads it, as in the app's
+// Resources. Without it nothing fails: `bloks where` and the card `bloks
+// open` leaves call every Settings page "label".
+mkdirSync(join(stage, "locales"));
+cpSync(join(root, "src", "locales", "en.json"), join(stage, "locales", "en.json"));
 
 writeFileSync(
   join(stage, "package.json"),
@@ -108,6 +124,21 @@ through Bloks Cloud. Your workspace lives in ~/.bloks on this machine.
 Agents run on the engines installed here. Install and sign in to Claude
 Code or Codex on this machine, or give agents API keys in the app.
 
+    node bin/bloks-server.mjs update             # install the latest release
+    node bin/bloks-server.mjs stop               # stop it
+
+From scripts, CI and a terminal:
+
+    node bin/bloks-server.mjs run Ada "TASK"     # hand an agent a job, print the answer
+    node bin/bloks-server.mjs team apply team.md # keep a room in line with a team file
+    node bin/bloks-server.mjs chat Ada           # talk to an agent here
+
+The owner can update it from the app too, in Settings, About. A new
+version is unpacked under versions/ in this folder, checked against the
+release's checksum, and switched to; if it does not start, this one comes
+back. Under systemd, launchd or Docker it is updated by hand instead, and
+the app shows the steps. Your workspace in ~/.bloks is never touched.
+
 A Dockerfile and a systemd unit are included. Full guide:
 https://bloks.dev/docs#server
 `,
@@ -115,4 +146,6 @@ https://bloks.dev/docs#server
 
 const tarball = join(out, `bloks-server-${version}.tar.gz`);
 execFileSync("tar", ["-czf", tarball, "-C", out, "bloks-server"]);
-console.log(`packed ${tarball}`);
+const sum = createHash("sha256").update(readFileSync(tarball)).digest("hex");
+writeFileSync(`${tarball}.sha256`, `${sum}  ${basename(tarball)}\n`);
+console.log(`packed ${tarball} (sha256 ${sum})`);

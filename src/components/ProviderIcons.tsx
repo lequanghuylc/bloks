@@ -42,6 +42,45 @@ export function GrokCliMark({ size = 16, className }: IconProps) {
   );
 }
 
+/** The Cursor CLI. Cursor's cube, three faces in three strengths of the
+ * one ink, so it reads in both themes like the other monochrome marks. */
+export function CursorMark({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={cn("fill-foreground", className)}>
+      <path d="M12 2 20.66 7 12 12 3.34 7Z" opacity="0.92" />
+      <path d="M3.34 7 12 12v10l-8.66-5Z" opacity="0.55" />
+      <path d="M20.66 7 12 12v10l8.66-5Z" opacity="0.3" />
+      <path d="M12 12 20.66 7 12 22Z" />
+    </svg>
+  );
+}
+
+/** Cline. Its little robot: a rounded head with two eyes, an antenna
+ * and an ear each side, cut from the ink so the eyes show the tile. */
+export function ClineMark({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={cn("fill-foreground", className)}>
+      <circle cx="12" cy="3.4" r="1.7" />
+      <path d="M11.2 4.6h1.6V7h-1.6Z" />
+      <path
+        fillRule="evenodd"
+        d="M9 6.5h6a5 5 0 0 1 5 5v3.5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5v-3.5a5 5 0 0 1 5-5ZM7.9 13.5a1.6 2.1 0 1 0 3.2 0a1.6 2.1 0 1 0-3.2 0ZM12.9 13.5a1.6 2.1 0 1 0 3.2 0a1.6 2.1 0 1 0-3.2 0Z"
+      />
+      <rect x="1.6" y="11" width="1.8" height="5" rx="0.9" />
+      <rect x="20.6" y="11" width="1.8" height="5" rx="0.9" />
+    </svg>
+  );
+}
+
+/** GitHub's mark, for the GitHub CLI plugin and its connection. */
+export function GitHubMark({ size = 16, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className={cn("fill-foreground", className)}>
+      <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z" />
+    </svg>
+  );
+}
+
 export function ClaudeMark({ size = 16, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 256 257" preserveAspectRatio="xMidYMid" className={cn("fill-[#d97757]", className)}>
@@ -244,7 +283,6 @@ const LETTERED: Record<string, { letter: string; tone: string }> = {
   groq: { letter: "G", tone: "#f55036" },
   ollama: { letter: "O", tone: "#6b7280" },
   custom: { letter: "C", tone: "#6b7280" },
-  cursorCli: { letter: "C", tone: "#000000" },
 };
 
 export function ProviderMark({ driverKind, size, className }: IconProps & { driverKind: string }) {
@@ -271,6 +309,10 @@ export function ProviderMark({ driverKind, size, className }: IconProps & { driv
       return <RouterMark size={size} className={className} />;
     case "pi":
       return <PiMark size={size} className={className} />;
+    case "cursor":
+      return <CursorMark size={size} className={className} />;
+    case "cline":
+      return <ClineMark size={size} className={className} />;
     case "bloks":
       return <BloksMark size={size} className={className} />;
   }

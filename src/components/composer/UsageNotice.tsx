@@ -6,6 +6,7 @@ import { X } from "@/components/icons";
 import { api, openLaneWorking, useStore, type Bot } from "@/state/store";
 import { usePageVisible } from "@/lib/pageVisible";
 import { noticeLine, noticeSource, noticeToShow, readDismissed, readNotices, saveDismissed, withDismissed, type UsageNotice as Said } from "@/lib/usageNotice";
+import { t } from "@/lib/i18n";
 
 const EVERY_MS = 60_000;
 
@@ -64,24 +65,25 @@ export function UsageNotice({ bot }: { bot: Bot }) {
     >
       <p className="min-w-0 basis-48 flex-1 leading-snug [overflow-wrap:anywhere]">
         <span className={notice.level === "stop" ? "font-semibold text-destructive" : "font-medium text-foreground"}>
-          {source}: {notice.title}
+          {/* the title is the server's own words */}
+          {t("composerUsageNotice.title", { source, title: notice.title })}
         </span>
-        <span className="text-muted-foreground"> · {details}</span>
+        <span className="text-muted-foreground">{` · ${details}`}</span>
       </p>
       <button
         type="button"
         onClick={viewUsage}
         className="h-7 shrink-0 rounded-lg px-1.5 font-medium text-foreground underline-offset-2 hover:bg-accent hover:underline"
       >
-        View usage
+        {t("composerUsageNotice.viewUsage")}
       </button>
       <button
         type="button"
         onClick={dismiss}
         // Dismiss without taking the caret out of the message being written.
         onPointerDown={(event) => event.preventDefault()}
-        aria-label="Dismiss usage notice"
-        title="Dismiss usage notice"
+        aria-label={t("composerUsageNotice.dismissUsageNotice")}
+        title={t("composerUsageNotice.dismissUsageNotice")}
         className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <X size={13} />

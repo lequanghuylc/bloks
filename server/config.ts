@@ -73,10 +73,17 @@ export interface AppConfig {
    * connections and gives agents their tools. The project key is optional
    * and only makes the plugin grid prettier. */
   composio?: { key?: string; apiKey?: string; url?: string };
-  /** Voice vendors. Either key lights up voices and calls. */
+  /** Voice vendors. Any key lights up voices and calls. */
   speech?: {
     elevenlabsKey?: string;
     openaiKey?: string;
+    fishKey?: string;
+    /** xAI's speech API. Unset, the Grok engine's key is used: it is the
+     * same account, already given to Bloks (server/speech.ts xaiKey). */
+    xaiKey?: string;
+    /** A Chatterbox server on this computer or the local network. Not a
+     * secret, and no key: it is the person's own machine. */
+    chatterboxUrl?: string;
     /** The user's explicit yes to using a key discovered in the
      * environment or Codex's auth file for voice billing. */
     useDiscoveredOpenAI?: boolean;
@@ -113,7 +120,17 @@ export interface AppConfig {
      * this computer's part of every address; `allowFrom` limits who can
      * write (addresses, or @domain), empty meaning anyone who has one. */
     email?: { enabled?: boolean; id?: string; domain?: string; allowFrom?: string[] };
+    /** A Signal group, through one of the accounts linked in signal-cli
+     * (server/signal.ts). No credential: signal-cli keeps the keys. */
+    signal?: { account?: string; aci?: string; enabled?: boolean };
   };
+  /** Reaching agents from Signal, one linked account per agent, through
+   * signal-cli on this computer. Nothing here is a credential: the
+   * account's keys stay in signal-cli's own data folder. */
+  signal?: import("./signal-people.ts").SignalSettings;
+  /** Home Assistant (server/home-assistant.ts). The token is a credential
+   * and lives here; it never reaches a client or a turn. */
+  home?: import("./home-assistant.ts").HomeSettings;
   /** Reaching agents from a phone over Telegram. The token is a
    * credential, so it lives here with the rest of them. */
   telegram?: import("./telegram-bots.ts").TelegramConfig;
@@ -134,6 +151,15 @@ export interface AppConfig {
   /** Values agents asked for via secret cards, injected into engine
    * environments under their env-var names. Never echoed to clients. */
   secrets?: Record<string, string>;
+  /** Services agents reach through Bloks without holding the credential
+   * (server/connections.ts). The token is a secret like the ones above,
+   * kept here for the same reason, and unlike them it never enters a turn.
+   * Replaced whole by saveConnections, never merged. */
+  connections?: import("./connections.ts").ConnectionRecord[];
+  /** Tools on this computer agents use from their shell, and whether each
+   * plugin is on (server/cli-plugins.ts). No credential lives here: gh
+   * keeps its own sign-in. */
+  cliPlugins?: { github?: { enabled?: boolean } };
   /** When the one-time welcome was completed. Lives here, beside the
    * agents it describes, because a browser's localStorage is the wrong
    * place to remember whether a WORKSPACE has been set up: clear it, or
@@ -150,8 +176,16 @@ export interface AppConfig {
   /** `name` is how members of a shared room see the owner. */
   profile?: { about?: string; name?: string };
   /** The morning brief (server/brief.ts): on unless turned off, at 08:00
-   * unless another time is chosen. */
-  brief?: { enabled?: boolean; time?: string };
+   * unless another time is chosen. `notify` off keeps it to the page;
+   * `allClear` notifies on a quiet morning too. `layout` is how the
+   * person arranged its sections (briefSettings reads it with defaults). */
+  brief?: {
+    enabled?: boolean;
+    time?: string;
+    notify?: boolean;
+    allClear?: boolean;
+    layout?: { order: string[]; pinned: string[]; hidden: string[] };
+  };
   /** The daily backup (server/backup.ts): on unless turned off. It never
    * holds saved keys, since nobody is there to give it a passphrase. */
   backups?: { auto?: boolean };
@@ -168,8 +202,15 @@ export interface AppConfig {
   compaction?: { micro?: boolean; idle?: boolean; beforeTurn?: number; beforeTurnAt?: number };
   /** Whether a finished session is read back for something worth keeping.
    * Off unless asked for: it spends the person's own tokens on work they
-   * did not request. What it finds is always staged, never installed. */
-  skills?: { propose?: boolean };
+   * did not request. What it finds is always staged, never installed.
+   * `learn` is how eager that is (server/proposals.ts): "off", "suggest"
+   * or "more". Unset reads `propose`, which is what it was when it was
+   * one switch: on is "suggest". */
+  skills?: { propose?: boolean; learn?: "off" | "suggest" | "more" };
+  /** Where the catalogue of teams and skills is read from: an index.json
+   * over https (server/catalog.ts). Empty or unset is this repository's
+   * own; BLOKS_CATALOG_URL, when set, wins over both. */
+  catalog?: { url?: string };
   /** How long a tool call may go without a word from the engine before
    * Bloks stops the turn, in minutes; 0 is never. Unset is the default
    * in server/drivers/stall.ts. `backgroundWork` is whether a turn waits
@@ -200,6 +241,11 @@ export interface AppConfig {
    * agent's own small model about words its rules cannot read; off
    * unless turned on, since each ask is a call on the person's key. */
   delivery?: { mode?: "auto" | "interrupt" | "queue"; askModel?: boolean };
+  /** Rooms set to Auto (server/room-route.ts). `router` is the engine
+   * (an instance id) that picks who answers a message naming nobody;
+   * unset or null is the room's own engines, small model first, so the
+   * words go nowhere they were not already going. */
+  rooms?: { router?: string | null };
   /** Show a card for files changed during an overlapping turn even when
    * none are named as its own. On unless turned off; own-file cards stay. */
   changes?: { showShared?: boolean };
@@ -238,6 +284,15 @@ export interface AppConfig {
    * a host of their own, or a model the providers' list does not know.
    * Ahead of that list when a turn comes back unpriced. */
   spendPrices?: Record<string, { input: number; output: number }>;
+  /** The CLI an engine is started from, by driver kind, when it is not
+   * the one on PATH: a second install, a build of one's own. Applied to
+   * every instance of that driver whose own config does not name one. */
+  enginePaths?: Record<string, string>;
+  /** The switch on each engine in Settings, by instance id. It wins over
+   * an `enabled` written into `instances`, since it is the later word,
+   * and it reaches the engines a connected key or a custom host makes,
+   * which have no entry there to write it in. None set is as configured. */
+  engineSwitches?: Record<string, boolean>;
   instances?: InstanceConfigMap;
 }
 
@@ -367,20 +422,27 @@ export function saveConfig(patch: Partial<AppConfig>, beforeWrite?: () => void):
     "shortcuts",
     "compaction",
     "skills",
+    "catalog",
     "turns",
     "recall",
     "memory",
     "agents",
     "incidents",
     "delivery",
+    "rooms",
     "changes",
     "telegram",
     "chat",
+    "signal",
+    "home",
     "brief",
     "backups",
     "credits",
     "spendLimits",
     "spendPrices",
+    "cliPlugins",
+    "enginePaths",
+    "engineSwitches",
   ] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       // The migrated Telegram section is a complete private record. A
@@ -391,7 +453,7 @@ export function saveConfig(patch: Partial<AppConfig>, beforeWrite?: () => void):
       // credits forgets by null: a token from an old licence must be gone
       // from the file, not kept beside a newer one; a limit taken off is
       // gone the same way, not kept as a zero that reads like one
-      if (key === "credits" || key === "spendLimits" || key === "spendPrices") {
+      if (key === "credits" || key === "spendLimits" || key === "spendPrices" || key === "enginePaths" || key === "engineSwitches") {
         const merged = disk[key] as Record<string, unknown>;
         for (const name of Object.keys(merged)) if (merged[name] === null || merged[name] === undefined) delete merged[name];
       }
@@ -436,6 +498,21 @@ export function forgetSecret(name: string): AppConfig | null {
   return withEnvironment(disk);
 }
 
+/** Writes the whole list of connections (server/connections.ts), in
+ * place of the one on disk: a connection removed must be gone from the
+ * file, token and all, not merged back from what was there. */
+export function saveConnections(list: import("./connections.ts").ConnectionRecord[]): AppConfig {
+  const p = join(DATA_DIR, "config.json");
+  const disk = readSaved<Record<string, any>>(p, {}, isRecord);
+  if (list.length) disk.connections = list;
+  else delete disk.connections;
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const bytes = JSON.stringify(disk, null, 2);
+  writeFileAtomic(p, bytes, 0o600);
+  observedSaved(JSON.parse(bytes), "owner-save");
+  return withEnvironment(disk);
+}
+
 /** Forgets a provider's credential entirely, rather than blanking it. */
 export function disconnectProvider(kind: string): AppConfig {
   const p = join(DATA_DIR, "config.json");
@@ -460,9 +537,10 @@ const BUILT_IN_CLI_INSTANCES: InstanceConfigMap = {
   gemini_cli: { driver: "geminiCli" },
   opencode: { driver: "opencode" },
   grok_cli: { driver: "grokCli" },
+  cursor: { driver: "cursor" },
+  cline: { driver: "cline" },
   antigravity: { driver: "antigravity" },
   pi: { driver: "pi" },
-  cursor: { driver: "cursorCli" },
   computer: { driver: "boxAgent" },
 };
 
@@ -513,7 +591,17 @@ export function instanceConfigs(cfg: AppConfig): InstanceConfigMap {
   if (creditsOffered(cfg) && !map[CREDITS_KIND]) {
     map[CREDITS_KIND] = { driver: CREDITS_SPEC.kind, displayName: CREDITS_SPEC.name, config: { url: creditsCompatUrl() } };
   }
+  // A copy, not the entry itself: an entry spelled out in `instances` is
+  // the saved config's own object, and the switch is not written there.
+  for (const [id, on] of Object.entries(cfg.engineSwitches ?? {})) {
+    if (map[id] && typeof on === "boolean") map[id] = { ...map[id], enabled: on };
+  }
   for (const entry of Object.values(map)) {
+    const path = cfg.enginePaths?.[entry.driver];
+    const own = entry.config as Record<string, unknown> | undefined;
+    if (typeof path === "string" && path && !(typeof own?.cli === "string" && own.cli)) {
+      entry.config = { ...own, cli: path };
+    }
     entry.environment = {
       ...usableSecrets(cfg.secrets),
       ...Object.fromEntries(

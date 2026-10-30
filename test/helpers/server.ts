@@ -88,9 +88,16 @@ export async function startHarness(extraEnv: Record<string, string> = {}): Promi
         COMPOSIO_KEY: "",
         BOX_TOKEN: "",
         BLOKS_COMPOSIO_KEY: "",
+        // Composio's project side and its realtime channel (app watchers):
+        // never the real ones; a test that wants them serves its own
+        BLOKS_COMPOSIO_BACKEND: "http://127.0.0.1:9",
+        BLOKS_COMPOSIO_REALTIME: "ws://127.0.0.1:9",
         BLOKS_BOX_TOKEN: "",
         OPENAI_API_KEY: "",
         ANTHROPIC_API_KEY: "",
+        CURSOR_API_KEY: "",
+        CURSOR_AUTH_TOKEN: "",
+        CLINE_API_KEY: "",
         // a test run from inside a Bloks agent would otherwise act as it
         BLOKS_TOKEN: "",
         // the throwaway HOME is the whole point: a data folder named by the
@@ -105,7 +112,17 @@ export async function startHarness(extraEnv: Record<string, string> = {}): Promi
         // the providers' price list (server/model-prices.ts): never the
         // real one; a test that wants a list serves its own
         BLOKS_PRICES_URL: "http://127.0.0.1:9/api/v1/models",
+        // the hosted voice vendors (server/speech.ts): never the real
+        // ones; a test that wants one serves its own
+        BLOKS_FISH_AUDIO_URL: "http://127.0.0.1:9",
+        BLOKS_XAI_SPEECH_URL: "http://127.0.0.1:9",
+        // the catalogue of teams and skills (server/catalog.ts): never the
+        // repository's own; a test that browses one serves it
+        BLOKS_CATALOG_URL: "http://127.0.0.1:9/catalog/index.json",
         BLOKS_HOSTED: "",
+        // the platform a test stands the server in for (server/hosted.ts);
+        // a test that wants Windows or Linux says so itself
+        BLOKS_TEST_PLATFORM: "",
         BLOKS_HOSTED_VNC: "",
         BLOKS_PUBLIC_URL: "",
         // tests speak as the dev UI (origin :5199), which a server serving
@@ -119,6 +136,15 @@ export async function startHarness(extraEnv: Record<string, string> = {}): Promi
         // bin/bloks-server.mjs sets this, so a test run from inside a Bloks
         // agent would inherit it and find pairing forced on
         BLOKS_LOOPBACK_ONLY: "",
+        // and these, which would make a test's server think it was
+        // started by bloks-server and may update itself; a test that
+        // wants releases serves its own (server/server-update.ts)
+        BLOKS_SERVER_HOME: "",
+        BLOKS_SERVER_ROOT: "",
+        BLOKS_SERVER_STATIC: "",
+        BLOKS_SERVER_UPDATES: "",
+        BLOKS_RELEASES_URL: "http://127.0.0.1:9/releases/latest",
+        BLOKS_RELEASE_DOWNLOADS: "http://127.0.0.1:9/download",
         // a failed turn is asked again after a wait (GitHub 284), and a
         // minute is longer than most tests wait for a turn to settle
         BLOKS_RETRY_WAIT_MS: "50",

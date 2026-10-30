@@ -5,6 +5,7 @@
 import { mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
+import type { HeldSay } from "./agent-chain.ts";
 import type { ChangesSummary } from "./checkpoints.ts";
 import type { TelegramReply } from "./telegram-returns.ts";
 import { readSaved, writeFileAtomic } from "./atomic-write.ts";
@@ -80,6 +81,30 @@ export interface OptionCardData {
    * card stays in the conversation, where one only hidden read as a
    * question that was never asked. */
   closed?: string;
+  /** Present when an agent proposed an app watcher (server/app-watch.ts):
+   * what it would watch and who would act where, for the person to start
+   * or not. Answered through the watcher's own routes, never as a reply. */
+  appWatch?: {
+    watcherId: string;
+    toolkit: string;
+    appName: string;
+    trigger: string;
+    eventName: string;
+    config: Record<string, string | number | boolean>;
+    filter: string[];
+    botId: string;
+    agentName: string;
+    conversation: string;
+    instruction: string;
+  };
+  /** Present when an agent pointed the person at a place in the app
+   * (`bloks open`, server/where.ts): one button that opens it, and the
+   * way there in words for a window or a phone that cannot. */
+  open?: import("./where.ts").OpenPlan;
+  /** Present when an agent proposed changing a setting
+   * (server/settings-proposals.ts): answered through its own route, never
+   * as a reply, and applied only on the person's Change. */
+  settingsProposal?: import("./settings-proposals.ts").ProposalCard;
   /** Present when a lead has proposed hiring a team (server/teams.ts). */
   team?: {
     room: string;
@@ -142,7 +167,7 @@ export interface Message {
   afterAgent?: { peerId: string; peerName: string };
   /** Set on a room message that was said in the room's linked chat
    * channel, so the bridge does not say it there a second time. */
-  via?: "slack" | "discord" | "whatsapp" | "watcher" | "email" | "webhook" | "routine" | "goal" | "intent" | "incident";
+  via?: "slack" | "discord" | "whatsapp" | "signal" | "watcher" | "email" | "webhook" | "routine" | "goal" | "intent" | "incident";
   /** Posted by a standing intent (server/intents.ts): a note in its own
    * words, or the line saying it brought an agent in. Never matched by
    * an intent, its own or another's. */
@@ -160,8 +185,9 @@ export interface Message {
    * about it (fix it, pause it, remove it) where the person reads it. */
   failing?: { kind: "routine" | "watcher"; id: string; name: string };
   /** The routine's name and start mode when this message was written,
-   * and `quiet` when its agent was told it may answer QUIET. */
-  routine?: { name?: string; manual: boolean; quiet?: boolean };
+   * `quiet` when its agent was told it may answer QUIET, and `brief`
+   * when its answer goes to the morning brief rather than a notification. */
+  routine?: { name?: string; manual: boolean; quiet?: boolean; brief?: boolean };
   /** Part of a quiet check-in: a routine's prompt that the agent answered
    * with QUIET, that answer, and what the turn did in between. Nothing in
    * it needed the person, so it marked nothing unread, notified nobody,
@@ -189,6 +215,13 @@ export interface Message {
   chainHeld?: boolean;
   /** Direct hold dedupe, excluding the redacted excerpt. */
   chainHoldKey?: string;
+  /** The messages a direct hold kept from this conversation's agent,
+   * whole or cut at MAX_HELD_SAY_CHARS (server/agent-chain.ts). Each
+   * goes in with the agent's next turn that starts for any other reason,
+   * once, and is marked `delivered` then; none starts a turn or wakes
+   * anyone (GitHub 376). On disk with the conversation, so a restart
+   * keeps what has not gone yet. */
+  heldSays?: HeldSay[];
   /** What a chat on the phone is told of this notice instead of its
    * text: the error alone, when the app's notice also says where to set
    * a backup, which means nothing there (GitHub 284). */
@@ -275,6 +308,10 @@ export interface Message {
    * that turn, the turn was stopped for it, or it waited (server/delivery.ts).
    * Absent on a message that started a turn of its own. */
   delivery?: import("./delivery.ts").Delivery;
+  /** Who a room's Auto sent a message that named nobody to, and why, or
+   * that the lead took it instead (server/room-route.ts). On the
+   * person's own message, and drawn as the quiet line above the reply. */
+  route?: import("./room-route.ts").RoomRoute;
   /** Server-only return address for a Telegram request queued during
    * drain. Preserved on edits, never accepted from a client body. */
   telegramReply?: TelegramReply;
@@ -296,6 +333,10 @@ export interface Message {
   telegramGroup?: import("./telegram-people.ts").TelegramOwnerGroup;
   /** Explicit reply, kept in the owner's transcript with its send result. */
   telegramSent?: { personId: string; name: string; audience?: string; state: "sending" | "sent" | "uncertain" | "failed" };
+  /** Server-created. Said on Signal: by the owner, or by a person the
+   * owner let in (`personId`), on the agent's connection as it was then.
+   * Never read from a client body. */
+  fromSignal?: { botId: string; generation: string; personId?: string };
   /** Server-only: the Claude instance that accepted this queued text.
    * Null means it was accepted on another engine; absent is a legacy queue.
    * Derive command dispatch from the current text, including after edits. */
@@ -396,6 +437,11 @@ export interface TaskRecord {
    * see moveTaskCwd). null means "the default", a cloud run, or the
    * workspace. */
   cwd?: string | null;
+  /** Where this lane's session lives when its agent works elsewhere:
+   * the place and its folder (laneWhere in server/workplace.ts). Absent
+   * is this computer. A session there is not one here, so a lane whose
+   * agent has moved starts a new one, told the conversation so far. */
+  where?: string;
   /** Lifetime spend in this lane, folded in as each turn settles. */
   usage?: { input: number; output: number; turns: number };
   /** What this lane looked like before the part we still send whole.
@@ -442,6 +488,10 @@ export interface TaskRecord {
    * server/index.ts). Marked rather than known by its title, which the
    * person may change. */
   guestMail?: boolean;
+  /** A person on Signal talks to the agent here, and only here: the lane
+   * is theirs, by person id, and the owner's own words never land in it
+   * unasked (signalPersonLane in server/index.ts). */
+  signalPerson?: string;
   /** What this lane keeps working toward, turn after turn, until it is
    * done, blocked or out of turns (server/goals.ts). Goes with the lane:
    * closed or cleared, the goal is gone too. */
@@ -512,6 +562,9 @@ export interface BotRecord {
   shape?: BlokShape;
   /** Named capabilities; folded into the provider persona. */
   skills?: string[];
+  /** Conversations of this agent's with a hold notice whose held words
+   * (Message.heldSays) no turn has taken yet, so a turn looks only there. */
+  heldSaysIn?: string[];
   /** Library skills this agent has attached, by id (see server/skills.ts). */
   skillIds?: string[];
   /** How senior this agent is in a room, 1 to 5. The most senior member
@@ -562,6 +615,13 @@ export interface BotRecord {
   /** The folder new turns run in. Unset means the agent's own
    * workspace; a path means the user chose a project folder. */
   cwd?: string | null;
+  /** Where its engine runs: unset is this computer, as it always was;
+   * otherwise a Docker container or another machine over SSH
+   * (server/workplace.ts). The owner's to set, never an agent's. */
+  workplace?: import("./workplace.ts").Workplace | null;
+  /** What Bloks last learned of that place (its home, whether it has
+   * Node, sign-ins the owner chose to copy there), under its key. */
+  workplaceSeen?: import("./workplace.ts").WorkplaceSeen | null;
   /** Whether this agent may reach the shared Composio connectors. The
    * key is workspace-wide; the grant is per agent. Unset means yes. */
   composio?: boolean;
@@ -572,7 +632,7 @@ export interface BotRecord {
   /** Ids of user-registered MCP servers this agent may use. */
   mcpServers?: string[];
   /** How this agent sounds. Unset means it has no voice yet. */
-  voice?: { provider: "elevenlabs" | "openai"; id: string; name?: string } | null;
+  voice?: { provider: import("./speech.ts").VoiceProvider; id: string; name?: string } | null;
   /** Read replies aloud as they settle, even outside a call. Off by
    * default: speech is billed per character. */
   speakReplies?: boolean;
@@ -669,7 +729,7 @@ process.on("exit", () => {
   for (const store of unwritten) store.writeWaiting();
 });
 
-const COLORS: BlokColor[] = [
+export const COLORS: BlokColor[] = [
   "green",
   "blue",
   "red",
@@ -1188,6 +1248,14 @@ export class Store {
     this.saveBots();
   }
 
+  /** Mark the lane a person on Signal is answered in (TaskRecord.signalPerson). */
+  markSignalPerson(threadId: string, personId: string) {
+    const found = this.taskByThread(threadId);
+    if (!found || found.task.signalPerson === personId) return;
+    found.task.signalPerson = personId;
+    this.saveBots();
+  }
+
   /** Mark the lane strangers' mail is answered in (TaskRecord.guestMail). */
   markGuestMail(threadId: string) {
     const found = this.taskByThread(threadId);
@@ -1417,6 +1485,21 @@ export class Store {
     found.task.resumeCursors = {};
     found.task.lastInstanceId = "";
     // a reading measured a session that is not coming back
+    delete found.task.reading;
+    delete found.task.pendingCompaction;
+    this.saveBots();
+  }
+
+  /** The lane's agent works somewhere else now (or here again): the
+   * session it had lives where it was, so it starts a new one where the
+   * agent is, as moveTaskCwd does for a folder. */
+  moveTaskPlace(threadId: string, where: string | undefined) {
+    const found = this.taskByThread(threadId);
+    if (!found) return;
+    if (where) found.task.where = where;
+    else delete found.task.where;
+    found.task.resumeCursors = {};
+    found.task.lastInstanceId = "";
     delete found.task.reading;
     delete found.task.pendingCompaction;
     this.saveBots();

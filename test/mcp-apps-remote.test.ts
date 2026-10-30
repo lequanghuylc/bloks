@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { startRemoteProxy } from "../electron/remote.mjs";
 import { allows } from "../server/agent-cli.ts";
 import { APPS_ELSEWHERE, appsTrouble } from "../src/lib/mcpApps.ts";
+import { inEnglish } from "../src/lib/i18n.ts";
 import { sealedRelay } from "./helpers/sealed-relay.ts";
 import { startHarness } from "./helpers/server.ts";
 
@@ -37,7 +38,6 @@ test("the owner's own device checks a server's apps, opens one and runs its tool
   const relay = await sealedRelay();
   t.after(() => relay.stop());
   const home = mkdtempSync(join(tmpdir(), "bloks-test-mcp-remote-"));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
   mkdirSync(join(home, ".bloks"));
   writeFileSync(
     join(home, ".bloks", "config.json"),
@@ -49,6 +49,7 @@ test("the owner's own device checks a server's apps, opens one and runs its tool
   // a server that answers only on loopback, as bloks-server does
   const h = await startHarness({ HOME: home, BLOKS_LOOPBACK_ONLY: "1" });
   t.after(() => h.stop());
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   await relay.connection;
 
   // one server that draws an app, and one that is only tools, as most are
@@ -143,7 +144,7 @@ test("the owner's own device checks a server's apps, opens one and runs its tool
 describe("what the Apps card says when apps could not be had", () => {
   test("an older Bloks's refusal is said plainly, never as its bare words", () => {
     const said = appsTrouble(403, "not from here", "403 Forbidden");
-    assert.equal(said, APPS_ELSEWHERE);
+    assert.equal(said, inEnglish(APPS_ELSEWHERE));
     assert.doesNotMatch(said, /not from here/);
     assert.match(said, /Update Bloks there/);
   });

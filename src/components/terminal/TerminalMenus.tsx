@@ -53,6 +53,7 @@ import {
   type Scrollback,
   type TerminalPrefs,
 } from "@/lib/terminalPrefs";
+import { t, type MessageKey } from "@/lib/i18n";
 
 /** A small square button in the terminal's header. */
 export function HeaderButton({
@@ -113,13 +114,13 @@ export function MoreMenu({
   /** The menu closed: the keyboard goes back to the shell. */
   onClosed: () => void;
 }) {
-  const style = CURSOR_STYLES.find((c) => c.id === prefs.cursorStyle)?.label ?? "Bar";
+  const style = t(CURSOR_STYLES.find((c) => c.id === prefs.cursorStyle)?.label ?? "terminalPrefs.cursor.bar");
   // Stepping the text size is something you do a few times in a row
   // while watching it change, so those items leave the menu open.
   const stay = (e: Event) => e.preventDefault();
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger className={TRIGGER} aria-label="Terminal options" title="Terminal options">
+      <DropdownMenuTrigger className={TRIGGER} aria-label={t("terminalMenus.terminalOptions")} title={t("terminalMenus.terminalOptions")}>
         <MoreVertical size={16} />
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -131,7 +132,7 @@ export function MoreMenu({
         }}
       >
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger value={style}>Cursor style</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger value={style}>{t("terminalMenus.cursorStyle")}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuRadioGroup
               value={prefs.cursorStyle}
@@ -139,7 +140,7 @@ export function MoreMenu({
             >
               {CURSOR_STYLES.map((c) => (
                 <DropdownMenuRadioItem key={c.id} value={c.id}>
-                  {c.label}
+                  {t(c.label)}
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
@@ -149,16 +150,16 @@ export function MoreMenu({
           checked={prefs.cursorBlink}
           onCheckedChange={(on) => onPrefs((p) => ({ ...p, cursorBlink: on }))}
         >
-          Blink cursor
+          {t("terminalMenus.blinkCursor")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
           checked={prefs.copyOnSelect}
           onCheckedChange={(on) => onPrefs((p) => ({ ...p, copyOnSelect: on }))}
         >
-          Copy on select
+          {t("terminalMenus.copyOnSelect")}
         </DropdownMenuCheckboxItem>
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger value={scrollbackLabel(prefs.scrollback)}>Scrollback</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger value={scrollbackLabel(prefs.scrollback)}>{t("terminalMenus.scrollback")}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuRadioGroup
               value={String(prefs.scrollback)}
@@ -173,60 +174,61 @@ export function MoreMenu({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger value={`${prefs.fontSize} px`}>Text size</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger value={t("terminalMenus.fontSizePx", { size: prefs.fontSize })}>{t("terminalMenus.textSize")}</DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
             <DropdownMenuItem
               onSelect={(e) => (stay(e), onPrefs((p) => stepFont(p, 1)))}
               disabled={prefs.fontSize >= FONT_SIZE.max}
             >
-              Larger
+              {t("terminalMenus.larger")}
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={(e) => (stay(e), onPrefs((p) => stepFont(p, -1)))}
               disabled={prefs.fontSize <= FONT_SIZE.min}
             >
-              Smaller
+              {t("terminalMenus.smaller")}
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={(e) => (stay(e), onPrefs((p) => stepFont(p, 0)))}
               disabled={prefs.fontSize === FONT_SIZE.initial}
             >
-              Actual size
+              {t("terminalMenus.actualSize")}
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onClear} disabled={!hasTab}>
           <Eraser />
-          Clear
+          {t("common.clear")}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onRename} disabled={!hasTab}>
           <Pencil />
-          Rename tab
+          {t("terminalMenus.renameTab")}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onRestart} disabled={!hasTab}>
           <RotateCw />
-          Restart shell
+          {t("terminalMenus.restartShell")}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onCloseTab} disabled={!hasTab}>
           <X />
-          Close tab
+          {t("terminalMenus.closeTab")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-const MOVES: ReadonlyArray<{ position: TerminalPosition; label: string; Icon: typeof PanelLeft }> = [
-  { position: "left", label: "Move to the left", Icon: PanelLeft },
-  { position: "right", label: "Move to the right", Icon: PanelRight },
-  { position: "top", label: "Move to the top", Icon: PanelTop },
-  { position: "bottom", label: "Move to the bottom", Icon: PanelBottom },
+// Labels are catalogue keys, put into words where the menu draws them.
+const MOVES: ReadonlyArray<{ position: TerminalPosition; label: MessageKey; Icon: typeof PanelLeft }> = [
+  { position: "left", label: "terminalMenus.moveLeft", Icon: PanelLeft },
+  { position: "right", label: "terminalMenus.moveRight", Icon: PanelRight },
+  { position: "top", label: "terminalMenus.moveTop", Icon: PanelTop },
+  { position: "bottom", label: "terminalMenus.moveBottom", Icon: PanelBottom },
 ];
 
-const ARRANGEMENTS: ReadonlyArray<{ arrangement: TerminalArrangement; label: string; Icon: typeof PanelLeft }> = [
-  { arrangement: "fill", label: "Fill the window", Icon: PanelFill },
-  { arrangement: "split", label: "Side by side with the chat", Icon: PanelSplit },
+const ARRANGEMENTS: ReadonlyArray<{ arrangement: TerminalArrangement; label: MessageKey; Icon: typeof PanelLeft }> = [
+  { arrangement: "fill", label: "terminalMenus.arrangeFill", Icon: PanelFill },
+  { arrangement: "split", label: "terminalMenus.arrangeSplit", Icon: PanelSplit },
 ];
 
 /** One square choice in the layout menu: an icon, named for the ear. */
@@ -275,7 +277,7 @@ export function LayoutMenu({
   const fill = layout.arrangement === "fill";
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger className={TRIGGER} aria-label="Terminal layout" title="Terminal layout">
+      <DropdownMenuTrigger className={TRIGGER} aria-label={t("terminalMenus.terminalLayout")} title={t("terminalMenus.terminalLayout")}>
         <Maximize2 size={15} />
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -286,12 +288,12 @@ export function LayoutMenu({
           onClosed();
         }}
       >
-        <DropdownMenuLabel className="pb-1 pt-0.5">Move</DropdownMenuLabel>
+        <DropdownMenuLabel className="pb-1 pt-0.5">{t("terminalMenus.move")}</DropdownMenuLabel>
         <div className="flex gap-1 px-1 pb-1.5">
           {MOVES.map(({ position, label, Icon }) => (
             <LayoutChoice
               key={position}
-              label={label}
+              label={t(label)}
               chosen={!fill && layout.position === position}
               onSelect={() => onLayout((l) => moveTerminal(l, position))}
             >
@@ -299,12 +301,12 @@ export function LayoutMenu({
             </LayoutChoice>
           ))}
         </div>
-        <DropdownMenuLabel className="pb-1 pt-0.5">Fill and arrange</DropdownMenuLabel>
+        <DropdownMenuLabel className="pb-1 pt-0.5">{t("terminalMenus.fillAndArrange")}</DropdownMenuLabel>
         <div className="flex gap-1 px-1 pb-1">
           {ARRANGEMENTS.map(({ arrangement, label, Icon }) => (
             <LayoutChoice
               key={arrangement}
-              label={label}
+              label={t(label)}
               chosen={layout.arrangement === arrangement}
               onSelect={() => onLayout((l) => arrangeTerminal(l, arrangement))}
             >
@@ -317,7 +319,7 @@ export function LayoutMenu({
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={onPopOut}>
               <AppWindow />
-              Open in new window
+              {t("terminalMenus.openInNewWindow")}
             </DropdownMenuItem>
           </>
         )}

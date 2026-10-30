@@ -11,6 +11,7 @@ import {
   SHORTCUTS,
   shortcutSheet,
 } from "../src/lib/shortcuts.ts";
+import { inEnglish } from "../src/lib/i18n.ts";
 import { lastEditable } from "../src/lib/transcript.ts";
 import type { Message } from "../src/state/reducer.ts";
 
@@ -18,7 +19,7 @@ describe("the shortcut list", () => {
   test("every entry has a key, says what it does, and sits in a group the sheet draws", () => {
     const groups = new Set(SHORTCUT_GROUPS.map((g) => g.id));
     for (const shortcut of SHORTCUTS) {
-      assert.ok(shortcut.does.trim(), `${shortcut.id} says nothing`);
+      assert.ok(inEnglish(shortcut.does).trim(), `${shortcut.id} says nothing`);
       assert.ok(shortcut.keys.length > 0, `${shortcut.id} has no key`);
       for (const chord of shortcut.keys) assert.ok(chord.length > 0, `${shortcut.id} has an empty chord`);
       assert.ok(groups.has(shortcut.group), `${shortcut.id} is in no group`);
@@ -67,10 +68,32 @@ describe("the shortcut list", () => {
     assert.deepEqual(keysFor("stop", "other"), ["Esc"]);
     const stop = SHORTCUTS.find((s) => s.id === "stop")!;
     assert.equal(stop.group, "composer");
-    assert.match(stop.when ?? "", /while it is working/);
+    assert.match(inEnglish(stop.when!), /while it is working/);
     // the two it shares the key with are still there
     assert.deepEqual(keysFor("stopDictation", "mac"), ["esc"]);
     assert.deepEqual(keysFor("close", "mac"), ["esc"]);
+  });
+
+  test("the conversation tabs have a browser's keys, ⌘ on a Mac and Ctrl elsewhere (#401)", () => {
+    assert.deepEqual(keysFor("newConversation", "mac"), ["⌘T"]);
+    assert.deepEqual(keysFor("newConversation", "other"), ["Ctrl+T"]);
+    assert.deepEqual(keysFor("closeConversation", "mac"), ["⌘W"]);
+    assert.deepEqual(keysFor("closeConversation", "other"), ["Ctrl+W"]);
+    assert.deepEqual(keysFor("conversationStep", "mac"), ["⇧⌘[", "⇧⌘]"]);
+    assert.deepEqual(keysFor("conversationStep", "other"), ["Ctrl+Shift+[", "Ctrl+Shift+]"]);
+    assert.deepEqual(keysFor("tabArrows", "mac"), ["←", "→", "Home", "End"]);
+    assert.deepEqual(keysFor("laneArrows", "other"), ["↑", "↓", "Home", "End"]);
+    // ⌘W's old meaning, which only the Mac's menu bar has
+    assert.deepEqual(keysFor("closeWindow", "mac"), ["⇧⌘W"]);
+    assert.deepEqual(keysFor("closeWindow", "other"), []);
+  });
+
+  test("closing says it asks first and that General stays, and stepping says the terminal's keys win in it", () => {
+    const close = SHORTCUTS.find((s) => s.id === "closeConversation")!;
+    assert.match(inEnglish(close.when!), /asks first/);
+    assert.match(inEnglish(close.when!), /General/);
+    assert.match(inEnglish(SHORTCUTS.find((s) => s.id === "conversationStep")!.when!), /outside the terminal/);
+    assert.match(inEnglish(SHORTCUTS.find((s) => s.id === "terminalStep")!.when!), /in the terminal/);
   });
 
   test("an id the list does not have gets no keys rather than a guess", () => {
@@ -132,6 +155,21 @@ describe("the sheet", () => {
     assert.ok(ids(true).includes("recent"));
     assert.ok(!ids(false).includes("recent"), "Ctrl+Tab never reaches a page in a browser");
     assert.ok(ids(false).includes("palette"));
+  });
+
+  test("the tabs' keys are the app's alone, and Close Window only a Mac's", () => {
+    const ids = (desktop: boolean, platform: "mac" | "other") =>
+      shortcutSheet(desktop, platform).flatMap((g) => g.shortcuts.map((s) => s.id));
+    for (const id of ["newConversation", "closeConversation", "conversationStep"]) {
+      assert.ok(ids(true, "mac").includes(id), `${id} is missing from the app's sheet`);
+      assert.ok(ids(true, "other").includes(id), `${id} is missing on Windows and Linux`);
+      assert.ok(!ids(false, "mac").includes(id), `a browser keeps ${id}'s key for its own tabs`);
+    }
+    assert.ok(ids(true, "mac").includes("closeWindow"));
+    assert.ok(!ids(true, "other").includes("closeWindow"));
+    // and a browser tab's palette shows no key the browser will not pass on
+    assert.deepEqual(keysFor("newConversation", "mac", false), []);
+    assert.deepEqual(keysFor("find", "mac", false), ["⌘F"]);
   });
 });
 

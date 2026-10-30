@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { composioKeyMistake } from "@/lib/keyShape";
 import type { BlokExpression } from "@/lib/mascot";
+import { t, tr, type MessageKey } from "@/lib/i18n";
 
 export const INTRO_KEY = "bloks-intro-v1";
 /** Plugin picks made during the intro, read by the plugins panel later. */
@@ -53,14 +54,15 @@ const IDLE_EXPRESSIONS: BlokExpression[] = [
   "excited",
 ];
 
-/** The five-role reveal in the jobs vignette. */
-const CAST = [
-  { name: "Chief of Staff", color: "blue", shape: "star" },
-  { name: "Research Analyst", color: "cyan", shape: "bit" },
-  { name: "Growth Marketer", color: "pink", shape: "burst" },
-  { name: "Inbox Manager", color: "green", shape: "diamond" },
-  { name: "Support Agent", color: "orange", shape: "cloud" },
-] as const;
+/** The five-role reveal in the jobs vignette. Names are keys, read
+ * where they draw so the cast speaks the reader's language. */
+const CAST: readonly { name: MessageKey; color: "blue" | "cyan" | "pink" | "green" | "orange"; shape: "star" | "bit" | "burst" | "diamond" | "cloud" }[] = [
+  { name: "intro.cast.chiefOfStaff", color: "blue", shape: "star" },
+  { name: "intro.cast.researchAnalyst", color: "cyan", shape: "bit" },
+  { name: "intro.cast.growthMarketer", color: "pink", shape: "burst" },
+  { name: "intro.cast.inboxManager", color: "green", shape: "diamond" },
+  { name: "intro.cast.supportAgent", color: "orange", shape: "cloud" },
+];
 
 /** The everyday-tools grid. Slugs match the connector catalog (the same
  * ones the Plugins panel connects through Composio), and the domains feed
@@ -119,8 +121,8 @@ export function Intro({ onDone }: { onDone: () => void }) {
   };
 
   useEffect(() => {
-    const t = setTimeout(() => setSkippable(true), 2000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setSkippable(true), 2000);
+    return () => clearTimeout(timer);
   }, []);
 
   // the two automatic stages advance themselves; everything after has a
@@ -128,12 +130,12 @@ export function Intro({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     if (pinned) return;
     if (stage === "logo") {
-      const t = setTimeout(() => setStage("workspace"), 5600);
-      return () => clearTimeout(t);
+      const timer = setTimeout(() => setStage("workspace"), 5600);
+      return () => clearTimeout(timer);
     }
     if (stage === "workspace") {
-      const t = setTimeout(() => setStage("welcome"), 2800);
-      return () => clearTimeout(t);
+      const timer = setTimeout(() => setStage("welcome"), 2800);
+      return () => clearTimeout(timer);
     }
   }, [stage]);
 
@@ -155,14 +157,13 @@ export function Intro({ onDone }: { onDone: () => void }) {
             className="intro-rise mx-auto hidden h-12 dark:block"
           />
           <h1 className="intro-rise mt-6 text-display font-semibold text-foreground [animation-delay:120ms]">
-            Welcome to Bloks
+            {t("intro.welcomeToBloks")}
           </h1>
           <p className="intro-rise mt-2 text-lead text-muted-foreground [animation-delay:240ms]">
-            Personal AI agents that live on your machine, not in someone
-            else's cloud.
+            {t("intro.personalAiAgentsThatLive")}
           </p>
           <Button className="intro-rise mt-8 [animation-delay:360ms]" onClick={() => setStage("computers")}>
-            Next
+            {t("intro.next")}
           </Button>
         </Panel>
       )}
@@ -175,7 +176,7 @@ export function Intro({ onDone }: { onDone: () => void }) {
           onClick={() => finish()}
           className="absolute bottom-5 right-6 rounded-lg px-2 py-1 text-small text-muted-foreground/70 transition-colors hover:text-foreground"
         >
-          Skip intro
+          {t("intro.skipIntro")}
         </button>
       )}
     </div>
@@ -209,7 +210,7 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
       .then((c: any) => {
         if (c?.composio?.configured) {
           setStep("grid");
-          void refreshStatus(EVERYDAY.map((t) => t.slug));
+          void refreshStatus(EVERYDAY.map((tool) => tool.slug));
         } else {
           setStep("key");
         }
@@ -231,12 +232,12 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
         // the status check answers 200 with an error when Composio refuses
         if (!r?.configured || r.error) throw new Error(r?.error ?? "");
         setStep("grid");
-        void refreshStatus(EVERYDAY.map((t) => t.slug));
+        void refreshStatus(EVERYDAY.map((tool) => tool.slug));
       })
       .catch((e: Error) =>
         // Composio's own reason when it gave one (a refused key and an
         // unreachable service need different next steps)
-        setError(e.message ? `${e.message} Or skip for now.` : "That key didn't work. Check it and try again, or skip for now."),
+        setError(e.message ? t("intro.keyRefusedOrSkip", { reason: e.message }) : t("intro.keyDidNotWork")),
       )
       .finally(() => setSaving(false));
   };
@@ -260,7 +261,7 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
       .finally(() => setBusySlug(null));
   };
 
-  const connected = EVERYDAY.filter((t) => status[t.slug]?.connected).map((t) => t.slug);
+  const connected = EVERYDAY.filter((tool) => status[tool.slug]?.connected).map((tool) => tool.slug);
 
   if (step === "probe") return null;
 
@@ -268,11 +269,10 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
     return (
       <Panel key="plugins-key">
         <h2 className="intro-rise text-heading font-semibold text-foreground">
-          Connect your everyday tools
+          {t("intro.connectYourEverydayTools")}
         </h2>
         <p className="intro-rise mt-2 text-ui text-muted-foreground [animation-delay:100ms]">
-          Agents reach Slack, Gmail, Notion and more through Composio.
-          Paste a Composio Connect key (starts with ck_) to link them here. Get one free at composio.dev.
+          {t("intro.agentsReachSlackGmailNotion")}
         </p>
         <div className="intro-rise mx-auto mt-6 max-w-[380px] text-left [animation-delay:200ms]">
           <input
@@ -288,21 +288,23 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
         </div>
         <div className="intro-rise mt-6 flex items-center justify-center gap-4 [animation-delay:300ms]">
           <Button onClick={saveKey} disabled={saving || !key.trim()}>
-            {saving ? "Checking key…" : "Connect"}
+            {saving ? t("intro.checkingKey") : t("common.connect")}
           </Button>
           <button
             onClick={() => onDone([])}
             className="text-body text-muted-foreground transition-colors hover:text-foreground"
           >
-            Skip for now
+            {t("common.skipForNow")}
           </button>
         </div>
         <p className="intro-rise mt-4 text-small text-muted-foreground/70 [animation-delay:380ms]">
-          No key yet?{" "}
-          <a href="https://composio.dev" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
-            Get a free one at composio.dev
-          </a>
-          , or skip and do this later in Plugins.
+          {tr("intro.noKeyYet", {
+            link: (
+              <a href="https://composio.dev" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
+                {t("intro.getAFreeOneAt")}
+              </a>
+            ),
+          })}
         </p>
       </Panel>
     );
@@ -311,10 +313,10 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
   return (
     <Panel key="plugins-grid" wide>
       <h2 className="intro-rise text-heading font-semibold text-foreground">
-        What do you use every day?
+        {t("intro.whatDoYouUseEvery")}
       </h2>
       <p className="intro-rise mt-2 text-ui text-muted-foreground [animation-delay:100ms]">
-        Click a tool to sign in and connect it.
+        {t("intro.clickAToolToSign")}
       </p>
       <div className="intro-rise mt-6 grid grid-cols-4 gap-2 sm:grid-cols-5 [animation-delay:200ms]">
         {EVERYDAY.map(({ slug, label, domain, icon }) => {
@@ -337,17 +339,17 @@ function PluginsStage({ onDone }: { onDone: (connected: string[]) => void }) {
                 <span className="absolute right-1.5 top-1.5 text-caption text-success">✓</span>
               )}
               <ToolIcon label={label} domain={domain} icon={icon} />
-              {isBusy ? "Opening…" : label}
+              {isBusy ? t("intro.opening") : label}
             </button>
           );
         })}
       </div>
       {error && <div className="mt-3 text-body text-destructive">{error}</div>}
       <p className="mt-4 text-small text-muted-foreground/70">
-        Cards turn green once you're signed in. More in Plugins later.
+        {t("intro.cardsTurnGreenOnceYoure")}
       </p>
       <Button className="mt-5" onClick={() => onDone(connected)}>
-        {connected.length ? `Continue with ${connected.length} connected` : "Continue"}
+        {connected.length ? t("intro.continueWithConnected", { count: connected.length }) : t("common.continue")}
       </Button>
     </Panel>
   );
@@ -480,8 +482,8 @@ function WorkspaceStage() {
   const [expression, setExpression] = useState(0);
 
   useEffect(() => {
-    const t = setInterval(() => setExpression((e) => e + 1), 650);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setExpression((e) => e + 1), 650);
+    return () => clearInterval(timer);
   }, []);
 
   return (
@@ -495,7 +497,7 @@ function WorkspaceStage() {
         />
       </div>
       <div className="mt-6 text-lead font-medium text-foreground">
-        Setting up your Bloks workspace
+        {t("intro.settingUpWorkspace")}
         <span className="intro-ellipsis" />
       </div>
       <div className="mt-4 h-1 w-44 overflow-hidden rounded-full bg-muted">
@@ -512,19 +514,21 @@ function WorkspaceStage() {
 // spreadsheet, fills the week's numbers in, and a toast confirms the
 // report. Choreographed with one step counter so every actor reads off
 // the same clock.
-const SHEET_ROWS = [
-  ["Day", "Sessions", "Revenue"],
-  ["Mon", "1,204", "$8.2k"],
-  ["Tue", "1,377", "$9.1k"],
-  ["Wed", "1,890", "$11.4k"],
-  ["Thu", "2,041", "$12.9k"],
-] as const;
+// the staged sheet's words are read where they draw; its figures are
+// props in a scene, the same in every language
+const SHEET_ROWS = (): readonly (readonly string[])[] => [
+  [t("intro.sheet.day"), t("intro.sheet.sessions"), t("intro.sheet.revenue")],
+  [t("intro.sheet.mon"), "1,204", "$8.2k"],
+  [t("intro.sheet.tue"), "1,377", "$9.1k"],
+  [t("intro.sheet.wed"), "1,890", "$11.4k"],
+  [t("intro.sheet.thu"), "2,041", "$12.9k"],
+];
 
-const STAT_TILES = [
-  ["Revenue", "$41.6k", "+12%"],
-  ["Sessions", "6,512", "+8%"],
-  ["Signups", "214", "+19%"],
-] as const;
+const STAT_TILES = (): readonly (readonly [string, string, string])[] => [
+  [t("intro.sheet.revenue"), "$41.6k", "+12%"],
+  [t("intro.sheet.sessions"), "6,512", "+8%"],
+  [t("intro.sheet.signups"), "214", "+19%"],
+];
 
 function ComputersStage({ onNext }: { onNext: () => void }) {
   // 0 idle · 1 cursor to dock · 2 browser opens, charts rise · 3 cursor to
@@ -534,17 +538,17 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
   useEffect(() => {
     const BEATS = [500, 900, 2400, 900, 2800];
     let i = 0;
-    let t: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout>;
     const next = () => {
       if (i >= BEATS.length) return;
-      t = setTimeout(() => {
+      timer = setTimeout(() => {
         i += 1;
         setStep(i);
         next();
       }, BEATS[i]);
     };
     next();
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, []);
 
   // where the agent's cursor is, per step, in percent of the screen area
@@ -558,7 +562,7 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
           <span className="size-3 rounded-full bg-[#febc2e]" />
           <span className="size-3 rounded-full bg-[#28c840]" />
           <span className="ml-2 text-small text-muted-foreground">
-            Research Analyst's computer
+            {t("intro.researchAnalystsComputer")}
           </span>
         </div>
 
@@ -578,11 +582,11 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
               </div>
             </div>
             <div className="px-4 pb-1 pt-3 text-small font-semibold text-foreground">
-              Revenue dashboard
+              {t("intro.revenueDashboard")}
             </div>
             {/* stat tiles land one by one before the chart rises */}
             <div className="flex gap-2 px-4 pt-1.5">
-              {STAT_TILES.map(([label, value, delta], i) => (
+              {STAT_TILES().map(([label, value, delta], i) => (
                 <div
                   key={label}
                   className="flex-1 rounded-lg border bg-background/60 px-2.5 py-1.5 transition-all duration-300"
@@ -622,11 +626,11 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
             )}
           >
             <div className="border-b bg-muted/50 px-3 py-1.5 text-caption font-medium text-muted-foreground">
-              Weekly numbers · Q3
+              {t("intro.weeklyNumbersQ3")}
             </div>
             <table className="w-full border-collapse">
               <tbody>
-                {SHEET_ROWS.map((row, r) => (
+                {SHEET_ROWS().map((row, r) => (
                   <tr key={r} className={cn("border-b last:border-0", r === 0 && "bg-muted/40")}>
                     {row.map((cell, c) => {
                       const order = r * row.length + c;
@@ -661,22 +665,22 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
               step >= 5 ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0",
             )}
           >
-            ✓ Report updated, 4 charts refreshed
+            {t("intro.reportUpdated4ChartsRefreshed")}
           </div>
 
           {/* dock */}
           <div className="absolute bottom-2.5 left-1/2 flex -translate-x-1/2 gap-2.5 rounded-2xl border bg-card/80 px-3 py-2 shadow backdrop-blur">
-            <DockIcon label="Browser" active={step >= 2}>
+            <DockIcon label={t("intro.browser")} active={step >= 2}>
               <div className="size-full rounded-full border-[3px] border-brand" />
             </DockIcon>
-            <DockIcon label="Sheets" active={step >= 4}>
+            <DockIcon label={t("intro.sheets")} active={step >= 4}>
               <div className="grid size-full grid-cols-2 gap-[2px]">
                 {[0, 1, 2, 3].map((i) => (
                   <div key={i} className="rounded-[1.5px] bg-success/80" />
                 ))}
               </div>
             </DockIcon>
-            <DockIcon label="Mail" active={false}>
+            <DockIcon label={t("intro.mail")} active={false}>
               <div className="flex size-full items-center justify-center rounded-[3px] border-[2px] border-foreground/30">
                 <div className="h-0 w-0 border-x-[5px] border-t-[4px] border-x-transparent border-t-foreground/30" />
               </div>
@@ -693,7 +697,7 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
               <path d="M4 2 L20 12 L12.5 13.5 L9 21 Z" fill="var(--brand-ink)" stroke="var(--background)" strokeWidth="1.5" />
             </svg>
             <span className="ml-2.5 whitespace-nowrap rounded-full bg-brand-ink px-2 py-0.5 text-micro font-medium text-brand-foreground shadow">
-              Research Analyst
+              {t("intro.researchAnalyst")}
             </span>
             {/* click ripple on each landing */}
             {(step === 2 || step === 4) && (
@@ -704,13 +708,13 @@ function ComputersStage({ onNext }: { onNext: () => void }) {
       </div>
 
       <h2 className="intro-rise mt-7 text-heading font-semibold text-foreground [animation-delay:150ms]">
-        Every agent gets its own computer
+        {t("intro.everyAgentGetsItsOwn")}
       </h2>
       <p className="intro-rise mt-2 text-ui text-muted-foreground [animation-delay:250ms]">
-        A real machine to browse, run tools and finish work on.
+        {t("intro.aRealMachineToBrowse")}
       </p>
       <Button className="intro-rise mt-7 [animation-delay:350ms]" onClick={onNext}>
-        Next
+        {t("intro.next")}
       </Button>
     </Panel>
   );
@@ -745,8 +749,8 @@ function DockIcon({
 function JobsStage({ onNext }: { onNext: () => void }) {
   const [spread, setSpread] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setSpread(true), 550);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setSpread(true), 550);
+    return () => clearTimeout(timer);
   }, []);
 
   const R = 118; // orbit radius in px
@@ -786,7 +790,7 @@ function JobsStage({ onNext }: { onNext: () => void }) {
                   )}
                   style={{ transitionDelay: `${350 + i * 70}ms` }}
                 >
-                  {member.name}
+                  {t(member.name)}
                 </span>
               </div>
             </div>
@@ -794,14 +798,13 @@ function JobsStage({ onNext }: { onNext: () => void }) {
         })}
       </div>
       <h2 className="intro-rise mt-2 text-heading font-semibold text-foreground">
-        Give every agent a job
+        {t("intro.giveEveryAgentAJob")}
       </h2>
       <p className="intro-rise mt-2 text-ui text-muted-foreground [animation-delay:120ms]">
-        Each has its own role, skills and memory. In a room together, one
-        of them leads.
+        {t("intro.eachHasItsOwnRole")}
       </p>
       <Button className="intro-rise mt-6 [animation-delay:240ms]" onClick={onNext}>
-        Next
+        {t("intro.next")}
       </Button>
     </Panel>
   );

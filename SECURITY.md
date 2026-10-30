@@ -22,14 +22,25 @@ packaged build asks GitHub for the latest release on launch; npm is
 asked whether an installed engine CLI has a newer release; browsing the
 skill catalog fetches `https://bloks.dev/skills/index.json`, held for
 half an hour (point it elsewhere with `BLOKS_SKILLS_URL`), and the team
-gallery comes from bloks.dev the same way; while an engine runs on a key
+gallery comes from bloks.dev the same way; the Catalogue of teams and
+skills reads `catalog/index.json` from this repository's main branch on
+GitHub (point it elsewhere in its settings, or with `BLOKS_CATALOG_URL`)
+and the files it lists, kept on disk for offline, and a link you choose
+to install from is fetched once, over https only; while an engine runs on a key
 of your own, OpenRouter's public model list is fetched at most once a
 day, with no key and nothing about you, to estimate what unpriced turns
 cost; and with a Bloks key, bloks.dev is asked, with that key, about your
 plan. Everything else on the wire is the engines (Claude Code, Codex and
-the rest) and whatever connectors you configure, talking to their own
-services, and Bloks Cloud when you turn it on, which carries sealed
-traffic it cannot read. On a Mac with phone access on, the desktop app
+the rest), the voice vendors whose keys you save (the text being read
+aloud, to ElevenLabs, OpenAI, Fish Audio or xAI), and whatever connectors
+you configure, talking to their own services (with an app watcher on,
+that includes a WebSocket to the realtime service Composio delivers
+events through), and Bloks Cloud when you turn it on, which carries
+sealed traffic it cannot read. A Chatterbox server for voices must be on
+this computer or its local network (a loopback, private or link-local
+address, or a local name): Bloks refuses an address on the internet,
+since every reply read aloud is sent there as text with no key. On a Mac
+with phone access on, the desktop app
 also says on the local network where each listening workspace is (see
 Phones and other devices).
 
@@ -49,12 +60,78 @@ written `0600` inside a `0700` directory. That keeps
 other user accounts out, but it is not encrypted at rest. Moving these
 into the macOS Keychain is the top open item.
 
+**Which program runs as an engine is the person's choice, on this
+computer.** An engine's CLI can be started from a path other than PATH's
+copy. Only a window on this computer can set it (never a phone, a remote
+window or an agent's token), the path must be a file that can run, the
+Cursor editor is refused where the Cursor CLI is meant, and every change
+is written to the activity ledger.
+
+**Bringing a setup over copies a key only when you tick it.** Bring
+your setup reads Claude Code's, Codex's, Cursor's, OpenClaw's and
+Hermes' files under your home folder, read only, by name, and never
+opens a file named like a credential (`auth.json`, `.credentials.json`,
+`.env`, tokens, keys, OpenClaw's `credentials` folder). An MCP server's
+environment and headers, and a chat app's token, arrive as names with
+empty values. Each value is typed in by you, or copied from the other
+tool's config because you ticked the box for that one value; a value is
+never sent to the window, never put in the record of what was imported
+or in what an undo keeps, and lands only where you would have typed it
+(`config.json`). A chat app's token is checked with that app and saved
+switched off. Rules an import makes are only ever as broad as the
+original when they allow, and an agent's own tool limits become denies
+for that agent alone. The routes answer only the owner, never an agent's
+credential or a member, and every import can be undone.
+
 **Approvals are the safety gate.** When a provider asks to do something
 risky, Bloks surfaces an approval card and blocks until you answer.
 Don't route around it. Engines reach Bloks over protocols that can carry
 a permission request (Claude Code and Codex natively, Gemini CLI over
 the Agent Client Protocol) precisely so this gate exists; a headless
 "approve everything" mode is not used.
+
+**Scripts are the owner, and ask like the owner.** `bloks-server run`,
+`team apply` and `chat` ([docs/SCRIPTING.md](docs/SCRIPTING.md)) speak
+as the person, so their routes (`/api/runs`, `/api/teams/apply`) answer
+only this computer and the owner's own paired devices, never an agent's
+credential or a member's device, and the commands refuse to run inside
+an agent's turn. On another computer they take a paired device's token
+from the environment or a file, never from the command line. None of
+them answers an approval or a question on its own: a run that meets one
+stops and says so, and the card waits in the app. Applying a team file
+never deletes or archives anything and never touches an agent's engine,
+keys or approvals.
+
+**A turn's command line is narrower than you.** An agent's turn gets a
+credential of its own that lasts the turn, works only on this computer,
+and reaches only the routes listed in `server/agent-cli.ts`; each change
+it makes counts against twelve a turn, and agents writing to agents are
+held at the limit you set in Settings, Behaviour. Opening a new
+conversation is on that list only as saying its first message, to the
+agent itself or one it may already message, and is refused wherever that
+message would be. An empty conversation, and which one you have open,
+stay yours.
+
+**An agent can point at a setting, and propose a few, never change one.**
+`bloks where` reads the app's own Settings index and `bloks open` puts a
+button in the conversation that opens a page; neither changes anything.
+`bloks settings propose` puts a card in front of you for one of a short
+list of everyday preferences (`PROPOSABLE` in
+`server/settings-proposals.ts`): Behaviour's recall, nightly tidy,
+summarise as you go, other changed files and skill suggestions; the
+morning brief's switch, time, notifications and sections; the proposing
+agent's own notifications, effort and model on the engine it already
+has; and the effort new agents start on. Nothing changes until you tap
+Change, which only you can (`/api/settings-proposals` is on the agents'
+never list, and a member's credential is refused), and the change is
+the Settings page's own request, made as you and recorded as yours. An
+agent never proposes approvals or rules, keys, secrets or sign-ins,
+engines, members, invites or roles, phone access or pairing, remote
+access or Bloks Cloud, the plan, billing or spending limits, the limit
+on agents writing to agents or the task budget, backups or restore,
+moving or exporting a workspace, deleting anything, the browser's sites,
+Home Assistant, or anything about security: each is refused by name
+with the page to send you to, and `test/agent-guide.test.ts` holds that.
 
 **The renderer is pinned to its own origin.** The packaged app serves its
 UI with a strict `Content-Security-Policy`: no remote script, no remote
@@ -85,6 +162,29 @@ of its window and processes, `app.log` in its logs folder (on a Mac,
 folder and never sent off this computer. What the page writes to it is
 budgeted, so a page failing in a loop cannot fill the disk.
 
+**Signal is signal-cli's, not Bloks's.** An agent on Signal answers on
+an account linked to signal-cli on this computer, which keeps the
+account's keys in its own data folder; Bloks stores the account's number,
+the owner's and who is let in, never a credential. signal-cli's daemon has
+no password, so Bloks only ever talks to one on loopback, and anyone on
+this computer who can reach that port can speak as the account: unlink it
+in Signal on the phone (Settings, Linked devices) to end it. On the
+owner's own account, signal-cli receives every conversation; Bloks reads
+only Note to Self and drops the rest unread, but signal-cli may keep
+attachments others send in its folder. A person let in without full
+access talks to an agent with no tools and nothing of the owner's, and
+everything their turn asks goes to the owner.
+
+**The home asks first.** Home Assistant's token lives in `config.json`
+with the other keys and never reaches a client or a turn. Agents see only
+the entities the owner lists, and only agents the owner names, in the
+owner's own conversations. Every change is a card unless the owner marked
+that entity as one to change without asking, and locks, alarms and garage
+doors always ask. A long-lived token acts as the Home Assistant user who
+made it, so make it on an account that can reach only what agents should
+be near. What devices report reaches an agent as data, cleaned and
+bounded.
+
 ## Phones and other devices
 
 Your phone, a browser at bloks.dev/web or another computer of yours
@@ -97,12 +197,16 @@ instead (see People in your workspaces).
   somebody turns it on at the computer, and the workspace listens on the
   network only after Bloks restarts with it on. A six digit code and its
   QR are made when somebody presses Pair a phone, and the routes that
-  make or cancel one answer only on this computer. A code works once,
-  lasts five minutes, and five wrong tries close it. It is held in
+  make or cancel one answer only on this computer and on your own paired
+  devices, which are the only way in to a workspace on a server with no
+  screen; never a member's device or an agent's credential. A code works
+  once, lasts five minutes, and five wrong tries close it. It is held in
   memory, never on disk, and the window closes it when the panel showing
   it closes. A pairing link, for a device on another network, works once
-  for fifteen minutes and is shown only on the computer too. The one
-  other way a pairing is made is for a phone you already paired, below.
+  for fifteen minutes and is shown only in those same places. Switching
+  phone access off and removing every device answer only on the computer,
+  since from a device they would cut that device off too. The one other
+  way a pairing is made is for a phone you already paired, below.
 - **Finding the computer again.** On a Mac, while phone access is on and
   the workspace listens on the network, the desktop app announces it on
   the local network as `_bloks._tcp` (`server/announce.ts`): the
@@ -136,6 +240,75 @@ instead (see People in your workspaces).
   event stream, is refused to an agent's credential, and is not a route a
   member's device can call. A member's stream carries no screenshots at
   all, and nothing on a phone can click on the Mac.
+
+## The Bloks browser
+
+The desktop app has a browser beside the chat that agents drive and you
+watch (`electron/app-browser.mjs`, `server/app-browser.ts`). It is
+signed in as you wherever you sign in, which makes it worth guarding.
+
+- **Its own session, nothing of the app's.** Each workspace browses in a
+  persistent session partition of its own (`persist:bloks-browser-<id>`):
+  its cookies and storage are never the app's, and never another
+  workspace's. A tab is a sandboxed `WebContentsView` with no preload, so
+  a page has no `window.bloks` and no bridge to anything. Every
+  permission a page can ask for (camera, microphone, location,
+  notifications, devices) is refused except fullscreen and writing to
+  the clipboard. Deleting a workspace clears its browser's data, and
+  Settings, Browser signs out of every site at once.
+- **Only the web.** A tab never goes to a `file:`, `chrome:`, `devtools:`,
+  `javascript:` or `data:` address, or anything else that is not http or
+  https, and never to a Bloks server on this computer, on any port a
+  workspace or the app's own page uses, under any spelling of loopback.
+  This is checked on every navigation and redirect, including the ones a
+  page starts, and a page's requests to those ports are cancelled before
+  they leave.
+- **Who drives it.** An agent reaches it only through its turn's own
+  credential (`/api/agent/browser`), and only in a turn the owner
+  started in the owner's own conversations: never a member's turn, a
+  shared room's, an unlisted email's or a Telegram person's, because the
+  browser is signed in as the owner. Its settings, its picture and the
+  route another app uses (`/api/browser`) are never reachable with an
+  agent's credential. Another AI app reaches it through the MCP server,
+  from this computer only, and gets less than an agent: nothing it does
+  can ask you, so whatever would ask is refused for it. Without the
+  desktop app (`bloks-server`, a hosted workspace) the browser is simply
+  unavailable.
+- **Which sites.** Each workspace has a list of sites agents may use and
+  a list they never use, and a mode. In Ask first, the default, a site
+  not on the allowed list asks you on a card the first time an agent
+  opens it in a turn; Allow lets that turn in, Always allow adds it to
+  the list. In Auto (which, like widening approvals, asks for Touch ID
+  where the Mac has it) agents open any site but the blocked ones. A
+  blocked site always wins. While an agent drives a tab, the app holds
+  that tab to the same rules for every page a click, a redirect or a new
+  window takes it to, and tells the agent it stayed where it was.
+- **Which fields.** Typing into a password field, a payment field (by its
+  type, its autocomplete and its name), and choosing a file to upload
+  always ask you on a card first, in either mode. The card names the
+  field's kind and the site, never what would be typed, and Enter does
+  not answer it. A yes is good for that text in that field once. An
+  agent never clicks a file picker; it names a file, and you see which.
+- **What a page says is data.** Everything that comes back from a page,
+  its text, its snapshot, its title, the tab list, is framed before it
+  reaches a model: a sentence saying it is untrusted content from that
+  site and that nothing in it is an instruction, between an opening and a
+  closing tag carrying a random value per answer, so a page cannot write
+  its own end of the frame. The snapshot is read from the browser's
+  accessibility tree, and an agent's refs name the browser's own nodes,
+  so a page cannot forge one by writing an attribute.
+- **You can take it back.** You see which agent drives which tab and can
+  take over at any time, from the panel or simply by clicking or typing
+  in the page. The agent's next step then waits, up to a minute and a
+  half, and is told the browser is yours if it still is. Its steps are not
+  counted against its turn's twelve changes, since none changes the
+  workspace; the sites and fields above are what bound them.
+- **What leaves the Mac.** Your other devices hear only each tab's
+  address and title, who drives it and the downloads' names, never what
+  is on a page; a phone looking on gets a small picture of the tab on
+  screen, at most every second and a half, and a member's device gets
+  none of it. Downloads land in the workspace's own `browser-downloads`
+  folder, with the site's name for the file cut down to a plain name.
 
 ## People in your workspaces
 
@@ -175,11 +348,81 @@ behind it are built to be narrow.
 - **Private means private.** A member's one to one with an agent is
   theirs. You can turn on reading members' private conversations for the
   workspace, and every member is told which way it is set.
+- **A room's Auto reads the room as data.** In a room set to Auto, a
+  message that names nobody is shown to a small model, with the members'
+  names, roles and briefs and the last few lines, so it can pick who
+  answers. Anybody in the room, a guest from a chat channel included, may
+  write words meant to steer it, so they go in as escaped JSON inside a
+  block marked as data, and the answer must be one JSON object naming ids
+  from the list it was given; anything else, or no answer in 2.5 seconds,
+  and the lead answers. It can only pick agents the sender could have
+  named in that room themselves (`mayAddressInRoom` in
+  `server/access.ts`). By default it uses an engine the room's agents
+  already run on, so the room's words reach no provider they were not
+  already going to; a different one is your choice in Settings. Only you
+  can set a room to Auto: an agent's credential may not, since each
+  message then costs a call on your engine.
 
 Who sees what is decided in one file, `server/access.ts`, as plain
 functions a test can walk. Workspaces never share a folder, so an agent
 in one cannot read another's memory, and the safety floor keeps agents
 out of every workspace's folder, not only their own's.
+
+## Agents that work somewhere else
+
+An agent can work in a Docker container or on another machine over SSH
+instead of on this computer. Its engine runs there; its stdio is carried
+back over `docker exec -i` or `ssh -T`. The boundary between the two
+sides is drawn on purpose:
+
+- **Only the owner sets it, on this computer.** The routes refuse an
+  agent's token, a member, a paired device and any website. Bloks only
+  ever stops or removes a container it made for that agent, which it
+  knows by a label it put there; a container you run is only execed into.
+- **What crosses to the other side is the turn's own.** Its token, which
+  lasts the turn; the agent's command line; the persona and the MCP
+  config it would read here; the files the person attached to the
+  message; and the secrets you saved for agents. All of it travels on the
+  engine's own stdin, ahead of the engine, never in an argument that
+  `ps` on either machine could read. This computer's environment does
+  not go, and nor does any engine key or workspace key: Composio's, the
+  box token, an `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+- **Your engine sign-in stays here.** Bloks never copies a sign-in to a
+  container or a host on its own. The Test says when the engine there is
+  not signed in, and offers to open Terminal signed in there, or to copy
+  your sign-in file after a card that names the file at both ends and
+  says that anyone who can use that machine can then use it as you. The
+  copy happens only for the plan that card showed, and is recorded with
+  the agent. A Claude Code sign-in kept in the macOS Keychain is not a
+  file, and is never copied.
+- **The way back in is a gate, not the workspace.** On this computer a
+  request with no credential is you, so the other side never reaches the
+  workspace's own server. It reaches a gate (`server/workplace-gate.ts`)
+  on a port of its own: over an SSH reverse tunnel bound to the far
+  side's loopback, at Docker's host address, or with the container's
+  network off over a line of Bloks' own through `docker exec`. The gate
+  answers nothing but a running turn's token, passes the workspace only
+  the headers the command line needs (no origin, no cookie, no relay
+  mark), where the agent's usual rules apply, and closes when the turn
+  ends. The tunnel's port on the far loopback can be reached by anyone
+  on that machine, and they get nothing without the token.
+- **MCP servers stay here.** The approval bridge, the computer, the
+  browser and your own servers run on this computer as before, and the
+  engine there reaches each over HTTP through the gate. A server's key is
+  added here, so it never leaves either.
+- **SSH is keys only.** Bloks runs ssh with `BatchMode=yes`: no password
+  prompt, and a host key this computer does not know is a refusal to fix
+  in Terminal, never a question answered for you. A host is a name from
+  your SSH config or `user@host`, and nothing that begins with a dash,
+  which ssh would read as an option.
+- **Network off means two hosts.** A container made with its network off
+  reaches only Bloks and its engine's own service (`LINE_HOSTS` in
+  `server/workplace.ts`), on 443, through a proxy Bloks answers. An engine
+  whose hosts depend on how it is set up cannot be run that way.
+- **What it does there is not undoable from here** unless its folder is
+  this computer's own, mounted into a container. The settings say so, and
+  so is the agent told. What it saves to its outbox there is brought back
+  as plain files under plain names, never a link.
 
 ## Skills are executable trust
 
@@ -193,12 +436,114 @@ Bloks therefore:
 - shows the full body before anything is installed,
 - never fetches and installs a skill on its own initiative,
 - caps skill size, and confines skills to slugged filenames inside
-  `~/.bloks/skills` so a crafted name cannot escape the directory.
+  `~/.bloks/skills` so a crafted name cannot escape the directory,
+- never changes a skill on its own. When suggestions are on, a review of
+  a finished conversation can suggest a new skill or a change to one,
+  and an agent can ask for a change (`bloks skill revise`, or an MCP
+  client's `propose_skill_revision`). Every one of those is staged with
+  its reason and its diff, and only the person keeps it. A conversation
+  can contain anything a web page, a file or an email put into it, and a
+  skill is read into every future turn, so letting a review or an agent
+  rewrite one unattended would give whoever wrote that page a lasting
+  say in what your agents do. The review is told that what it reads is
+  data, and what it writes has anything shaped like a key taken out,
+  but the guarantee is the person's approval, not the prompt,
+- keeps every version of a skill, with who made it and why, so a change
+  that got through can be seen and put back. An agent's credential can
+  read versions and ask for a change against the version it read; it
+  cannot edit, restore, install, or keep a suggestion, and a change
+  written against a version that has since moved on is refused rather
+  than allowed to undo the newer one.
+
+Teams and skills from the Catalogue, a link or a file go through the same
+gate, and a few more:
+
+- Nothing installs from a click in a list or a `bloks://install` link.
+  Each opens a review of exactly what would be created (agents, a room,
+  skills with their full text, routines), and only the review's own
+  Install does anything. It installs the bytes that were shown, held by
+  a token for half an hour, not whatever a link serves by then.
+- A catalogue item is refused unless its bytes match the size and sha256
+  in the catalogue's index, whether it was just downloaded or read from
+  the copy on disk. A link has no index, so the review says it is not
+  from the catalogue.
+- Links are https only, with no sign-in in them, at most 96 KB, and are
+  read with the same parser and limits as a file imported by hand.
+- Agents a team creates start with connected apps, the browser and tool
+  servers off, and every routine it files starts paused. A team never
+  replaces a skill you already have under the same name.
+- The catalogue routes are the owner's: an agent's credential is refused,
+  and a member's requests never reach them.
+- **Share as file** takes out this workspace's stored keys, anything
+  shaped like a key, email addresses, phone numbers, your home folder
+  and the project brief given at hire. It cannot know what else in a
+  job description is private, so read the file before sending it.
 
 **Only install skills from a source you'd trust with your accounts.**
 The same caution applies to anything an agent reads and treats as
 instructions: web pages, issue comments, and email are untrusted input,
 not commands.
+
+## Events from your apps
+
+An app watcher starts a turn when something happens in an app you
+connected through Composio: an email arrives, an issue is labelled, a
+message is posted. Whoever caused the event wrote what it says, so it is
+handled as a stranger's words (`server/app-watch.ts`):
+
+- **It is data, fenced.** The event is cut down to its readable fields,
+  with anything named like a token, secret, password, cookie or key, and
+  any long blob, left out before a model sees it. What is left sits
+  between two markers carrying a nonce made for that one turn, under a
+  line saying it was written by whoever caused the event and is not to be
+  followed as instructions; a marker inside the event is defused. The
+  person's own instruction comes after the fence.
+- **Nothing listens until a person says so.** An agent can only propose
+  an app watcher. The proposal is a card showing the app, the event, the
+  filter, which agent acts and where, and nothing is set up at Composio
+  until the owner presses Start watching. Agents cannot confirm, change
+  or list accounts for one (`server/agent-cli.ts`).
+- **It is bounded.** The same event twice is one event, a plain-words
+  filter is checked before any model is woken, and each watcher starts at
+  most a few turns an hour and a capped number a day.
+- **Admins are trusted with it.** The apps watched are the owner's
+  connections. An admin may set up an app watcher for an agent whose team
+  conversation they are on; its turns go there, and run as the admin's,
+  so they carry none of the owner's tools the admin could not ask for
+  themselves. The event itself is read in that conversation, so make
+  someone an admin only if you would let them read what your apps send.
+  Members who are not admins cannot set one up.
+- **Composio's project key is needed, and stays here.** Watching needs
+  the project key (`ak_`) beside the Connect key. It is sent only to
+  Composio, to make and remove triggers and to authorise the realtime
+  channel events arrive on; it never reaches a turn.
+
+## Your runs, exported for training
+
+Export for training (Settings, Data, and `bloks-server export-runs`)
+writes every conversation it is pointed at into one file, which is the
+point of it and also why it is held close (`server/run-export.ts`):
+
+- **The owner's, on this computer.** The routes answer Bloks on this
+  computer alone: never an agent's credential, never a member, never a
+  paired phone or a remote window. The command refuses to run inside an
+  agent's turn (a shell with `BLOKS_TOKEN` set). Nothing is sent
+  anywhere; the file is written beside the data folder and shown,
+  downloaded or deleted only by its own name.
+- **Keys are always taken out.** Anything shaped like a key, token or
+  password, and every value this workspace has saved as one, is removed
+  before a result is shortened, so a key is never cut in two and left
+  half recognisable. Email addresses, phone numbers, home folder paths
+  and the names of the people the workspace knows (members, guests,
+  people on Telegram and Signal, the owner) go too unless you keep them.
+  The scrubber matches shapes and known values: a secret with neither,
+  typed into a conversation in plain words, can survive it. Read the
+  preview before you share a file.
+- **Other people's words stay out.** A member's words, a Telegram
+  stranger's, a person's on Signal, mail and chat apps, and members'
+  private conversations are left out unless you turn them on, and turning
+  either on asks first. Private conversations are not even counted unless
+  reading them is on in Members.
 
 **The macOS builds are signed and notarized.** Everything on the
 Releases page is built by CI from a tag. The macOS `.dmg` and `.zip` are
@@ -212,9 +557,18 @@ from source. See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## What is not yet done
 
+- The Bloks browser tells a payment field from its type, autocomplete and
+  name, which a page can leave off. A card form drawn in a frame from
+  another site, the usual way payment providers do it, never appears in
+  an agent's snapshot at all, so you fill those yourself; a card field a
+  page draws itself and names nothing is not caught. And a page can still
+  show an agent anything: the frame says it is data, but a model can be
+  talked into things.
+
 - Secrets are not in the Keychain. The desktop app keeps your Bloks key
   there, but each workspace's API keys are still in its `config.json`.
 - There is no sandbox between an agent and the rest of your machine
-  beyond what the provider CLI enforces. That includes agents a member
-  of your workspace talks to: give a team agent only the folder and the
-  tools you would let those people near.
+  beyond what the provider CLI enforces, unless you set it to work in a
+  container (see Agents that work somewhere else). That includes agents
+  a member of your workspace talks to: give a team agent only the folder
+  and the tools you would let those people near.

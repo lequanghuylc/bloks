@@ -15,19 +15,21 @@ import { Loader2 } from "@/components/icons";
 import { Info } from "@/components/icons";
 import { LogIn } from "@/components/icons";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { isHostedWindow } from "@/lib/waking";
 import { api, useStore } from "@/state/store";
+import { t, tr, type MessageKey } from "@/lib/i18n";
 
 type SetupTable = Record<string, { install: string; signIn?: string }>;
 
 /** Whose plan a sign-in spends, for the engines that sign in with a
  * person's own subscription. */
-const PLAN_OWNER: Record<string, { plan: string; maker: string; first?: string }> = {
+const PLAN_OWNER: Record<string, { plan: string; maker: string; first?: MessageKey }> = {
   claudeAgent: { plan: "Claude", maker: "Anthropic" },
   // a machine with no browser signs Codex in with a code, which ChatGPT
   // only accepts once the person has turned it on
-  codex: { plan: "ChatGPT", maker: "OpenAI", first: "Turn on device code sign-in in ChatGPT\u2019s security settings first." },
+  codex: { plan: "ChatGPT", maker: "OpenAI", first: "engineSetup.deviceCodeFirst" },
   geminiCli: { plan: "Google AI", maker: "Google" },
 };
 
@@ -46,9 +48,8 @@ function HostedPlanNote({ kind }: { kind: string }) {
     <div className="flex items-start gap-1.5 text-small leading-relaxed text-muted-foreground">
       <Info size={13} className="mt-[3px] shrink-0" aria-hidden />
       <span>
-        This uses your own {owner.plan} plan, at your own risk. Its limits are set for one person&rsquo;s ordinary use,
-        agents working around the clock can reach them sooner, and what the plan allows is between you and {owner.maker}.
-        An API key is billed by use instead.{owner.first ? ` ${owner.first}` : ""}
+        {t("engineSetup.hostedPlan", { plan: owner.plan, maker: owner.maker })}
+        {owner.first ? ` ${t(owner.first)}` : ""}
       </span>
     </div>
   );
@@ -66,6 +67,199 @@ function loadSetup(): Promise<SetupTable | null> {
   return cached;
 }
 
+/** Whether this window is on the computer Bloks runs on, where it can
+ * install, update and choose which CLI runs. Null until it is known. */
+function useOnThisComputer(): boolean | null {
+  const [local, setLocal] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadSetup().then((s) => alive && setLocal(Boolean(s)));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return local;
+}
+
+/**
+ * An engine that is installed but too old to run here. Not "missing",
+ * since installing again beside it would leave the old one first on
+ * PATH: it is updated where it is, by the same route the update note
+ * uses (server/engine-updates.ts).
+ */
+export function EngineOutdatedActions({
+  kind,
+  name,
+  onChanged,
+}: {
+  kind: string;
+  name: string;
+  onChanged: () => void;
+}) {
+  const local = useOnThisComputer();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  if (local === null) return null;
+  if (!local) {
+    return <div className="mt-1.5 text-small text-muted-foreground">{t("engineSetup.updateItOnTheComputer")}</div>;
+  }
+  const update = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const res = await fetch(`/api/engines/${kind}/update`, { method: "POST" });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok || !result.ok) setProblem(result.problem ?? t("engineSetup.didNotUpdate", { name }));
+    } catch {
+      setProblem(t("engineSetup.couldNotStartUpdate"));
+    } finally {
+      setBusy(false);
+      onChanged();
+    }
+  };
+  return (
+    <div className="mt-2 flex flex-col gap-1.5">
+      <div>
+        <Button size="sm" variant="secondary" onClick={() => void update()} disabled={busy}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+          {busy ? t("engineSetup.updating") : t("engineSetup.update", { name })}
+        </Button>
+      </div>
+      {problem && (
+        <div className="rounded-lg bg-warning/10 px-2.5 py-2 text-small leading-relaxed text-warning">
+          {problem}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Which copy of an engine's CLI runs: the one on PATH, or one the person
+ * points at (a second install, a build of their own). Only on the
+ * computer Bloks runs on, since it chooses a program to start there; the
+ * server checks the path is a file that can run before keeping it.
+ */
+export function EnginePathControl({
+  kind,
+  name,
+  command,
+  path,
+  onChanged,
+}: {
+  kind: string;
+  name: string;
+  /** The name looked up on PATH, for saying what runs now. */
+  command: string;
+  path: string | null;
+  onChanged: () => void;
+}) {
+  const local = useOnThisComputer();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(path ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!local) return null;
+
+  const put = async (next: string | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/engines/${kind}/path`, { method: "PUT", body: JSON.stringify({ path: next }) });
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const id = `engine-path-${kind}`;
+
+  if (!editing) {
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-small text-muted-foreground">
+        {path ? (
+          <>
+            <span className="min-w-0 truncate" title={path}>
+              {tr("engineSetup.runs", { path: <code className="font-mono text-foreground">{path}</code> })}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setValue(path);
+                setEditing(true);
+              }}
+              className="underline-offset-2 transition-colors duration-150 hover:text-foreground hover:underline"
+            >
+              {t("common.change")}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void put(null)}
+              className="underline-offset-2 transition-colors duration-150 hover:text-foreground hover:underline"
+            >
+              {busy ? t("engineSetup.saving") : t("engineSetup.useFromPath", { command })}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setValue("");
+              setEditing(true);
+            }}
+            className="underline-offset-2 transition-colors duration-150 hover:text-foreground hover:underline"
+          >
+            {t("engineSetup.useDifferentCopy", { name })}
+          </button>
+        )}
+        {error && <span className="basis-full text-destructive">{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2">
+      <label htmlFor={id} className="text-small text-muted-foreground">
+        {t("engineSetup.fullPath", { name })}
+      </label>
+      <div className="mt-1 flex gap-2">
+        <Input
+          id={id}
+          autoFocus
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && value.trim()) void put(value.trim());
+            if (e.key === "Escape") setEditing(false);
+          }}
+          placeholder={`/usr/local/bin/${command}`}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={error ? true : undefined}
+          className="h-8 min-w-0 flex-1 font-mono text-small"
+        />
+        <Button variant="secondary" size="sm" className="h-8" disabled={busy || !value.trim()} onClick={() => void put(value.trim())}>
+          {busy ? <Loader2 size={13} className="animate-spin" /> : t("common.save")}
+        </Button>
+        <Button variant="ghost" size="sm" className="h-8" disabled={busy} onClick={() => setEditing(false)}>
+          {t("common.cancel")}
+        </Button>
+      </div>
+      {error && (
+        <p role="alert" className="mt-1.5 text-small text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function CopyCommand({ command, className }: { command: string; className?: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -79,7 +273,7 @@ export function CopyCommand({ command, className }: { command: string; className
         "flex w-full items-center gap-2 rounded-lg bg-muted px-2.5 py-1.5 text-left transition-colors duration-150 hover:bg-accent active:scale-[0.99]",
         className,
       )}
-      title="Copy to clipboard"
+      title={t("engineSetup.copyToClipboard")}
     >
       <code className="min-w-0 flex-1 truncate font-mono text-small text-foreground">{command}</code>
       {copied ? <Check size={13} className="shrink-0 text-success" /> : <Copy size={13} className="shrink-0 text-muted-foreground" />}
@@ -146,11 +340,11 @@ export function EngineSetupActions({
       const res = await fetch(`/api/engines/${kind}/install`, { method: "POST" });
       const result = await res.json();
       if (!result.ok) {
-        setProblem(result.problem ?? `${name} did not install.`);
+        setProblem(result.problem ?? t("engineSetup.didNotInstall", { name }));
         setLog(result.log ?? "");
       }
     } catch {
-      setProblem("Bloks could not start the installer.");
+      setProblem(t("engineSetup.couldNotStartInstaller"));
     } finally {
       setBusy(false);
       onChanged();
@@ -176,9 +370,9 @@ export function EngineSetupActions({
           <div className="flex items-center gap-2">
             <Button size="sm" variant="secondary" onClick={() => void install()} disabled={busy}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-              {busy ? "Installing…" : `Install ${name}`}
+              {busy ? t("engineSetup.installing") : t("engineSetup.install", { name })}
             </Button>
-            {busy && <span className="text-small text-muted-foreground">Can take a minute.</span>}
+            {busy && <span className="text-small text-muted-foreground">{t("engineSetup.canTakeAMinute")}</span>}
           </div>
         ) : (
           command && <CopyCommand command={command} />
@@ -192,7 +386,7 @@ export function EngineSetupActions({
                 className="mt-1 flex items-center gap-1 text-small text-muted-foreground hover:text-foreground"
               >
                 <ChevronRight size={11} className={cn("transition-transform duration-150", showLog && "rotate-90")} />
-                {showLog ? "Hide" : "Show"} details
+                {showLog ? t("engineSetup.hideDetails") : t("engineSetup.showDetails")}
               </button>
             )}
             {showLog && (
@@ -202,7 +396,7 @@ export function EngineSetupActions({
             )}
             {entry && (
               <div className="mt-1.5 text-muted-foreground">
-                Or run it yourself in Terminal:
+                {t("engineSetup.orRunItYourself")}
                 <CopyCommand command={entry.install} className="mt-1" />
               </div>
             )}
@@ -218,18 +412,18 @@ export function EngineSetupActions({
         <div>
           <Button size="sm" variant="secondary" onClick={() => void signIn()}>
             <LogIn size={13} />
-            Sign in to {name}
+            {t("engineSetup.signInTo", { name })}
           </Button>
         </div>
         <HostedPlanNote kind={kind} />
         {signingIn === "opened" && (
           <div className="text-small leading-relaxed text-muted-foreground">
-            Finish in the Terminal window that opened. This updates on its own.
+            {t("engineSetup.finishInTheTerminalWindow")}
           </div>
         )}
         {signingIn === "manual" && (
           <div className="text-small leading-relaxed text-muted-foreground">
-            Run this in a terminal:
+            {t("engineSetup.runThisInTerminal")}
             <CopyCommand command={entry.signIn} className="mt-1" />
           </div>
         )}
@@ -269,15 +463,15 @@ export function EngineUpdateNote({ kind, name, className }: { kind: string; name
       const res = await fetch(`/api/engines/${kind}/update`, { method: "POST" });
       const result = await res.json();
       if (!result.ok) {
-        setNote(result.problem ?? `${name} did not update.`);
+        setNote(result.problem ?? t("engineSetup.didNotUpdate", { name }));
       } else if (!result.reloaded) {
-        setNote(`Updated. New models appear once current work on ${name} finishes.`);
+        setNote(t("engineSetup.updatedWhenFinished", { name }));
       }
       const [{ updates }, { instances }] = await Promise.all([api("/api/engines/updates"), api("/api/instances")]);
       if (updates) dispatch({ type: "engineUpdates", updates });
       if (instances) dispatch({ type: "instances", instances });
     } catch {
-      setNote("Bloks could not start the update.");
+      setNote(t("engineSetup.couldNotStartUpdate"));
     } finally {
       setBusy(false);
     }
@@ -287,19 +481,19 @@ export function EngineUpdateNote({ kind, name, className }: { kind: string; name
     <div className={cn("rounded-lg bg-brand-soft px-2.5 py-2 text-small leading-relaxed text-foreground", className)}>
       <div>
         <span className="font-medium">
-          {name} {update.latest} is out.
+          {t("engineSetup.isOut", { name, version: String(update.latest) })}
         </span>{" "}
         <span className="text-muted-foreground">
-          You have {update.installed}. Update to get the newest models.
+          {t("engineSetup.youHave", { version: String(update.installed) })}
         </span>
       </div>
       {local ? (
         <Button size="sm" variant="secondary" className="mt-1.5 h-6 px-2 text-small" disabled={busy} onClick={() => void run()}>
           {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-          {busy ? "Updating…" : `Update ${name}`}
+          {busy ? t("engineSetup.updating") : t("engineSetup.update", { name })}
         </Button>
       ) : (
-        <div className="mt-1 text-muted-foreground">Update it on the computer Bloks runs on.</div>
+        <div className="mt-1 text-muted-foreground">{t("engineSetup.updateItOnTheComputer")}</div>
       )}
       {note && <div className="mt-1 text-muted-foreground">{note}</div>}
     </div>

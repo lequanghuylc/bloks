@@ -25,8 +25,9 @@ import { useRef, useState } from "react";
 import { Plus } from "@/components/icons";
 import { X } from "@/components/icons";
 import { cn } from "@/lib/cn";
-import { plural } from "@/lib/plural";
 import { contextTitle, measuredContext, type LaneContext } from "@/lib/contextCard";
+import { rovingTo } from "@/lib/conversationKeys";
+import { t } from "@/lib/i18n";
 
 export type TaskState = "working" | "needs-you" | "idle";
 
@@ -49,7 +50,7 @@ export function formatTokens(n: number): string | null {
 }
 
 /** The server's bound (MAX_TASKS in server/store.ts). */
-const MAX_TASKS = 20;
+export const MAX_TASKS = 20;
 
 /** The server keeps a lane title to one line of 40 characters. */
 const MAX_TITLE = 40;
@@ -79,7 +80,7 @@ function RenameChip({ title, onDone }: { title: string; onDone: (next: string | 
       autoFocus
       value={value}
       maxLength={MAX_TITLE}
-      aria-label="Rename this conversation"
+      aria-label={t("taskStrip.renameThisConversation")}
       onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setValue(e.target.value)}
       onBlur={finish}
@@ -192,7 +193,7 @@ export function TaskStrip({
   return (
     <div
       role="tablist"
-      aria-label="Conversations"
+      aria-label={t("taskStrip.conversations")}
       className={cn(
         "flex shrink-0 items-end gap-0 overflow-x-auto max-md:[scrollbar-width:none] max-md:[&::-webkit-scrollbar]:hidden",
         inTitleBar ? "h-full min-w-0 flex-1 pt-1.5 pr-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : "h-[38px] bg-tab-strip px-3 pt-1.5 md:px-4",
@@ -205,7 +206,7 @@ export function TaskStrip({
         const parted = !active && index !== activeIndex - 1 && index !== tasks.length - 1;
         const total = (task.usage?.input ?? 0) + (task.usage?.output ?? 0);
         const usage = formatTokens(total)
-          ? ` · ${task.usage!.input.toLocaleString()} in, ${task.usage!.output.toLocaleString()} out, ${plural(task.usage!.turns, "reply", "replies")}`
+          ? ` · ${t("taskStrip.usage", { input: task.usage!.input, output: task.usage!.output, count: task.usage!.turns })}`
           : "";
         if (renaming === task.id) {
           return (
@@ -225,11 +226,23 @@ export function TaskStrip({
             key={task.id}
             role="tab"
             aria-selected={active}
-            tabIndex={0}
+            // One stop in the tab order, the open tab, and the arrows,
+            // Home and End from there, as a tab strip has them. They move
+            // the keyboard and Enter opens: opening one asks the server
+            // for it and reads it, which is not for every tab passed on
+            // the way.
+            tabIndex={active || (activeIndex < 0 && index === 0) ? 0 : -1}
             onClick={() => onSelect(task.id)}
-            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect(task.id))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") return (e.preventDefault(), onSelect(task.id));
+              const tabs = [...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>("[role=tab]") ?? [])];
+              const to = rovingTo(e.key, tabs.indexOf(e.currentTarget), tabs.length, "horizontal");
+              if (to === null) return;
+              e.preventDefault();
+              tabs[to].focus();
+            }}
             onDoubleClick={onRename ? () => setRenaming(task.id) : undefined}
-            title={`${task.title}${onRename ? ". Double-click to rename" : ""}${usage}`}
+            title={`${onRename ? t("taskStrip.titleRename", { title: task.title }) : task.title}${usage}`}
             className={cn(
               "group/tab relative flex h-full min-w-[96px] max-w-[220px] flex-1 basis-[200px] cursor-default items-center gap-2 rounded-t-[10px] pl-3 pr-1.5 text-body outline-none transition-colors duration-150",
               active
@@ -252,13 +265,13 @@ export function TaskStrip({
             <button
               tabIndex={-1}
               disabled={task.state === "working"}
-              aria-label={isGeneral ? `Clear ${task.title}` : `Close ${task.title}`}
+              aria-label={isGeneral ? t("taskStrip.clearNamed", { title: task.title }) : t("taskStrip.closeNamed", { title: task.title })}
               title={
                 task.state === "working"
-                  ? "Stop it before closing"
+                  ? t("taskStrip.stopItBeforeClosing")
                   : isGeneral
-                    ? "Clear this conversation"
-                    : "Close this conversation"
+                    ? t("taskStrip.clearThisConversation")
+                    : t("taskStrip.closeThisConversation")
               }
               onClick={(e) => {
                 e.stopPropagation();
@@ -281,8 +294,8 @@ export function TaskStrip({
       {tasks.length < MAX_TASKS && (
         <button
           onClick={onNew}
-          aria-label="New conversation"
-          title="New conversation, runs alongside this one"
+          aria-label={t("taskStrip.newConversation")}
+          title={t("taskStrip.newConversationRunsAlongsideThis")}
           className="mb-1 ml-1 flex size-7 shrink-0 items-center justify-center self-center rounded-full text-muted-foreground transition-[background-color,color,scale] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.94]"
         >
           <Plus size={15} />
@@ -291,9 +304,9 @@ export function TaskStrip({
 
       <span className="mb-2 ml-auto shrink-0 self-center pl-3 text-caption text-muted-foreground/80">
         {needsYou > 0
-          ? `${needsYou} waiting on you`
+          ? t("taskStrip.waitingOnYou", { count: needsYou })
           : running > 0
-            ? `${running} running`
+            ? t("taskStrip.running", { count: running })
             : null}
       </span>
     </div>

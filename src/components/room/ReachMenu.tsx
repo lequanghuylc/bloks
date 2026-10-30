@@ -3,15 +3,18 @@
 // An agent's composer says there how much the agent asks and which model
 // it runs; a room has several of each, so neither belongs. What a room's
 // next message needs is who it reaches, and that changes as it is typed:
-// everyone, the lead, or exactly who was named. The same word opens the
-// room's one setting about it, and a way to name someone without typing.
+// everyone, the lead, whoever Auto picks, or exactly who was named. The
+// same word opens the room's one setting about it, and a way to name
+// someone without typing.
 import { Check } from "@/components/icons";
 import { Crown } from "@/components/icons";
+import { Sparkles } from "@/components/icons";
 import { Users } from "@/components/icons";
 import { api, type Blok, type Bot } from "@/state/store";
 import { AgentAvatar } from "@/components/Avatar";
 import { quietButton } from "@/components/composer/Shell";
 import { namesLine } from "@/lib/roomVoices";
+import { ROOM_ANSWERS, answersOf, answersWords, type RoomAnswers } from "@/lib/roomRoute";
 import { cn } from "@/lib/cn";
 import {
   DropdownMenu,
@@ -22,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Reach } from "./reach";
+import { t } from "@/lib/i18n";
 
 export function ReachMenu({
   blok,
@@ -41,18 +45,22 @@ export function ReachMenu({
   lead: Bot | null;
   onMention: (name: string) => void;
 }) {
-  const leadOnly = Boolean(blok.leadOnly);
+  const answers = answersOf(blok);
   const named = reach.kind === "named" ? reach.ids.map((id) => members.find((m) => m.id === id)).filter(Boolean) as Bot[] : [];
   const line =
     reach.kind === "named"
-      ? `To ${namesLine(named.map((m) => m.name))}`
+      ? t("reachMenu.to", { names: namesLine(named.map((m) => m.name)) })
       : reach.kind === "lead"
-        ? `${lead?.name ?? "The lead"} answers`
-        : reach.kind === "people"
-          ? "No agent answers"
+        ? lead
+          ? t("reachMenu.answers", { name: lead.name })
+          : t("reachMenu.theLeadAnswers")
+        : reach.kind === "auto"
+          ? t("reachMenu.autoPicks")
+          : reach.kind === "people"
+          ? t("reachMenu.noAgentAnswers")
           : answering.length === 1
-            ? `${answering[0].name} answers`
-            : "Everyone answers";
+            ? t("reachMenu.answers", { name: answering[0].name })
+            : t("reachMenu.everyoneAnswers");
   const icon =
     reach.kind === "named" ? (
       <span className="flex shrink-0 -space-x-1">
@@ -62,28 +70,27 @@ export function ReachMenu({
       </span>
     ) : reach.kind === "lead" ? (
       <Crown size={14} className="shrink-0 text-brand-ink" />
+    ) : reach.kind === "auto" ? (
+      <Sparkles size={14} className="shrink-0 text-brand-ink" />
     ) : (
       <Users size={14} className="shrink-0" />
     );
 
-  const setLeadOnly = (next: boolean) => {
-    if (next === leadOnly) return;
-    api(`/api/bloks/${blok.id}`, { method: "PATCH", body: JSON.stringify({ leadOnly: next }) }).catch(() => {});
+  const setAnswers = (next: RoomAnswers) => {
+    if (next === answers) return;
+    api(`/api/bloks/${blok.id}`, { method: "PATCH", body: JSON.stringify({ answers: next }) }).catch(() => {});
   };
-  const choices = [
-    { on: !leadOnly, label: "Everyone", hint: "Anyone can answer. @name to ask one.", pick: () => setLeadOnly(false) },
-    {
-      on: leadOnly,
-      label: "Only the lead",
-      hint: `${lead?.name ?? "The lead"} answers unless you @name someone.`,
-      pick: () => setLeadOnly(true),
-    },
-  ];
+  const choices = ROOM_ANSWERS.map((value) => ({
+    value,
+    on: answers === value,
+    ...answersWords(value, lead?.name ?? null),
+    pick: () => setAnswers(value),
+  }));
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" title={`Who answers: ${line}`} aria-label={`Who answers: ${line}`} className={quietButton}>
+        <button type="button" title={t("reachMenu.whoAnswersIs", { line })} aria-label={t("reachMenu.whoAnswersIs", { line })} className={quietButton}>
           {icon}
           <span className="truncate">{line}</span>
         </button>
@@ -91,10 +98,10 @@ export function ReachMenu({
       <DropdownMenuContent side="top" align="start" sideOffset={6} className="w-[280px] max-w-[calc(100vw-24px)]">
         {answering.length > 1 && (
           <>
-            <DropdownMenuLabel>Who answers</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("reachMenu.whoAnswers")}</DropdownMenuLabel>
             {choices.map((c) => (
               <DropdownMenuItem
-                key={c.label}
+                key={c.value}
                 onSelect={c.pick}
                 role="menuitemradio"
                 aria-checked={c.on}
@@ -112,13 +119,13 @@ export function ReachMenu({
             <DropdownMenuSeparator />
           </>
         )}
-        <DropdownMenuLabel>Ask someone</DropdownMenuLabel>
+        <DropdownMenuLabel>{t("reachMenu.askSomeone")}</DropdownMenuLabel>
         {answering.map((m) => (
           <DropdownMenuItem key={m.id} onSelect={() => onMention(m.name)} className="[&_svg]:text-inherit">
             <AgentAvatar bot={m} size={16} className={cn(!m.avatarAt && "rounded-[5px]")} />
             <span className="min-w-0 flex-1 truncate">{m.name}</span>
             {m.id === lead?.id && answering.length > 1 && (
-              <span className="flex text-brand-ink" title="Lead">
+              <span className="flex text-brand-ink" title={t("reachMenu.lead")}>
                 <Crown size={12} />
               </span>
             )}

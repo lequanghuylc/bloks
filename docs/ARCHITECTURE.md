@@ -60,8 +60,18 @@ tool calls and permission requests.
 
 **CLI over the Agent Client Protocol.** `acp.ts` is generic: ACP is a
 JSON-RPC protocol that agent CLIs speak so editors can drive them, so one
-implementation serves any agent that speaks it. Gemini CLI is the first.
-Adding another is an entry in `ACP_SPECS`.
+implementation serves any agent that speaks it. Gemini CLI was the first;
+OpenCode, the Grok CLI, Pi, Cursor (`cursor-agent acp`) and Cline (`cline
+--acp`) followed. Adding another is an entry in `ACP_SPECS`, which can
+also say how the CLI reports its sign-in (`signInCheck`, a command, for
+Cursor's keychain login), which ACP auth method to call before a session
+(`authMethod`, Cursor's `cursor_login`), and the oldest release that
+works (`minVersion`, 3.0.68 for Cline; an older one is unavailable with
+that reason, and its row offers an update). Every CLI engine can be
+started from a path of the person's choosing (`enginePaths` in
+`config.json`, set with `PUT /api/engines/:kind/path` from this computer
+only), which applies to each instance of that driver that names no CLI
+of its own.
 
 **OpenAI-compatible HTTP.** `openai-compat.ts` is generic too. Nearly
 every lab now answers `/chat/completions`, so providers are data in
@@ -107,6 +117,31 @@ out. Either way the room gets one notice saying who named whom and that
 posting there carries on, where the mention used to be stored and
 dropped without a word.
 
+**Who answers a message that names nobody** is the room's `answers`:
+`everyone`, `lead`, or `auto` (`server/room-route.ts`; a room from before
+reads its old `leadOnly`, which stays true for `lead` and `auto` alike so
+older clients still see the fallback). Naming a member with @ always
+reaches exactly who was named and never consults anything. In an Auto
+room, `routeRoomMessage` in `server/index.ts` gathers the members the
+sender may address there (`mayAddressInRoom` in `server/access.ts`: the
+sender and the agent both in the room), the last six lines and the new
+message, and asks one engine's `generateText` once. The engine is the
+one chosen in Settings (`rooms.router` in config.json), or by default the
+room's own: the first member engine with a small model, else the first
+with a one-shot call, so the room's words go nowhere its agents were not
+already sending them. The prompt gives members as short ids (`m1`, `m2`)
+with name, role and brief, and puts the room's words in a `<data>` block
+as JSON whose `<` and `>` are escaped, so nothing written in the room can
+close the block. The reply must be one JSON object with `ids` from that
+list (at most three), a `topic`, a `reason` and a `confidence` from 0 to
+1. An unknown id, too many, a missing or low confidence, no ids, an error
+or 2.5 seconds without an answer each mean the lead answers instead. The
+outcome (`RoomRoute`: who, topic, reason, or the fallback and why) is
+patched onto the person's message, which the room draws as a quiet line
+above the reply that opens to the reason, and for a room carried into a
+chat channel it is said there as a notice before the reply. A message an
+agent posts is never routed: it reaches only whom it names, as before.
+
 Team formation (`server/teams.ts`) sits on top: a senior agent can emit a
 fenced plan, which becomes an approval card. Only your yes creates the
 agents and the room.
@@ -132,10 +167,15 @@ Workspaces), written synchronously. No database.
 | `usage.json`, `model-prices.json` | Daily usage by agent, engine and person; the public price list estimates come from (see Usage and spending limits) |
 | `plan-cache.json` | The Plan page's last good answers from bloks.dev, under a fingerprint of the key |
 | `location.json` | The owner's iPhone's last reading and whether each phone shares, never a trail; left out of backups and moves (see Location) |
+| `connections-audit.jsonl` | One line per request an agent made through a connection, sent or refused: when, which agent, what, the status. Never a header, a body or a query string (see Connections) |
 | `messages-<id>.json` | One transcript per agent or room, same key space |
 | `config.json` | Connected providers and keys, `0600` |
 | `skills/*.md` | Installed skills |
+| `skill-history/<id>.json` | Every version of each skill of the person's, whole, with who made it, when and why (see Skill versions) |
+| `skill-usage.json` | How often each skill and each version was used, and corrected straight after |
+| `proposals.json` | Suggested skills and changes to skills, staged until the person keeps or dismisses them |
 | `setup-import.json` | What was brought over from other agent tools, by item: a digest, where it went, and the exact text added |
+| `setup-import-runs.json` | The newest 20 imports from other agent tools, step by step, for undo; never a key |
 | `session-import.json` | Which past Claude Code and Codex sessions became which lanes, with the digest of what came over |
 | `engine-sessions.json` | Engine session ids Bloks itself ran, so they are never offered back as past sessions |
 | `events/`, `native/` | Canonical events, and raw provider traffic |
@@ -323,8 +363,10 @@ key per direction from it (`server/relay-crypto.ts`), every request and
 every event frame is sealed for one device, and the relay in between
 carries ciphertext it cannot open. A browser keeps the two keys as
 non-extractable WebCrypto keys and never the token. Routes that mint new
-pairings answer only on this machine, but for the one that lets the
-owner's paired phone pair another workspace of theirs (below). A member's
+pairings answer this machine and the owner's own paired devices, the only
+way in to a server with no screen, and never a member's device or an
+agent; switching phone access off and removing every device answer this
+machine alone, since from a device they cut that device off too. A member's
 device, or a desktop app that joined the workspace, reaches it the same
 way with a member credential and is held to its own surface (see People
 in a workspace); one that joined on the owner's network alone calls it
@@ -339,7 +381,13 @@ digit code and a QR token, in memory only, one at a time, for five
 minutes; the window asks for the next just before one runs out while the
 panel is open and visible, and `POST /api/pair/cancel` closes it the
 moment the panel closes. `POST /api/pair/claim` takes either credential
-and counts every try, and five checked tries close the code.
+and counts every try, and five checked tries close the code. The QR
+carries the server's own addresses, wherever the card is drawn.
+bloks-server never listens on the network, so there `GET /api/pair` says
+so (loopback, no restart pending, no addresses), `start` refuses, and the
+card shows the Bloks Cloud link (`POST /api/pair/link`) as a QR instead.
+Where the card is on another computer, `computer` and `here` name the one
+the phones reach.
 
 A phone whose saved address went stale finds the Mac again on its own.
 While phone access is on and the server listens on the network, a server
@@ -438,6 +486,28 @@ engine taking over is the same wait), every phone's activity for it is
 ended. These go through the relay as ActivityKit pushes, which Apple
 reads, so they carry only a state word, the turn's start time and opaque
 ids, with the agent's name and the conversation sealed for the device.
+
+An activity's end is silent, so the same turns also say when their
+answer is ready (`server/answer-ready.ts`): once, as the turn's
+`reply.settled` goes out, a wake with reason `reply` to the owner's
+phones, its preview (the agent, the answer's first words, the lane)
+sealed for each. Only for a turn that ended well in a conversation with
+one agent, not one asked from Telegram, an agent whose notifications are
+off, a goal's turn, or a workspace that is muted or set to fewer
+notifications. The server keeps that word in its data folder
+(`attention.json`, `server/attention.ts`), so a restart, or a server no
+app started, still has it; a server nobody ever told is not muted. The
+desktop app hands it to a server it started as `attention`, and says it
+to your hosted workspace, or one joined as its owner, on
+`PUT /api/workspace/attention` through the stand-in, only when it
+changed. The owner may set it there from any device of theirs (feature
+`attention`); agents, members and admins are refused, and a change on
+a server the app started is put to the app first, so the switcher
+shows it too. And not while
+any of the person's screens shows that conversation: windows and phones
+say what they have in front of the person with `POST /api/viewing`
+(feature `viewing`), again every thirty seconds while they do and null
+when they stop, and a word older than 75 seconds no longer counts.
 The tokens are kept per paired device, swept against the pairing every
 minute (which also ends what a restart left behind), and dropped when the
 device is unpaired. Without Bloks Cloud there is no way to push, and the
@@ -1063,6 +1133,30 @@ start that finds itself still on that version says on the update card
 that the update did not install, once, with the offer to try again or
 to get the installer from bloks.dev.
 
+A `bloks-server` on a computer of its own is updated by its owner from
+Settings, About, on any of their own devices, or with
+`bloks-server update` (`server/server-update.ts`). The page says the
+app's version and the server's apart, since neither update touches the
+other. Only an install that `bloks-server` started from the release's
+folder, which the account it runs as can write, and which nothing else
+starts (systemd, launchd, pm2, supervisord, a container, a hosted
+machine, a source checkout, the app itself) updates itself; every other
+one is shown the steps to do it by hand. The server takes GitHub's
+latest stable release, downloads its tarball only once the checksum
+published beside it is there, keeps it only if it matches that and
+GitHub's own digest of the file, and unpacks it under `versions/` in
+the install folder. Then it drains, writes its orders, starts a helper
+(`server/server-update-finish.ts`) in a process group of its own, and
+stops. The helper waits for it to go, points `versions/current` at the
+new version with one rename, starts the install folder's
+`bin/bloks-server.mjs` (which hands over to the newest of its own
+version and `versions/current`), and waits for the new version to
+answer `/api/health` from its own pid. If it does not within two
+minutes, the helper stops it, points the link back and starts the old
+one. Either way it writes `server-update.json` in the data folder,
+which the page reads, and the started server's output goes to
+`server.log` beside it. The data folder itself is never touched.
+
 Nothing that arrives meanwhile is turned away. `startTurn` is where every
 turn starts, so it is where a drain holds them: words for one of an
 agent's lanes wait in that lane's queue, as they would behind a busy
@@ -1290,6 +1384,42 @@ keeps the place of the turn it continues. The places live in memory,
 with the queue they ride on, rather than on the lane record: a restart
 begins every chain again, which lets a loop that spans one run a stretch
 more at most, and leaves nothing on disk to clear when a lane closes.
+
+A new conversation is its own command, and the only way an agent opens
+one (GitHub 408). `bloks tab <agent-id|me> [--title <title>] <first
+message>` is `POST /api/agent/conversations` with `{ to, text, title }`:
+a lane of the recipient's (itself when `to` is left out or `me`) with
+that message as its first words, made in the background so the person's
+screen stays on the lane they had open. `to` is read as `agentNamed`
+reads it, so a member's own agent is no such agent, as on the roster an
+agent reads. The words go through `sendUserMessage` with the sender's
+`chainFrom`, as `say`'s do, and are counted as one change. Everything
+that would refuse `say` to that agent is checked first and refuses this
+before a lane exists: archived, somebody at the wheel, or past the
+chain limit or the person's budget, in which case the words are held
+where `say`'s would be, on the notice in the recipient's first
+conversation. A send that still fails takes its empty lane away again.
+Twenty lanes is the cap here as everywhere. The answer names the agent,
+the lane's id and its title, and `queued`, `note` and `engine` when a
+message would carry them; the sender's own conversation records it as
+it records a `say`. The person's own route for an empty lane, `POST
+/api/bots/:id/tasks`, and switching lanes stay off an agent's list. So
+there are three things an agent asked for "a new conversation" may
+mean, and the command line keeps them apart: `tab` is a new lane, `say
+--task <name>` names the work a message hands off for counting turns
+and lands in the recipient's first conversation, and `fresh` keeps the
+lane it is in with a new engine session.
+
+Which of those fits what the person asked, with the rest of the command
+line, is a built-in skill, `using-bloks` (`BLOKS_GUIDE` in
+`server/skills.ts`). It rides along as `page-design` does
+(`withBloksGuide`), one line in the skills index and its body read on
+demand with `bloks skill using-bloks`, but only on the turns that get
+the full credential it describes: the owner's own, outside a shared
+room, on an engine that runs a process. It names every command `bloks
+help` lists, which `test/agent-tab.test.ts` checks against the shipped
+CLI, and what only the person can do, pointing at `where`, `open` and
+`settings propose` below rather than naming pages from memory.
 
 Separate tasks are counted apart only when the person allows it
 (GitHub 326). `agents.taskBudget` is off until they set it in Settings,
@@ -1544,13 +1674,118 @@ one every four seconds in a conversation, as before.
 
 ## Chat platforms
 
-A shared room can be carried into Slack, Discord or a WhatsApp group
-(`server/chat-bridge.ts` holds the rules, one transport file each moves
-the bytes). Slack and Discord are connections this machine opens. WhatsApp
+A shared room can be carried into Slack, Discord, or a WhatsApp or Signal
+group (`server/chat-bridge.ts` holds the rules, one transport file each
+moves the bytes; Signal's rides the same stream as its agents, see
+Signal). Slack and Discord are connections this machine opens. WhatsApp
 can only call a public address, so Bloks Cloud gives each workspace one
 and hands every call over the relay line as an ask; the call arrives
 readable, because Meta sends it that way, and is believed only if Meta's
 signature checks out against the app secret, which stays here.
+
+## Signal
+
+The same shape as Telegram, on an account rather than a bot. Signal has
+no bots, so an agent answers on a real Signal account, and Bloks never
+holds its keys: signal-cli, running on this computer as a JSON-RPC daemon
+(`signal-cli daemon --http 127.0.0.1:8080`, multi-account), is linked to
+the account as a secondary device and keeps everything in its own data
+folder. Bloks talks to it over loopback only (`cleanDaemonUrl` refuses
+anything else, since the daemon has no password): `POST /api/v1/rpc` for
+`listAccounts`, `startLink`/`finishLink`, `send`, `sendTyping`,
+`remoteDelete`, `getAttachment` and `listGroups`, and one Server-Sent
+Events stream, `GET /api/v1/events`, for every account it has linked.
+`server/signal.ts` holds the parse and the rules (`decide`),
+`server/signal-people.ts` the people rules, and the Signal section of
+`server/index.ts` the plumbing.
+
+Linking is a code to scan: `POST /api/bots/:id/signal {link: true}` asks
+for a `sgnl://linkdevice` URI, the settings screen draws it as a QR code,
+and `finishLink` waits in the background for the phone. An account already
+linked can be chosen instead. One account answers for one agent. The
+owner pairs with a single-use word, as on Telegram, and where it arrives
+decides the shape: from another account, that account is the owner and
+the linked account is the agent's own number; in Note to Self, the linked
+account is the owner's own, and from then on only Note to Self is read.
+On the owner's own account every other conversation, and every message
+the owner sends to anyone else from the phone, is dropped by `decide`
+before anything reads it, and nobody can knock.
+
+The owner's words become a turn in the agent's ordinary conversation,
+marked `fromSignal`, and the answer comes back with what the turn saved
+(five files at most, as data URIs). Cards the turn raises are said in the
+chat and answered by typing a number or yes / no; an approval needs one of
+its own answers, and voice never answers one. Photos arrive as the
+composer's images, voice notes are transcribed with the speech key, and
+long turns get a note that is taken back (`remoteDelete`) when the answer
+comes. Everything sent is remembered by timestamp, so an echo is never
+heard, and everything handled is kept in `signal-seen.json`, since the
+daemon replays what it still holds to a stream that starts over.
+
+People follow Telegram's rules: a stranger knocks once, the owner gets a
+card in the app and in their own chat, answered there only by a reply
+that quotes it, the waiting list and the closed records are bounded by
+the same limits, names are cleaned and namesakes flagged, and every change
+to a person's access is a new grant. A person's words land in a
+conversation of their own (`TaskRecord.signalPerson`), never in the
+owner's, framed as theirs. Without full access their requester is
+`signal:<hash of agent, connection, person, grant>`, which `startTurn`
+treats as an outsider, like an email from anyone: no tools, no notes, no
+memory, a fresh engine session with their own conversation replayed, and
+only on an engine whose tools can be switched off. With full access their
+turns run with the agent's own trust and their files come back to them.
+Either way the cards their turns raise go to the owner, never to them.
+
+A room can be carried into a Signal group through any linked account
+(`chat.signal` in config.json, `server/chat-bridge.ts` for the rules). A
+group message on that account goes to the room; the account's own
+messages arrive as sync messages, which never reach the bridge, so the
+room cannot wake itself.
+
+## Home Assistant
+
+`server/home-assistant.ts` holds the rules; the Home Assistant section of
+`server/index.ts` meets them. One connection for the workspace: an
+address and a long-lived access token, checked with `GET /api/` and kept
+in config.json (`home.token` is in `SECRET_PATHS`). The token never comes
+back out of `/api/home`, never enters a turn, and every request is made by
+Bloks with redirects refused.
+
+What an agent reaches is the owner's choice: entities and whole domains
+on a list, and the agents allowed to use the home at all. An agent uses
+it through its own command line (`bloks home entities | history | call |
+wait`, routes under `/api/bots/:me/home/`), only in the owner's own turns:
+not in a shared room, not for a person on Telegram or Signal, full access
+or not, and not for mail from anyone. Reading is free. A service call
+names entities on the list, in their own domain or Home Assistant's
+generic on, off and toggle, with any `entity_id`, `area_id`, `device_id`,
+`floor_id` or `label_id` in its data taken out, so it cannot reach past
+what it names. It runs at once only when the owner marked every entity to
+change without asking; otherwise it is an approval card in the lane
+(`home:<id>`, answered through `/api/bots/:id/respond`, and on the owner's
+Signal chat when the turn began there). Locks, alarms, and covers classed
+or named as garage doors or gates ask every time, whatever was marked. The
+route waits 90 seconds for an answer, then says it is still waiting; a yes
+counts only while the turn that asked is still running.
+
+What comes back is the device's words, not the owner's: names, states and
+attributes are cleaned of control characters and reordering marks,
+bounded in length and depth, stripped of pictures and tokens, and sent
+with a note that they are data. The owner's picker reads areas from Home
+Assistant's WebSocket registries, and shows names cleaned the same way.
+
+The other direction needs nothing new: Home Assistant posts to an agent's
+webhook. `POST /api/home/automation` makes (or reuses) a webhook named
+"Home Assistant" for the agent and returns a `rest_command`, a state
+automation and a voice automation (a `conversation` trigger with
+`set_conversation_response`), with the address this computer is reachable
+at. Home Assistant's own conversation agent integrations are not
+supported: none in Home Assistant calls an arbitrary HTTP endpoint, and
+standing in for one would be a new model endpoint on this computer.
+
+The Bloks MCP server reads the list too (`home_entities`, `home_history`)
+once the owner lets other AI apps in, and `home_call` changes only what
+needs no asking: there is no turn there to put a card in.
 
 ## Telegram
 
@@ -1815,8 +2050,16 @@ its own files, its own workspace or the folder its turns work in, judged
 as the open file (`openUnder`: links followed and judged inside, nothing
 hidden on the way), with a caption of up to 1024 characters, and at most
 `MAX_TELEGRAM_SENDS_PER_HOUR` an hour. The answer says whether it went,
-and why not in the words a turn's files use. A paired agent is told the
-command alongside `bloks share`.
+and why not in the words a turn's files use. With `--text "..."` (or
+`--text -` for stdin) it sends words instead of a file (GitHub 420), to
+the same chat under the same checks and the same hourly count: up to
+`MAX_TELEGRAM_SEND_TEXT_CHARS`, secrets hidden as in an answer, and sent
+the way an answer is (`telegram.send` with Markdown, so `<code>` and
+`<pre>` stay tap-to-copy and a long text is split), each message only
+while the pairing holds. An answer that stopped partway says how many
+messages went, so the agent does not send it all again. `--silent` sends
+either without a sound (`disable_notification`), for a batch. A paired
+agent is told the command alongside `bloks share`.
 
 While a Telegram turn runs the chat shows "typing" (`keepTyping`).
 Completed visible notes from its consuming turn go out as new silent messages
@@ -1852,9 +2095,90 @@ redacted notice is sent; only a turn with neither keeps the empty-answer line.
 
 `server/team-file.ts` reads and writes a team as one Markdown file: a
 heading per member, a few `key: value` lines, and the brief as the body.
-Rooms export to it, imports go through it, and the gallery at
-bloks.dev/teams is checked with the same parser before anything reaches
-the hire dialog.
+A member may name library skills it uses (`uses:`), and the top block or
+a member's section may carry `routine:` lines (`weekdays 09:00 | name |
+what to say`). Rooms export to it, imports go through it, and the gallery
+at bloks.dev/teams is checked with the same parser before anything
+reaches the hire dialog.
+
+## The catalogue
+
+`catalog/` in this repository holds ready teams (`teams/<id>.md`) and
+skills (`skills/<id>/SKILL.md`, the open format: `name` and `description`
+on top, a `metadata` block for a title, version, author and tags).
+`scripts/build-catalog.mjs` writes `catalog/index.json` from them with
+each item's id, kind, title, summary, tags, author, version, path, size
+and sha256, and `test/catalog.test.ts` fails when the checked-in index is
+not what the build writes or an item breaks the house rules.
+
+`server/catalog.ts` is the pure part: reading an index, building one,
+SKILL.md in and out, links, the review (`teamPlan`, `skillPlan`), the
+update (`teamChanges`) and cleaning a file for sharing.
+`server/catalog-source.ts` fetches the index from `catalogUrl()` (the
+environment's `BLOKS_CATALOG_URL`, then `catalog.url` in config.json,
+then this repository's raw main branch), holds it for half an hour, and
+keeps it with every item under the workspace's `catalog/`, items named
+by their sha256 and hashed again when read. A failed fetch answers from
+that copy with `offline: true`. It also keeps `catalog-installs.json`:
+each team installed from the catalogue or a link, with its room, the
+agents it made and what each was given, which is what an update is
+measured against.
+
+Routes, all the owner's (an agent token gets 403, members never reach
+them):
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/catalog` | The index, each item with where it stands here (`standing`), and `offline` |
+| `GET /api/catalog/:kind/:id` | One item's file, checked, and read |
+| `POST /api/catalog/review` | `{ kind, id }`, `{ url }` or `{ text, filename }`: the plan an install would carry out, and a token for it. Creates nothing |
+| `POST /api/catalog/install` | `{ token, names?, mode? }`: installs what that review showed, once |
+| `GET`, `PUT /api/catalog/source` | Where the index is read from |
+| `GET /api/bloks/:id/team.md` | A room as a catalogue team file, cleaned |
+| `GET /api/skills/:id/skill.md` | A skill as a catalogue SKILL.md, cleaned |
+
+An install of a team creates new agents with `composio: false`,
+`browser: false` and no MCP servers, a room around them, the catalogue
+skills they use that the library does not have yet, and their routines
+with `enabled: false`. An update (`mode: "update"`) matches members by
+role: an agent whose description or skills changed here since the
+install keeps them, new members join the room, new routines are filed
+paused, and nothing is removed. `bloks://install?url=` (electron/links.mjs)
+opens the same review for an https link.
+
+`bloks-server team apply` reads the same file into a workspace that may
+have the team already (`POST /api/teams/apply`, `server/team-apply.ts`).
+The room is found by its name, a member by the name the file gives it or,
+unnamed, by its role among the room's members; what matches is updated
+in place, what is missing is hired with the workspace's defaults for a
+new agent, and what is the same is left alone, so a second apply changes
+nothing. The lead the file ranks highest is crowned on that room alone.
+A member's look is applied only where the file states one, since the
+parser fills one in otherwise. Nothing is archived or deleted; `prune`
+takes the members the file no longer lists out of the room, and the
+agents stay. The plan is a plain function of the file and the workspace,
+so a dry run and the real apply cannot disagree.
+
+## Runs from a script
+
+`POST /api/runs` sends the owner's words to an agent, as typing them in
+the app does, and returns a run (`server/runs.ts`) that `GET
+/api/runs/:id` long polls. A run is the set of conversations the task
+reached: the one it went to, and every conversation an agent in the run
+hands work to (`sendUserMessage`, from the sender's lane in its chain)
+or a room it speaks into. It reads what happens off the same message
+frames the app folds (`broadcast`), its spend off the turn log, and how
+each lane's turn really ended off `settleOwners`, after retries and
+backups. It is done when every one of its conversations has been quiet
+(`laneQuiet`: not busy, not claimed, nothing queued, no changes card
+being made, no goal running) for a moment and a half on end, which is
+past the gap between a turn ending and the turn its handoff starts. An
+open card makes it `needs-you`; nothing in a run answers one.
+`POST /api/runs/:id/stop` stops every conversation in it. The owner's
+alone, from this computer or one of their devices; runs are in memory
+and a restart ends them. `bloks-server run` and `bloks-server chat`
+(`server/scripting-cli.ts`) are the two clients, described in
+[SCRIPTING.md](SCRIPTING.md).
 
 ## The morning brief
 
@@ -1872,6 +2196,35 @@ out of what an agent worked on and said as one count at the end of its
 part ("12 quiet check-ins, nothing needed you"); they are not things in
 the headline, and a night of nothing but them is still a quiet night,
 which wakes no phone.
+
+It leads with outcomes (GitHub 378). Every agent's repeating routine
+that is on, and every watcher that is on, is a card (`BriefResult`):
+what it last reported, as its agent wrote it and cut at a line
+(`excerpt`), with when, and whether that was within the brief's stretch
+of time (`fresh`). A gap is a card too: a run due and not run is
+`late`, a failed run or look is `failed`, and a run that went fine is
+only `reported` or `quiet`, never healthy. With cards, the headline is
+what came in, what is missing and what waits on the person; the turns
+routines and watchers started are left out of the agents' parts, since
+their cards say them. `GET /api/briefs` adds `live`, every card as it
+stands now (a report that comes in after the brief updates its card,
+without a notification), and `sections`, every section in the person's
+order: a card per source and the brief's own `waiting`, `failed`,
+`agents` and `memory`. The person pins, orders and hides them
+(`cfg.brief.layout`, read by `briefSettings`, arranged by
+`arrangeSections`, which puts a source made since beside its
+neighbours). A hidden source does not feed the brief.
+
+The brief is the one notification of the morning (`briefNotice`): on
+unless `notify` is off, never on a quiet morning unless `allClear` is
+on. Its `brief.ready` frame names the brief (`id`), so a tap opens that
+morning's: the phone's sealed preview carries `briefId`, a background
+workspace's server gives the desktop app a `brief:<id>` banner target
+at the "activity" level (so a workspace's mute and level apply), and
+the window on screen says it itself unless Overview is in front. A
+routine with `briefOnly` sends no `reply.settled` for its runs while
+the brief is on (`briefOnlyTurn`), unless the person joined the turn;
+its turn is told its answer opens a card (`BRIEF_ASK`).
 
 ## Routines and check-ins
 
@@ -1969,6 +2322,67 @@ place watcher's side. Only the owner's own agents may keep one, it speaks
 only in the owner's own lanes, and it is not counted for a hosted
 machine's next wake.
 
+### App watchers
+
+An app watcher (`kind: "app"`, `server/app-watch.ts`) acts on an event
+in an app connected through Composio. Its `app` holds the toolkit and
+trigger type by Composio's names, the config the type declares (checked
+against the type's JSON schema by `checkConfig`), the connected account,
+an optional filter of plain words, `perHour` (6 unless set, at most 30)
+and `perDay` (30, at most 200), the trigger instance id once there is
+one, and `runs`, newest first, what each event became: `started`,
+`queued`, `filtered`, `held`, `failed` or `missed`, with the lane and
+message of the turn it started. Its target only reads `toolkit/TRIGGER`.
+
+Composio's trigger side is its project REST API, v3.1, with the project
+key (`ak_`, `composio.apiKey`), in `server/composio-triggers.ts`: trigger
+types per toolkit, active connected accounts, `trigger_instances/{slug}/
+upsert` with the account and the config, `manage/{id}` to switch one on
+or off or remove it. The Connect key that opens connections is not taken
+there. A desktop app has no public address, and Composio delivers to a
+webhook URL, so events arrive the way Composio's own SDK subscribes: its
+realtime channel, a private Pusher channel per project
+(`private-{project}_triggers`) authorised through Composio with the
+project key, spoken directly over the WebSocket Node has, whole events
+and chunked ones. One connection serves every app watcher and exists only
+while one listens (`syncAppDelivery`); it reconnects on its own with a
+growing wait, stops on a refused key, and pings a quiet line. It sits
+behind `TriggerDelivery`, whose `catchesUp` says whether events sent
+while it was down arrive later: false for the realtime channel, which
+does not replay, true for a webhook through the relay should one be
+added. Since it does not catch up, the time it was not listening is
+recorded: `app-delivery.json` keeps when it last heard (written each
+minute while live), and coming up after a gap of two minutes or more
+records a `missed` run on each listening watcher, from the later of then
+and when that watcher started listening.
+
+An event (`readEvent`, Composio's V3, V2 and V1 envelopes alike) goes to
+the watchers whose trigger it names; others are dropped unread. Each is
+handled once by its id (`firstHearing`), then the filter (words in the
+event's values, never its keys, as an intent matches), then the limits,
+then a turn: the event cut down by `trimPayload` (credentials by name and
+blobs by shape left out, HTML read as words, long text and lists cut),
+fenced between markers carrying a nonce made for the turn, under a line
+that says whose words they are (`appEventTurn`). The turn goes where any
+watcher's goes, or queues behind a busy lane, with `via: "watcher"`.
+
+The owner makes one in Watchers or with `POST /api/watchers`, which makes
+the trigger at Composio first. An agent's `POST` is always a proposal:
+nothing at Composio, the watcher off, and a card in the conversation it
+asked from (`card.appWatch`) answered with `POST /api/watchers/:id/
+confirm` or `/decline`, which no agent rule reaches; an agent may
+withdraw its proposal or stop its own, and may not change one. Switching
+one off switches its trigger off; on again asks Composio whether the
+account is still connected first. A different event, config or account is
+a new trigger instance, the old one removed. Removing a connection in
+Bloks, a lifecycle event saying an account expired (should Composio send
+one down the channel), or the quarter-hourly look at each listening
+watcher's account finding it gone pauses every watcher on it with
+`paused` and a notice in its conversation. An admin manages their own
+through `/api/member/app-watchers` (`server/member-access.ts`): only for
+an agent whose team conversation they are on, its turns there as the
+admin's own, never rehearsing.
+
 ## Location
 
 `server/location.ts`. The owner's iPhone says where it is, once the owner
@@ -2053,6 +2467,84 @@ always a proposal, listening only in its own conversations and rooms it
 is in, at most five waiting; it does nothing until approved, the agent
 sees and withdraws only its own proposals, and the brief counts them as
 ready for a look.
+
+## Skill versions
+
+`server/skill-history.ts` keeps every version of every skill of the
+person's, whole, in `skill-history/<id>.json` beside the skill's own
+file: its number (never reused or renumbered), when, who (`person`,
+`agent`, `proposal`, `catalog`, `import`, `file`, `migration`,
+`builtin`), why in one line, and the name, description and body. The
+file under `skills/` stays the truth. Every write goes through
+`installSkill` (`server/skills.ts`), which first brings the record in
+line with the file: a skill with no record becomes version 1 as it
+stands, and a file edited by hand since its last version is kept as a
+version "changed outside Bloks" before anything is written over it. The
+server does the same for every skill as it starts
+(`migrateSkillHistory`), so a skill from before versions comes in whole.
+Reading the library never writes. A hundred versions are kept, the first
+always among them.
+
+A writer may say which version it read (`from`). When the skill has
+moved on since, nothing is written and the answer is 409 with the
+current version, so two writers that read the same version cannot both
+land. A built-in is version 0 and never changes: the first change to one
+(`POST /api/skills/:id/fork`, or keeping a suggested change to it) makes
+the person's own copy under the same id, whose history starts with the
+text as it ships, and removing the copy brings the built-in back.
+
+The routes: `GET /api/skills/:id?version=n`, `GET
+/api/skills/:id/history` (newest first, each version with its uses and
+corrections), `GET /api/skills/:id/history/:n`, `GET
+/api/skills/:id/diff?from=a&to=b` (by default the last change), and the
+person's own `PUT /api/skills/:id`, `POST /api/skills/:id/restore` (a
+new version that names the one it put back) and `POST
+/api/skills/:id/fork`. Each refuses an agent's credential as well as
+being off its list. The ledger records `skill.changed`.
+
+`server/skill-usage.ts` counts uses in `skill-usage.json`, once a turn
+and against the version current then: a skill the person named with a
+slash, or one an agent read in full in a turn. A use is corrected when
+the person's next words in that conversation read as putting the agent
+right (`looksLikeCorrection` in `server/proposals.ts`). Counting spends
+nothing and happens whatever the suggestion setting.
+
+### Suggestions from a turn
+
+After a turn ends (and not one handed to a backup engine, which is not
+over yet), `settleSkillUses` gathers what the turn used and the turn
+before it used, and `turnSigns` reads the transcript for tool calls,
+failures, a failure worked around, and a correction at the start of the
+turn or during it. `whatToLearn` decides, without a model, whether a
+review is worth a call and of what: a skill used and then corrected, or
+used while a step failed and was worked around, gets a revision of that
+skill (one call, `revisionPrompt`, answered with WHY, LESSON and
+find-and-replace edits); otherwise a new skill is looked for after a
+conversation that went back and forth, many tool calls, a recovery or a
+correction (`reviewPrompt`, and `patchPrompt` when it names a skill that
+exists). The setting is `skills.learn` in `config.json`: `off` (the
+default, and what an unset value reads unless the old `skills.propose`
+switch was on, which reads as `suggest`), `suggest` (clear signs only,
+at most 20 reviews a day) or `more` (weaker signs, and any turn that
+used a skill for real work, at most 60). Shared rooms, members' lanes,
+Telegram people, strangers' mail and engine commands are never read
+back, as before.
+
+Everything a review reads is framed as data (`DATA_NOT_INSTRUCTIONS`),
+and what it writes passes through the secret scrubber before it is
+staged. Nothing is ever applied: a suggestion waits in `proposals.json`
+with its reason, its trigger and the version it was read against, and
+`GET /api/skills/proposals` shows a change as its diff against the skill
+as it is now. Keeping one (`POST /api/skills/proposals/:id`, the
+person's alone) applies edits to the skill as it is then.
+
+An agent asks for a change with `POST /api/skills/:id/revisions` (`bloks
+skill revise <id> --from <version> --why "..."`, the text from `--file`
+or stdin; the MCP server's `propose_skill_revision`). The whole new text
+is staged with `whole` and `base`: refused at once when `from` is not
+the current version, and refused again when kept if the skill has moved
+on since, because kept on top of a newer version it would quietly undo
+it. The person may still keep their own edit of it.
 
 ## The nightly memory tidy
 
@@ -2199,6 +2691,63 @@ stretch of speech is a segment. The renderer posts segments to
 turn in its Meetings lane with `notesPrompt`, and `actionItems` reads
 "- Owner: task" lines back out of the reply for one-press handoff.
 
+## The Bloks browser
+
+A browser in the desktop window, beside the chat, that agents drive and
+the person watches and takes over. Three parts, each in its own place:
+
+- **The app** (`electron/app-browser.mjs`, wired in `electron/main.mjs`).
+  Each workspace has one `AppBrowser`: its tabs, who drives each (the
+  person or an agent, by id and name), who has the wheel (`idle`,
+  `agent`, `person`, with whom the person took it from and who waits),
+  and its downloads. A tab is a `WebContentsView` in the session
+  `persist:bloks-browser-<workspace>`, sandboxed, with no preload, and
+  with its `webContents.debugger` attached. An agent's command is a
+  short run of Chrome DevTools Protocol calls on that debugger
+  (`runOnTab`): `Accessibility.getFullAXTree` for a snapshot, whose refs
+  (`e1`, `e2`) name `backendDOMNodeId`s and last until the next
+  navigation; `DOM.getBoxModel` and `Input.dispatchMouseEvent` for a
+  click, after `Runtime.callFunctionOn` asks what is really at the
+  element's middle; `DOM.focus` and `Input.insertText` for typing;
+  `DOM.setFileInputFiles` for an upload; `Page.captureScreenshot` for a
+  picture. Every call is bounded at twenty seconds. `refusedNavigation`
+  and the server's navigation policy are applied on `will-navigate`,
+  `will-redirect` and `setWindowOpenHandler`, and loopback requests to
+  any Bloks port are cancelled in the session's `webRequest`. The panel
+  in the page tells the app where its page box is (`browser:bounds`, null
+  while a dialog or menu is over it, so the native view never covers
+  one) and what the person does (`browser:do`, a fixed list of actions);
+  the app tells the page its state (`browser:state`) and asks for the
+  panel when an agent starts browsing (`browser:reveal`). Downloads go to
+  `<workspace data>/browser-downloads`.
+- **The server** (`server/app-browser.ts`, routes in `server/index.ts`).
+  `POST /api/agent/browser` takes an agent's command, checks it
+  (`validateCommand`), decides the site (`siteVerdict`: refused, denied,
+  go, or ask), asks the app over the desktop line (`desktopLine.ask("browser")`),
+  and frames what comes back (`frameUntrusted`). A site to ask about, and
+  a password, payment or upload field the app reports as `needs`, become
+  an approval card in the agent's conversation with request id
+  `browser:<random>`; `/api/bots/:id/respond` hands the answer to the
+  `BrowserGate`, and the waiting action goes on, or is refused, or after
+  about two minutes answers `202 pending`, so the agent tries again and
+  finds the answer. While the person has the wheel, the app answers
+  `held`, and the server waits for its next `browser.state` before
+  trying again, up to a minute and a half. The settings are
+  `app-browser.json` in the workspace's folder (`GET`/`PUT
+  /api/browser/settings`); `GET /api/browser` and `/api/browser/frame` are
+  the person's other devices' view; `POST /api/browser/command` is the MCP
+  server's way in, local only, with no cards. A turn's site grants end
+  with the turn, and so does an agent's hold on the browser.
+- **The page** (`src/components/browser/BrowserPanel.tsx`,
+  `src/lib/appBrowser.ts`, `src/components/settings/BrowserPage.tsx`).
+  The dock on the chat's right, resizable and over the chat when the
+  window is too narrow, opened from the header's globe; tabs with the
+  driving agent's face, the address bar, back, forward, reload, the line
+  saying who has the browser with Take over and Give back, and the
+  downloads shelf. Anywhere without the app, the agent's conversation
+  shows "Browsing on the Mac" from the server's `browser.app` frames, with
+  the picture from `/api/browser/frame` every two seconds while visible.
+
 ## Terminals
 
 `server/terminal.ts` keeps up to eight shells per agent, each in the
@@ -2306,53 +2855,116 @@ only kept notes reach the prompt, and never in a shared room.
 ## Bringing a setup over
 
 `server/setup-import.ts` reads what a person already taught other agent
-tools, from a short list of known places under their home: Claude Code
-(`~/.claude/CLAUDE.md`, `~/.claude/skills/*/SKILL.md`, the top level
-`mcpServers` of `~/.claude.json`, and the allow and deny rules in
-`~/.claude/settings.json`), Codex (`~/.codex/AGENTS.md` and the
-`[mcp_servers.*]` tables of `~/.codex/config.toml`, read by a small TOML
-reader of its own), OpenClaw (`SOUL.md`, `IDENTITY.md`, `MEMORY.md`,
-`memory/*.md`, `USER.md` and `skills/*/SKILL.md` in
-`~/.openclaw/workspace`) and Hermes (`SOUL.md`, the memories folder and
-skills a few folders down in `~/.hermes`, each looked for rather than
-assumed). Nothing is searched for and nothing there is written.
+tools, from a short list of known places under their home. Nothing is
+searched for and nothing there is written.
 
-No credential is read or copied. A file named like one (`auth.json`,
-`.credentials.json`, `.env`, tokens, keys, keychains) is never opened,
+- Claude Code: `~/.claude/CLAUDE.md` (its `@path` imports are named, not
+  followed), `rules/**/*.md`, subagents in `agents/*.md`, skills in
+  `skills/*/SKILL.md`, commands in `commands/**/*.md` (a folder is a
+  `folder:name` namespace), the top level `mcpServers` of
+  `~/.claude.json`, and from `settings.json` the allow and deny rules,
+  the default `model`, and any `mcpServers` kept there although Claude
+  Code does not document them.
+- Codex: `AGENTS.override.md` in place of `AGENTS.md` when it has
+  anything in it, as Codex reads them; `[mcp_servers.*]`, `model` and
+  `model_reasoning_effort` from `config.toml` (a small TOML reader of
+  its own); `prompts/*.md` at the top of that folder; skills in
+  `~/.agents/skills` and the older `~/.codex/skills`.
+- Cursor: `~/.cursor/mcp.json` (with `${userHome}` filled in and
+  `${env:NAME}` read as a variable), subagents in `agents/*.md`, skills,
+  commands, and `.mdc` rules in `~/.cursor/rules`, a folder Cursor
+  documents only for projects, so each file is read on its own and a
+  broken one is named. Cursor keeps its user rules in its settings, not
+  a file, and the review says so.
+- OpenClaw: `~/.openclaw/openclaw.json` read as JSON5 (`server/json5.ts`)
+  for the workspace folder (only inside the home folder), the default
+  model, and the Telegram, Slack and Discord channels; then `SOUL.md`,
+  `IDENTITY.md`, `AGENTS.md`, `MEMORY.md`, `memory/*.md`, `USER.md` and
+  skills in the workspace, and the managed skills in `~/.openclaw/skills`.
+  WhatsApp, Signal and the rest are named as left out.
+- Hermes: `SOUL.md`, the memories folder and skills a few folders down
+  in `~/.hermes`, each looked for rather than assumed.
+
+What each becomes: a subagent is an agent, its prompt the instructions
+(or, past 4,000 characters, the opening plus the whole in `MEMORY.md`),
+its model mapped where an engine here runs it, its colour and effort
+kept, the skills and servers it names attached when Bloks has them by
+that name (including ones the same import just added, since skills and
+servers are applied first), and its tool limits as deny rules for that
+agent alone: a `tools` list refuses the acting tools it leaves out,
+`disallowedTools` go through the same translation as settings rules,
+and Cursor's `readonly` refuses the editing ones. Commands and prompts
+are skills with one line on top saying what `$ARGUMENTS` and `$1` were.
+A Cursor rule that always applies is instructions; any other kind is a
+skill. A default model is offered to the agent made for that tool, and
+refused with a reason when that engine is not set up. A chat app is
+connected through the same checks Settings makes (the app's own `getMe`
+or `auth.test`), saved switched off because the other tool may still be
+answering on that bot.
+
+No credential file is opened. A file named like one (`auth.json`,
+`.credentials.json`, `.env`, tokens, keys, keychains) is never read,
 and a link is followed only to see where it goes, so a `SKILL.md` that
 points at a credentials file is named as left out. Every file is capped
 by size. Text is scrubbed of anything key-shaped (provider key prefixes,
 bearer tokens, `name = value` pairs whose value looks generated,
 passwords in addresses, private key blocks) and the item says how many
-were taken out. An MCP server's environment and header values are
-dropped whole, never scrubbed: the names come across with empty values,
-and the server waits for the person to fill them in under Apps and keys
-(`PATCH /api/mcp-servers/:id`, names it already has only). A name with
-no value is never handed to an engine. Names that change how programs
-start (`PATH`, `NODE_OPTIONS` and the rest of `server/env-names.ts`) are
-not carried.
+were taken out. An MCP server's environment and header values, and a
+chat app's tokens, are slots: the item carries their names, the review
+shows a field for each, and a value is either typed by the person or
+copied from the other tool's config because the person ticked that one
+slot. The literal values are held in a `WeakMap` beside the scan, so no
+serialized scan, review, log or dry run can carry one; a value written
+as a variable (`${NAME}`, `$NAME`, `${env:NAME}`, Codex's `env_vars` and
+`bearer_token_env_var`) is named as one and never resolved. Names that
+change how programs start (`PATH`, `NODE_OPTIONS` and the rest of
+`server/env-names.ts`) are not carried, and a name left empty is never
+handed to an engine.
 
-`GET /api/setup-import` is the review: every item by source, with a
-preview, where it would go and whether it was brought over before.
-`POST` imports the items the window names, and only those. It reads the
-files again and takes from the window only which items and where, so an
-item whose digest no longer matches the review is refused. Instructions
-become an agent's instructions (if they fit) or a block in its
-`MEMORY.md`, written through the memory journal so the Memory place can
-undo it; `memory/*.md` files become topic files. A new agent is made once
-per source per import. Skills go to the library under a free id, never
-over somebody's skill, and no agent has them until the person attaches
-them. Servers go to the registry on no agent. Rules go through the
-policy's own checks and wait for the person to tick them: a Bloks rule
-looks at one thing, so a translation may be broader than the original
-only when it denies, and an allow that would let agents do more is left
-out with the reason. `USER.md` lines become suggestions in About you.
-`setup-import.json` keeps each item's digest, destination and the exact
-text it added, so importing again replaces that text in place, or says
-nothing changed, rather than adding a second copy. Both routes answer
-only Bloks on this computer, never an agent's credential, a paired phone
-or a remote window. The first run offers the review as an optional step
-when something new was found, and Settings has it as a page.
+`GET /api/setup-import` is the review: every item with a preview, where
+it would go, whether it was brought over before, anything here by the
+same name (`conflict`: a person's skill or an agent may be replaced, a
+skill that ships with Bloks or a server never is), the slots it needs,
+and `sameAs` when another tool's folder held the same thing (Cursor
+reads Claude Code's skills), which waits unticked. The window groups it
+by what each becomes (`src/lib/setupReview.ts`). `POST` imports the
+items the window names, and only those. It reads the files again and
+takes from the window only which items, where, how a clash is settled
+and the slot answers, so an item whose digest no longer matches the
+review is refused. Instructions become an agent's instructions (if they
+fit) or a block in its `MEMORY.md`, written through the memory journal;
+`memory/*.md` files become topic files. A new agent is made once per
+source per import. Skills go to the library under a free id unless the
+person said to replace theirs. Servers go to the registry on no agent.
+Rules wait for the person to tick them: a translation may be broader
+than the original only when it denies, an allowed command prefix
+becomes a `runs` rule (one plain command, nothing chained), an allowed
+`Read` of an absolute path names the `Read` tool, and an allow that
+would let agents do more is left out with the reason. `USER.md` lines
+become suggestions in About you. `setup-import.json` keeps each item's
+digest, destination and the exact text it added, so importing again
+replaces that text in place rather than adding a second copy.
+
+Every import that changed something is kept in `setup-import-runs.json`
+(`server/setup-undo.ts`, the newest 20) as steps: an agent made or
+changed (with its settings before), instructions and memory before and
+after, a skill added or replaced (with the one it replaced), a server
+added or updated (its earlier shape with values blanked), a rule or a
+suggestion added, a chat app connected (by a hash of its token). `POST
+/api/setup-import/undo` walks them back newest first, each only if what
+is there is still what the import left; anything changed since, a
+suggestion the person kept, or an agent they have talked with stays and
+says why. Agents it made are archived, not deleted. The record goes back
+to what it said before for each item that went back whole. The look
+returns `lastRun` so the offer outlives the window.
+
+All three routes answer only the owner at this computer or on their own
+paired devices, never an agent's credential or a member. The first run
+offers the review as an optional step when something new was found, and
+Settings has it as a page. `bloks-server import [tool] --dry-run
+[--json]` prints the same scan from a terminal, with no server needed
+and nothing written; the import itself is only in the app, where the
+slots are answered.
 
 ## Bringing past sessions over
 
@@ -2420,6 +3032,59 @@ conversation was had. Recall reaches imported lanes like any other; a
 hit says the conversation was had in that engine before Bloks, and its
 replies are said by the engine's name.
 
+## Training export
+
+`server/run-export.ts` writes agents' runs to one JSONL file, on the
+owner's say, to fine-tune a model on. A run lives in three places and
+none holds all of it: the transcript (`messages-<lane>.json`) has the
+person's words, who said them and what they thought of the answer; the
+events file (`events/<lane>.ndjson`) has the turn as it ran, timed, with
+the engine, model, tokens and price; and the native log
+(`native/<lane>.ndjson`) is the only place a tool's full input and
+output exist, for the engines that send them. A record is the
+transcript's turn (read the way Redo reads one, `transcriptTurns`),
+ordered by its events, with each call filled in from the native log
+where it can be. Every record says which of its calls are whole, so a
+file never claims results an engine never sent.
+
+Three shapes: OpenAI's chat format with `tools` and `tool_calls`,
+ShareGPT with calls and results as `<tool_call>` and `<tool_response>`
+blocks, and `bloks.trajectory`, every step with its timing. The first two
+carry a `metadata` key (source, engine, model, cost, how the record was
+shortened) unless the choice says `metadata: false`, for trainers that
+refuse a key they do not know. One record per turn or per conversation.
+
+What is chosen is an `ExportChoice` (`readChoice` checks a request body
+or the command line's flags against it; anything left out keeps the safe
+default). Turns can be held to agents, conversations, dates and engines,
+and to ones that finished well, that the owner did not correct (stop,
+steer, edit, Redo, thumbs down) or gave a thumbs up. Other people's words
+stay out unless asked for: a member's, a Telegram stranger's or
+delegate's, a person on Signal's (`fromSignal.personId`), and mail and
+chat apps; a guest's mail lane and the lane a Signal person is answered
+in count as theirs whole. Members' private conversations are not even
+counted unless reading them is on in Members. Cleaning comes before
+shortening, so a key is never cut in two: anything shaped like a key
+always (setup-import's scrubber, with every value this workspace has
+saved), and by default email addresses, phone numbers, the home folder
+and the names the workspace knows (its people, the Telegram and Signal
+people, the owner). Long tool results keep their head and tail with the
+gap marked, a repeated identical result points back at the first, and a
+cap shortens further, then drops a conversation's earliest turns.
+
+The module only reads, so the same code runs in the server
+(`GET /api/training-export` lists what can be exported, `POST
+/api/training-export/preview` runs it dry and returns the counts and the
+first record, `POST /api/training-export` writes it, one at a time) and
+from `bloks-server export-runs` with the app stopped
+(`server/run-export-cli.ts`, see [SCRIPTING.md](SCRIPTING.md)). Files go
+in the exports folder beside the data folder (`~/.bloks-exports` for
+Personal), named `bloks-training-<format>-<unit>-<time>.jsonl`, and are
+served, revealed and deleted only by that name. Every route answers Bloks
+on this computer alone: never an agent's credential, a member, or a
+paired device. A written export is recorded in the ledger as
+`runs.exported`.
+
 ## Engine scout
 
 `server/engine-report.ts` logs every finished turn with the engine and
@@ -2482,11 +3147,16 @@ out.
 ## MCP server
 
 `bin/bloks-mcp.mjs` is a dependency-free stdio MCP server that finds the
-local Bloks on its known ports and offers eight tools (list agents and
-rooms, ask an agent and wait for the reply, post in a room, read a
-conversation, search, the latest brief, what is waiting). It has no tool
-that approves, deletes or configures. `/api/mcp-config` gives the command
-to paste, using the runtime the server itself runs on.
+local Bloks on its known ports and offers twenty eight tools: thirteen of
+its own (list agents and rooms, ask an agent and wait for the reply, post
+in a room, read a conversation or one message, search, the latest brief,
+what is waiting, and the skills: list them, read one at a version, its
+history, and propose a revision, which only ever stages it), the Bloks
+browser's twelve (`browser_open` and the rest, through
+`POST /api/browser/command`), and three for Home Assistant once the owner
+allows it (see Home Assistant). It has no tool that approves, deletes or
+configures. `/api/mcp-config` gives the command to paste, using the
+runtime the server itself runs on.
 
 ## Lanes, unread and the sidebar
 
@@ -2515,7 +3185,9 @@ closes with it.
 
 The chat's tab strip shows only while an agent has more than one lane;
 New conversation is on the agent's row in the sidebar (its menu, and the
-`+` of the conversations view), as Clear is.
+`+` of the conversations view), as Clear is. An agent opens one only by
+saying its first message there (`bloks tab`, see Agents writing to
+agents).
 
 Unread is per lane: a turn that ends in a lane marks that lane
 (`store.markLane`), except a quiet check-in (see Routines and check-ins),
@@ -2647,6 +3319,81 @@ A phone gates its reports on `device-settings` in `/api/health`
 (`server/features.ts`), so an older Mac is never sent one. An older phone
 ignores a frame it does not know and is listed as unavailable.
 
+## Explaining Bloks, and showing the way
+
+A second built-in skill, `how-bloks-works` (`BLOKS_EXPLAINER`,
+`withBloksExplainer`), explains each feature in a few lines: what it is,
+how it behaves, where it lives in the app, what an agent can do about it
+and what only the person can. It is written from this file and the
+README, and names every Settings page id, which `test/agent-guide.test.ts`
+holds to `SETTINGS_PAGE_LIST`, so a page added without a line there fails
+the build. Explaining is harmless, so it goes to every turn that can read
+a skill on demand. That is exactly the turn `using-bloks` goes to:
+reading on demand is `bloks skill`, on the full credential, and an API
+engine has no tool that reads a skill.
+
+Where things are is data both sides read: `server/settings-index.ts`
+holds the Settings index (pages, groups, words, rows, redirects) and the
+main places (Overview, Automations and its tabs, Memory, Plugins and its
+tabs, Usage, and `agent`, one agent's own settings). The app draws its
+Settings list and search from it (`src/lib/settingsPages.ts`), and holds
+every key in it to the catalogue at typecheck. The server reads the same
+list in English from the catalogue beside it (`server/where.ts`: next to
+it in a checkout, `Resources/locales` when packaged).
+
+- `bloks where <words>` is `GET /api/agent/where?q=`: the best places for
+  the words, each with its id, the path in words ("Settings, Behaviour"),
+  the rows that hold the words and the `open` command for it. A place
+  that holds every word ranks first, as the app's search keeps only
+  those; one that holds some is kept below it, since an agent's words
+  are looser than a search box's. Reading only.
+- `bloks open <page-id> [--row <row>]` is `POST /api/agent/open`: a card
+  in the conversation the turn runs in (`Message.card.open`, an
+  `OpenPlan`) with one button. In the desktop window it dispatches what
+  the app's own links do (`toggleAppSettings` with the page and, new, a
+  `row`, which `AppSettingsPanel` scrolls to and lights the way a search
+  result is; `toggleRoutines` with a tab; `openCustomize`; `openMemory`;
+  `openPage`; an agent's settings), and changes nothing. A workspace's
+  own page in a window with no workspaces, and a client that does not
+  know the card, show the way in words: the card's title and subtitle
+  carry it for the iPhone.
+
+### Settings an agent proposes
+
+`bloks settings propose` with nothing after it lists what may be
+proposed, with each value now (`GET /api/agent/settings/proposals`).
+`bloks settings propose <setting> <value> --why "<reason>"` is the POST:
+`server/settings-proposals.ts` decides, and a refusal changes nothing.
+The list (`PROPOSABLE`) is everyday preferences only: Behaviour's
+recall, nightly tidy, summarise as you go, other changed files and skill
+suggestions; the morning brief's switch, time, notifications and
+sections; the proposing agent's own notifications, effort and model (a
+model of the engine it is on); and the effort new agents start on.
+Everything about approvals and rules, keys, secrets and sign-ins,
+engines, members, invites and roles, phones and pairing, remote access
+and Bloks Cloud, the plan, billing and spending limits, the chain limit
+and the task budget, backups, moving and exporting, deleting, the Bloks
+browser's sites, Home Assistant and security is refused by subject
+(`REFUSED`) with `bloks open <page>` for where to send the person; any
+other name is refused with the list and `bloks where`.
+
+An accepted proposal is a card (`Message.card.settingsProposal`, a
+`ProposalCard`) carrying the setting, its name, the way there, the
+value now, the value proposed and the reason, and the command waits up
+to a minute (`BLOKS_SETTINGS_WAIT_MS`) for an answer; `bloks settings
+proposal <id>` waits again. The card holds everything the change needs,
+so a Change pressed after a restart still applies. Change and Keep are
+`POST /api/settings-proposals/:lane/:message/(change|keep)`, the
+owner's alone (on `NEVER`, and refused to a member's credential). Change
+reads the setting again as things stand, builds the request the Settings
+page itself sends (`PUT /api/config`, `PATCH /api/briefs/settings`,
+`PATCH /api/bots/:id`) and makes it as the person at this computer, on
+loopback with no credential, so its checks, its save and its broadcast
+are the page's own. It is recorded as `settings.changed` with actor
+`you`. The agent hears how it went from the command still waiting, or
+at the start of its next turn in that conversation, once (`told` on
+the card).
+
 ## Rule suggestions
 
 When the owner keeps answering the same approval the same way, Bloks
@@ -2765,6 +3512,128 @@ wears a red dot in the sidebar and the page a count in its list
 (`src/lib/securityCheckup.ts` holds the one shared report); worth a look
 waits on the page.
 
+## Local CLI plugins
+
+Settings, Plugins has a CLIs list beside Apps, MCPs and Skills: tools on
+this computer that agents use from their own shell (`server/cli-plugins.ts`,
+`src/components/CliPlugins.tsx`, GitHub 387). GitHub is the first, as git
+and gh. An app connected through Composio gives agents tools that call
+GitHub for them; it does not make `git clone` of a private repository,
+`git push` or `gh pr create` work in the agent's shell, which sign in
+however this computer's git and gh are set up.
+
+`checkGitHubCli` finds git and gh with the PATH every turn starts from
+(`server/path.ts` widens it the same way for both) and asks gh
+`auth status --json hosts` (the words of an older gh otherwise) who is
+signed in to github.com, whether that still works, and where gh keeps it:
+the system keychain, a file, or an environment variable. It never runs
+`gh auth token` or asks status to show one. On a Mac without the
+developer tools `/usr/bin/git` is the installer stub, so it is never run
+(the checkpoint rule). Git counts as set up when its global config sends
+github.com credentials to `gh auth git-credential`. What is missing comes
+back as the next step, in order: git (`xcode-select --install`), gh
+(`brew install gh` when Homebrew is here, else cli.github.com), sign in
+(`gh auth login --hostname github.com --git-protocol https --web`, opened
+in Terminal the way an engine's sign-in is, with the command to copy for a
+computer reached over SSH, where gh's device code works from any browser),
+and `gh auth setup-git`, which the app runs with the gh it found.
+
+`GET /api/cli-plugins`, `POST .../github/check`, `PUT .../github`
+(`enabled`, kept as `cliPlugins.github` in config.json), and the
+`install`, `sign-in` and `setup-git` steps answer only a window on this
+computer: never a phone, a member or an agent (`/api/cli-plugins` is on
+the agents' never list). While the plugin is on, the owner's own turns
+on an engine with a shell are told gh is signed in, as whom, and to use
+git and gh as usual (`ghHint`), from the last check, which is redone in
+the background when it is ten minutes old. Turned off, agents are told
+nothing; gh stays signed in.
+
+Bloks keeps no copy of gh's sign-in, and it cannot keep it from an agent:
+an agent runs as the person, and gh hands its token to whoever runs
+`gh auth token`. The page says so, and points to a protected connection
+for agents that should never hold a token.
+
+## Connections
+
+A connection is a credential an agent uses without ever holding it
+(`server/connections.ts`, GitHub 386). A saved secret is the other kind:
+it is in every owner's turn's environment, so the agent has the value.
+
+The person adds a GitHub token in Settings, Plugins, CLIs, GitHub
+(`POST /api/connections`). Bloks asks GitHub's `/user` whose it is and
+keeps it in config.json (`connections`, 0600, beside the saved secrets,
+left out of a backup without a passphrase like them, and scrubbed by
+`redactSecrets`). One per service for now. Grants are kept on the
+connection, never on the agent's record, which an agent may partly change
+itself: `PATCH /api/connections/:id` with `grants: { agentId: "read" |
+"write" | null }`. A member's own agent cannot be granted one.
+`POST .../check` asks GitHub again, `GET .../audit` lists recent use and
+`DELETE` forgets the token. All of it is the owner's, from this window or
+a device of theirs; never an agent (never list) or a member, on their
+device or with their credential here.
+
+An owner's own turn, on an engine with a shell, for an agent with a grant,
+gets an address and no value. The address carries a handle minted for
+that turn and bound to the turn's own credential
+(`http://127.0.0.1:<port>/connect/<handle>/<host>/<path>`): it ends when
+the turn does, and it is never given to a shared room, a member's turn,
+a stranger's mail or a Telegram person's. The turn's environment has
+`BLOKS_GITHUB_API` (the address for api.github.com) and git's own
+environment config, `url.<address>/github.com/.insteadOf https://github.com/`
+and an empty credential helper for the address, so `git clone`, `fetch`
+and `push` over https://github.com go through Bloks without the agent
+doing anything different. Codex is handed the same names as `set`
+entries, since its default policy drops any name with KEY in it.
+
+Each request to an address is decided in `proxyConnection`, before any
+credential is added: only on this computer (never off the relay line);
+the handle's turn still running; the grant still there; the host one of
+the service's (api.github.com, github.com); and the method and path one
+the access allows. Read is GET and HEAD on the API and clone and fetch
+over git; write adds POST, PUT, PATCH and DELETE and push. On github.com
+only git's smart HTTP requests go, so no web page, no LFS (which hands out
+tokens of its own). Some API calls are never sent whatever the grant,
+because each hands someone or something lasting access that taking the
+grant back would not end: account keys, deploy keys, collaborators,
+organization invitations and memberships, team memberships, and
+webhooks. Then the agent's own authorization, cookies and anything not on
+a short list of headers are dropped, the credential is added (Bearer for
+the API, Basic `x-access-token` for git), and the request goes to that
+host and nowhere else. A redirect to one of the service's hosts comes
+back through the address to be checked again; anywhere else it goes as
+it is, and the client follows it without the credential. A 401 from the
+service is said in words as a 502, so git never asks a credential helper
+for the address. Text responses are asked for uncompressed and held, at
+most 16 MB, so the token (and its git form) can be taken out of headers
+and body should a service ever echo it; a response too large to check is
+not passed on. Every request, sent or refused, is one line in
+`connections-audit.jsonl`, about a megabyte at most, shown as Recent use.
+
+What this protects: the token is never in an agent's environment, prompt,
+files, command line or output, never in a transcript, log or other file
+Bloks writes, and never sent to another host; a turn's address stops at
+the turn's end, at the next request after a grant is taken back, and
+when the connection is removed. What it does not: an agent can misuse
+what it was granted, reading everything the token can read, or with
+write pushing and opening and closing what the token can, so the token
+should be fine-grained to the repositories and permissions the work
+needs. An agent can use its address for anything that runs during its
+turn. It runs as the person, so it could read config.json with a file
+tool if the person let it read outside its folders, and gh's own sign-in,
+when there is one, is open to any agent with a shell; Settings says this
+beside the grants. Codex in its `workspace-write` sandbox has no network,
+so the address needs the same allowance a `bloks` command does.
+
+Not built yet: `gh` itself through a connection (gh will not talk to an
+address over plain HTTP for github.com, and teaching it to would need a
+certificate the system trusts), more than one connection per service,
+other services and custom ones, method and path rules the person writes,
+query and body field rules, response scrubbing rules beyond the
+credential itself, and sessions Bloks logs in to and out of. A gateway
+such as a self-hosted OneCLI could later stand behind the same address
+and grants, with `upstream` pointed at it rather than at the service; the
+grant and audit stay here either way.
+
 ## Boundaries worth knowing
 
 - `server/http-guard.ts` checks `Origin` and `Host` on every request.
@@ -2787,6 +3656,67 @@ with the installer's own output behind a disclosure. The routes answer
 only a window on this computer and never an agent. Claude Code and Codex
 report signed in or not (`claude auth status`, `codex login status`), and
 the first-run check counts an engine as ready only when it is both.
+
+## Where an agent works
+
+An agent whose engine runs a program (Claude Code, Codex, Antigravity and
+the ACP agents) can work in a Docker container or on another machine
+over SSH (`bot.workplace`, set with `PUT /api/bots/:id/workplace`, the
+owner's alone on this computer). Three files:
+
+- `server/workplace.ts` is pure: the shape of a place, the checks a saved
+  one passes, and the exact command lines (`docker run`, `docker exec -i`,
+  `ssh -T` with its options and reverse tunnel), the bootstrap and the
+  preamble, the probe a Test runs and the sentences it becomes.
+- `server/workplace-run.ts` runs them. Before a turn it gets the place
+  ready (makes, starts or remakes a container Bloks made, labelled with
+  the agent and a hash of the settings it was made from; checks a host is
+  there) and asks it one quick question, its home and whether it has
+  Node. `begin` then opens the gate for the turn's tokens and a gate
+  token of its own, sends the person's attachments ahead and rewrites the
+  words to point at them there, and hands the driver a `PlaceRun`
+  (`SendTurnInput.place`). On `turn.completed`, `end` closes the gate,
+  brings the lane's outbox back into the agent's files, which the
+  artifact sweep then cards, and removes the run's folder there.
+- `server/workplace-gate.ts` is the only way back in: a listener of its
+  own that answers a live turn's token and passes `/api/*` to the
+  workspace with only the headers the CLI needs, and serves each MCP
+  server of the turn at `/mcp/<slug>` as streamable HTTP, running a stdio
+  one here per session.
+
+A driver changes in three places when `turn.place` is set: it starts its
+engine with `place.spawn` (the engine as it is named there, with only the
+turn's environment and the driver's own switches), writes files with
+`place.file` (they travel in the preamble), and points the engine at
+every MCP server through `place.mcp`. The protocol is untouched: the
+process there speaks the same stdio JSON lines.
+
+The bootstrap is one line of `sh` that reads its preamble from stdin up to
+a sentinel random per run, evaluates it (files written `0600` in
+`~/.bloks/run/<id>`, environment exported, the working folder made and
+entered, its pid written down), and `exec`s the engine, which inherits
+stdin from the byte after. When the local `docker`/`ssh` client exits,
+however it exits, a reaper run there ends that pid (and its group, under
+SSH) if `/proc` still says it is this run's.
+
+Bloks is reached from there through an SSH reverse tunnel bound to the
+far loopback, at `host.docker.internal` (the bridge's address on Linux,
+where the gate also listens), or with a container's network off, through
+`bin/bloks-line.mjs`: copied in for the turn and run with `docker exec -i`,
+it listens on the container's loopback and carries each connection back
+over its stdio framed as type, id, length (`server/workplace-line.ts`),
+where the Bloks opening goes to the gate and the proxy opening accepts a
+`CONNECT` only to the engine's own hosts on 443 (`LINE_HOSTS`).
+
+What assumes this computer's files is decided per place: checkpoints and
+undo run on the folder a container mounts and are off otherwise (the
+agent is told, and the settings say so); rehearsals and shared rooms
+refuse with a sentence; memory is kept through `bloks memory`; a lane
+records the place its session lives in (`task.where`) and starts a new
+one, told the conversation, when its agent moves. A dropped SSH link
+fails the turn with a notice and the place is looked at again until it
+answers, which the header shows (`workplaceStatus`). A container Bloks
+made is stopped, or removed, after its idle minutes.
 
 ## Usage and spending limits
 
@@ -3043,3 +3973,31 @@ in `x-bloks-passphrase` if it is sealed), takes one into a workspace with
 nothing said in it, no rooms and no standing work, from this computer or
 the owner's paired device, and restarts through the restore path; the
 machine it lands on keeps its own machine sections and keys.
+
+## The interface's words
+
+Every sentence the app shows lives in a catalogue under `src/locales`,
+keyed by what it means: `en.json` is the source, and `es`, `fr`, `de`,
+`pt-BR`, `ja` and `zh-CN` say the same keys (the folder's README is the
+translators' guide). `src/lib/i18n.ts` reads them: `t(key, params)` for
+a sentence, `tr` for one with an element drawn inside it, and a sentence
+with a count is one key per plural form, chosen by `Intl.PluralRules` in
+the reader's language. The keys' type is read from `en.json`, so a
+misspelled or removed key fails the typecheck. A language that lacks a
+word says the English one, never the key. Numbers, dates and lists go
+through `Intl` in the same locale.
+
+The choice is the person's, like the theme: `src/lib/language.ts` keeps
+it in the page's storage and with the desktop app (`prefs:language`),
+which hands it to each workspace's page before it draws. "System", the
+default, is the first of the system's languages Bloks speaks. Only the
+reader's catalogue is downloaded, and a change re-renders from the root.
+The macOS menu bar reads the same catalogues' `menu.` keys
+(`electron/menu-words.mjs`), so the menus never word a thing differently
+from the window.
+
+`test/i18n.test.ts` holds the catalogues to their rules (no key English
+lacks, no invented placeholder, no forbidden dash, sorted keys, nothing
+unused) and scans every component for English written inline, with
+`test/i18n-allowlist.json` for the few words never translated. Words the
+server writes (notices, errors, the brief, checkups) are still English.

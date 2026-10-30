@@ -19,6 +19,7 @@ import { useRehearsalsReady, useSecurityRisky } from "./Sidebar";
 import { useActivityCount } from "@/lib/activityCount";
 import { useBriefs } from "./BriefPanel";
 import { useProfileNotes } from "./AboutYou";
+import { t } from "@/lib/i18n";
 
 export type RailPlace = "chat" | RailPage | "automations" | "settings";
 
@@ -111,20 +112,20 @@ export function AppRail() {
           className="flex flex-col items-center gap-1.5"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
-          <RailButton label="Chat" active={place === "chat"} onClick={() => go("chat")}>
+          <RailButton label={t("appRail.chat")} active={place === "chat"} onClick={() => go("chat")}>
             <MessageCircle size={18} strokeWidth={1.75} />
           </RailButton>
           <RailButton
-            label="Overview"
+            label={t("appRail.overview")}
             hint={
               activity.waiting > 0
-                ? `Overview: ${activity.waiting} waiting on you`
+                ? t("appRail.overviewWaiting", { count: activity.waiting })
                 : activity.failed > 0
-                  ? `Overview: ${activity.failed} failed and ${activity.failed === 1 ? "needs" : "need"} a look`
+                  ? t("appRail.overviewFailed", { count: activity.failed })
                   : briefNew
-                  ? "Overview: a new morning brief"
+                  ? t("appRail.overviewANewMorningBrief")
                   : rehearsalsReady > 0
-                    ? `Overview: ${rehearsalsReady} rehearsal${rehearsalsReady === 1 ? "" : "s"} ready`
+                    ? t("appRail.overviewRehearsals", { count: rehearsalsReady })
                     : undefined
             }
             active={place === "overview"}
@@ -133,21 +134,21 @@ export function AppRail() {
           >
             <LayoutGrid size={18} strokeWidth={1.75} />
           </RailButton>
-          <RailButton label="Automations" active={place === "automations"} onClick={() => go("automations")}>
+          <RailButton label={t("appRail.automations")} active={place === "automations"} onClick={() => go("automations")}>
             <Zap size={18} strokeWidth={1.75} />
           </RailButton>
           <RailButton
-            label="Memory"
+            label={t("common.memory")}
             active={place === "memory"}
-            hint={notesWaiting > 0 ? `Memory: ${notesWaiting} note${notesWaiting === 1 ? "" : "s"} about you to review` : undefined}
+            hint={notesWaiting > 0 ? t("appRail.memoryNotes", { count: notesWaiting }) : undefined}
             dot={notesWaiting > 0 ? "warning" : null}
             onClick={() => go("memory")}
           >
             <Brain size={18} strokeWidth={1.75} />
           </RailButton>
           <RailButton
-            label="Plugins"
-            hint={activity.suggested > 0 ? `Plugins and skills: ${activity.suggested} skill${activity.suggested === 1 ? "" : "s"} suggested` : "Plugins and skills"}
+            label={t("common.plugins")}
+            hint={activity.suggested > 0 ? t("appRail.skillsSuggested", { count: activity.suggested }) : t("appRail.pluginsAndSkills")}
             active={place === "plugins"}
             dot={activity.suggested > 0 ? "warning" : null}
             onClick={() => go("plugins")}
@@ -163,12 +164,12 @@ export function AppRail() {
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <UpdateRailButton />
-          <RailButton label="Usage" active={place === "usage"} onClick={() => go("usage")}>
+          <RailButton label={t("appRail.usage")} active={place === "usage"} onClick={() => go("usage")}>
             <UsageIcon size={18} strokeWidth={1.75} />
           </RailButton>
           <RailButton
-            label="Settings"
-            hint={securityRisky > 0 ? "Settings: security issue found" : undefined}
+            label={t("common.settings")}
+            hint={securityRisky > 0 ? t("appRail.settingsSecurityIssueFound") : undefined}
             active={place === "settings"}
             dot={securityRisky > 0 ? "destructive" : null}
             onClick={() => go("settings")}

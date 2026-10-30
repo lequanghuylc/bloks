@@ -11,6 +11,7 @@ import { api } from "@/state/store";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { SettingsGroup } from "./SettingsLayout";
+import { t, type MessageKey } from "@/lib/i18n";
 
 interface McpConfig {
   command: string;
@@ -20,17 +21,18 @@ interface McpConfig {
 
 type Which = "desktop" | "code" | "cursor";
 
-const APPS: Record<Which, { label: string; file: string; steps: string[] }> = {
+// Each app's name is its own; the steps are keys, read when they draw.
+const APPS: Record<Which, { label: string; file: string; steps: MessageKey[] }> = {
   desktop: {
     label: "Claude Desktop",
     file: "claude_desktop_config.json",
-    steps: ["In Claude Desktop, open Settings, Developer, Edit Config.", "Add this to the file.", "Restart Claude."],
+    steps: ["useFromOtherApps.desktop.openConfig", "useFromOtherApps.desktop.addToFile", "useFromOtherApps.desktop.restart"],
   },
-  code: { label: "Claude Code", file: "Terminal", steps: ["Run this in a terminal."] },
+  code: { label: "Claude Code", file: "Terminal", steps: ["useFromOtherApps.code.runInTerminal"] },
   cursor: {
     label: "Cursor",
     file: "mcp.json",
-    steps: ["In Cursor, open Settings, MCP, Add new global MCP server.", "Paste this."],
+    steps: ["useFromOtherApps.cursor.openSettings", "useFromOtherApps.cursor.paste"],
   },
 };
 
@@ -59,13 +61,13 @@ export function UseFromOtherApps() {
 
   return (
     <SettingsGroup
-      title="Use Bloks from other AI apps"
-      description="Claude, Cursor and other MCP apps can give your agents work and read their chats. Bloks must be running."
-      footnote="Approvals, deleting and settings stay here."
+      title={t("useFromOtherApps.useBloksFromOtherAi")}
+      description={t("useFromOtherApps.claudeCursorAndOtherMcp")}
+      footnote={t("useFromOtherApps.approvalsDeletingAndSettingsStay")}
     >
       <div data-setting-row="use-bloks-from-other-ai-apps" className="p-5 transition-colors duration-700">
         <Segmented<Which>
-          aria-label="Which app"
+          aria-label={t("useFromOtherApps.whichApp")}
           size="sm"
           value={which}
           onChange={(next) => {
@@ -82,12 +84,12 @@ export function UseFromOtherApps() {
                 <span aria-hidden className="w-3 shrink-0 text-right text-small tabular-nums text-muted-foreground">
                   {i + 1}
                 </span>
-                <span className="min-w-0 text-pretty">{step}</span>
+                <span className="min-w-0 text-pretty">{t(step)}</span>
               </li>
             ))}
           </ol>
         ) : (
-          <p className="mt-4 text-body text-foreground">{app.steps[0]}</p>
+          <p className="mt-4 text-body text-foreground">{t(app.steps[0])}</p>
         )}
         <div className="mt-3 overflow-hidden rounded-lg border bg-muted/40">
           <div className="flex items-center justify-between gap-3 border-b py-1 pl-3 pr-1">
@@ -95,11 +97,11 @@ export function UseFromOtherApps() {
             <Button
               variant="ghost"
               size="sm"
-              aria-label={copied ? "Copied" : `Copy the ${app.label} setup`}
+              aria-label={copied ? t("common.copied") : t("useFromOtherApps.copySetup", { app: app.label })}
               onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}
             >
               {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
-              {copied ? "Copied" : "Copy"}
+              {copied ? t("common.copied") : t("common.copy")}
             </Button>
           </div>
           <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-small text-foreground">{text}</pre>

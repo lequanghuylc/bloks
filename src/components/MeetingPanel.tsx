@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/cn";
+import { formatDate, t, type MessageKey } from "@/lib/i18n";
 
 interface Item {
   owner: string;
@@ -39,15 +40,15 @@ interface Line {
   text: string;
 }
 
-const NOTICE: Record<string, string> = {
-  "system-sound-unavailable": "Can't hear the other side. Allow Bloks under Screen Recording in System Settings. Your side is still being transcribed.",
-  "system-sound-needs-macos-13": "Hearing the other side needs macOS 13 or later. Your side is still being transcribed.",
-  "system-sound-stopped": "Lost the other side of the call.",
+const NOTICE: Record<string, MessageKey> = {
+  "system-sound-unavailable": "meetingPanel.notice.systemSoundUnavailable",
+  "system-sound-needs-macos-13": "meetingPanel.notice.systemSoundNeedsMacos13",
+  "system-sound-stopped": "meetingPanel.notice.systemSoundStopped",
 };
-const ERROR: Record<string, string> = {
-  "speech-not-authorized": "Bloks can't use speech recognition. Allow it in System Settings, Privacy and Security, Speech Recognition.",
-  "recognizer-unavailable": "Speech recognition isn't available right now.",
-  "mic-failed": "Couldn't open the microphone. Allow Bloks under Microphone in System Settings.",
+const ERROR: Record<string, MessageKey> = {
+  "speech-not-authorized": "meetingPanel.error.speechNotAuthorized",
+  "recognizer-unavailable": "meetingPanel.error.recognizerUnavailable",
+  "mic-failed": "meetingPanel.error.micFailed",
 };
 
 const clock = (ms: number) => {
@@ -69,7 +70,7 @@ function Items({ meeting, onChanged }: { meeting: MeetingRow; onChanged: () => v
             <span className="min-w-0 flex-1 text-muted-foreground">{item.text}</span>
             {agent &&
               (item.sentAt ? (
-                <span className="shrink-0 text-small text-muted-foreground">Handed over</span>
+                <span className="shrink-0 text-small text-muted-foreground">{t("meetingPanel.handedOver")}</span>
               ) : (
                 <Button
                   size="sm"
@@ -80,7 +81,7 @@ function Items({ meeting, onChanged }: { meeting: MeetingRow; onChanged: () => v
                       .catch((e: Error) => setError(e.message))
                   }
                 >
-                  <Send size={12} /> Hand to {agent.name}
+                  <Send size={12} /> {t("meetingPanel.handTo", { name: agent.name })}
                 </Button>
               ))}
           </div>
@@ -127,8 +128,9 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
     if (!meetingId || !bridge?.onMeetingLine) return;
     const offLine = bridge.onMeetingLine((line) => {
       if (typeof line.level === "number") setLevel(line.level);
-      if (line.notice) setNotice(NOTICE[line.notice] ?? null);
-      if (line.error) setError(ERROR[line.error] ?? line.error);
+      if (line.notice) setNotice(NOTICE[line.notice] ? t(NOTICE[line.notice]) : null);
+      // a code we have no words for is shown as the helper said it
+      if (line.error) setError(ERROR[line.error] ? t(ERROR[line.error]) : line.error);
       if (line.partial && line.text && line.who) setPartial({ who: line.who, text: line.text });
       if (line.segment && line.who) {
         pending.current.push({ at: Date.now(), who: line.who, text: line.segment });
@@ -193,19 +195,19 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
         className="flex max-h-[84%] w-[640px] max-w-[94vw] animate-pop-in flex-col overflow-hidden rounded-2xl border bg-popover shadow-2xl shadow-(color:--shadow-color)"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="Meeting notes"
+        aria-label={t("meetingPanel.meetingNotes")}
       >
         <div className="flex items-center justify-between border-b px-5 py-4">
           <div>
             <div className="flex items-center gap-2 text-title font-semibold text-foreground">
-              <AudioLines size={17} className="text-muted-foreground" /> Meeting notes
+              <AudioLines size={17} className="text-muted-foreground" /> {t("meetingPanel.meetingNotes")}
             </div>
             <div className="mt-0.5 text-body text-muted-foreground">
-              {bot.name} listens on this Mac and writes notes when you stop. No audio is saved.
+              {t("meetingPanel.listensOnThisMac", { name: bot.name })}
             </div>
           </div>
           {!recording && (
-            <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={close}>
+            <Button variant="ghost" size="icon-sm" aria-label={t("common.close")} onClick={close}>
               <X size={16} />
             </Button>
           )}
@@ -214,7 +216,7 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {!available ? (
             <div className="px-4 py-10 text-center text-body text-muted-foreground">
-              Meeting notes need the Bloks app on a Mac.
+              {t("meetingPanel.meetingNotesNeedTheBloks")}
             </div>
           ) : recording ? (
             <div className="flex flex-col gap-3">
@@ -230,18 +232,18 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
               </div>
               {notice && <div className="rounded-lg bg-warning/10 px-3 py-2 text-body text-warning">{notice}</div>}
               <div className="flex max-h-[320px] min-h-[120px] flex-col gap-1.5 overflow-y-auto rounded-xl border bg-muted/30 p-3 text-body leading-relaxed">
-                {lines.length === 0 && !partial && <span className="text-muted-foreground">Listening. Words appear here as you talk.</span>}
+                {lines.length === 0 && !partial && <span className="text-muted-foreground">{t("meetingPanel.listeningWordsAppearHereAs")}</span>}
                 {lines.map((line, i) => (
                   <div key={i}>
                     <span className={cn("mr-1.5 font-medium", line.who === "you" ? "text-foreground" : "text-brand-ink")}>
-                      {line.who === "you" ? "You" : "Them"}
+                      {line.who === "you" ? t("meetingPanel.you") : t("meetingPanel.them")}
                     </span>
                     <span className="text-foreground">{line.text}</span>
                   </div>
                 ))}
                 {partial && (
                   <div className="text-muted-foreground">
-                    <span className="mr-1.5 font-medium">{partial.who === "you" ? "You" : "Them"}</span>
+                    <span className="mr-1.5 font-medium">{partial.who === "you" ? t("meetingPanel.you") : t("meetingPanel.them")}</span>
                     {partial.text}
                   </div>
                 )}
@@ -249,31 +251,31 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Meeting name (optional)" className="text-body" />
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("meetingPanel.meetingNameOptional")} className="text-body" />
               <label className="flex items-center justify-between gap-3 text-body text-foreground">
                 <span>
-                  Hear the other side too
+                  {t("meetingPanel.hearTheOtherSideToo")}
                   <span className="block text-small text-muted-foreground">
-                    From Zoom, Meet and other apps. Needs Screen Recording permission.
+                    {t("meetingPanel.fromZoomMeetAndOther")}
                   </span>
                 </span>
-                <Switch checked={system} onCheckedChange={setSystem} aria-label="Hear the call" />
+                <Switch checked={system} onCheckedChange={setSystem} aria-label={t("meetingPanel.hearTheCall")} />
               </label>
               {past.length > 0 && (
                 <div className="mt-2">
-                  <div className="mb-1.5 text-small font-medium text-muted-foreground">Earlier</div>
+                  <div className="mb-1.5 text-small font-medium text-muted-foreground">{t("meetingPanel.earlier")}</div>
                   <div className="flex flex-col gap-3">
                     {past.slice(0, 5).map((m) => (
                       <div key={m.id} className="rounded-xl border p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0 truncate text-body font-medium text-foreground">{m.title || "A meeting"}</div>
+                          <div className="min-w-0 truncate text-body font-medium text-foreground">{m.title || t("meetingPanel.aMeeting")}</div>
                           <div className="shrink-0 text-small text-muted-foreground">
-                            {new Date(m.startedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                            {formatDate(m.startedAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                           </div>
                         </div>
                         {m.laneId && !m.items && (
                           <div className="mt-1 flex items-center gap-1.5 text-small text-muted-foreground">
-                            <Loader2 size={12} className="animate-spin" /> Writing the notes
+                            <Loader2 size={12} className="animate-spin" /> {t("meetingPanel.writingTheNotes")}
                           </div>
                         )}
                         <Items meeting={m} onChanged={load} />
@@ -285,7 +287,7 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
                             }}
                             className="mt-2 text-small text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                           >
-                            Read the notes
+                            {t("meetingPanel.readTheNotes")}
                           </button>
                         )}
                       </div>
@@ -302,11 +304,11 @@ export function MeetingPanel({ bot }: { bot: Bot }) {
           <div className="flex justify-end border-t px-5 py-3">
             {recording ? (
               <Button variant="destructive" disabled={stopping} onClick={() => void stop()}>
-                {stopping ? <Loader2 size={14} className="animate-spin" /> : <CircleStop size={14} />} Stop and write it up
+                {stopping ? <Loader2 size={14} className="animate-spin" /> : <CircleStop size={14} />} {t("meetingPanel.stopAndWriteItUp")}
               </Button>
             ) : (
               <Button onClick={start}>
-                <AudioLines size={14} /> Start listening
+                <AudioLines size={14} /> {t("meetingPanel.startListening")}
               </Button>
             )}
           </div>

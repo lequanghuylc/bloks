@@ -19,6 +19,7 @@ import { clock, turnStartedAt, workingLineOwed, REPLY_HOLD_MS } from "@/lib/tran
 import { runningCall, stepWords } from "@/lib/tool-summary";
 import { showsSpeedStatus, speedStatusLine, type CodexSpeedStatus } from "@/lib/codexSpeed";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 
@@ -116,7 +117,19 @@ function turnSince(key: string, working: boolean, messages: readonly Message[]):
 }
 
 /** "Working · 42s", small, for the header beside the agent's name. */
-export function WorkingClock({ threadKey, working, messages }: { threadKey: string; working: boolean; messages: readonly Message[] }) {
+export function WorkingClock({
+  threadKey,
+  working,
+  messages,
+  label = t("live.working"),
+}: {
+  threadKey: string;
+  working: boolean;
+  messages: readonly Message[];
+  /** What it is doing, when there is more to say: "Working in container
+   * bloks-scout" for an agent that works elsewhere. */
+  label?: string;
+}) {
   const since = turnSince(threadKey, working, messages);
   // the header hides it on a phone, and hidden it need not count
   const [el, setEl] = useState<HTMLSpanElement | null>(null);
@@ -125,7 +138,7 @@ export function WorkingClock({ threadKey, working, messages }: { threadKey: stri
   if (!working) return null;
   return (
     <span ref={setEl} className="tabular-nums">
-      Working · {clock(now - since)}
+      {label} · {clock(now - since)}
     </span>
   );
 }
@@ -173,6 +186,7 @@ export function WorkingLine({
   provisioning,
   speed,
   onStop,
+  onOpenTrace,
 }: {
   threadKey: string;
   working: boolean;
@@ -182,6 +196,9 @@ export function WorkingLine({
   provisioning?: boolean;
   speed?: CodexSpeedStatus;
   onStop: () => void;
+  /** Opens this turn's timeline beside the chat; the step and its clock
+   * are the way in. */
+  onOpenTrace?: () => void;
 }) {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
   const inView = useInView(el);
@@ -215,11 +232,13 @@ export function WorkingLine({
   })();
   const call = runningCall(messages.slice(start));
   const step = provisioning
-    ? "Setting up its computer"
+    ? t("live.settingUp")
     : streaming
-      ? "Writing"
-      : ((call?.tool && stepWords(call.tool)) ?? "Working");
+      ? t("live.writing")
+      : ((call?.tool && stepWords(call.tool)) ?? t("live.working"));
   const fast = working && showsSpeedStatus(speed) ? speed : undefined;
+  const opens = Boolean(onOpenTrace && working && !provisioning);
+  const Opener = opens ? "button" : "span";
 
   return (
     <AnimatePresence initial={false}>
@@ -245,36 +264,48 @@ export function WorkingLine({
               )}
             />
           </span>
-          <span aria-hidden className="relative min-w-0 truncate text-foreground/80">
-            <AnimatePresence mode="popLayout" initial={false}>
-              <motion.span
-                key={step}
-                className="inline-block"
-                initial={{ opacity: 0, y: 3 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -3 }}
-                transition={{ duration: 0.16, ease: EASE_OUT }}
-              >
-                {step}
-              </motion.span>
-            </AnimatePresence>
-          </span>
           {/* the step, said to a screen reader when it changes; the
               clock beside it is read when asked, not each second */}
           <span className="sr-only" role="status">
             {step}
           </span>
-          {working && (
-            <>
-              <span aria-hidden>·</span>
-              <span className="shrink-0 tabular-nums">{clock(now - since)}</span>
-            </>
-          )}
+          {/* What it is doing and for how long is also the way to see
+              how the turn has gone so far: its timeline, beside the chat. */}
+          <Opener
+            {...(opens
+              ? { type: "button" as const, onClick: onOpenTrace, title: t("live.seeTimeline"), "aria-label": t("live.seeTimeline") }
+              : {})}
+            className={cn(
+              "group/step flex min-w-0 items-center gap-2 rounded-md text-left",
+              opens && "transition-colors duration-150 hover:text-foreground",
+            )}
+          >
+            <span aria-hidden className="relative min-w-0 truncate text-foreground/80 transition-colors duration-150 group-hover/step:text-foreground">
+              <AnimatePresence mode="popLayout" initial={false}>
+                <motion.span
+                  key={step}
+                  className="inline-block"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -3 }}
+                  transition={{ duration: 0.16, ease: EASE_OUT }}
+                >
+                  {step}
+                </motion.span>
+              </AnimatePresence>
+            </span>
+            {working && (
+              <>
+                <span aria-hidden>·</span>
+                <span className="shrink-0 tabular-nums">{clock(now - since)}</span>
+              </>
+            )}
+          </Opener>
           {fast && (
             <>
               <span aria-hidden>·</span>
               <span data-codex-speed-status title={speedStatusLine(fast) ?? undefined} className="shrink-0">
-                Codex {fast.choice.resolved === "fast" ? "Fast" : "Standard"}
+                Codex {fast.choice.resolved === "fast" ? t("live.fast") : t("live.standard")}
               </span>
             </>
           )}
@@ -284,10 +315,10 @@ export function WorkingLine({
               <button
                 type="button"
                 onClick={onStop}
-                title={escHint ? "Stop the agent" : "Stop the agent. Esc does the same from the message box."}
+                title={escHint ? t("live.stopTheAgent") : t("live.stopTheAgentEscDoes")}
                 className="shrink-0 rounded-md transition-colors duration-150 hover:text-foreground"
               >
-                {escHint ? "Esc to stop" : "Stop"}
+                {escHint ? t("live.escToStop") : t("common.stop")}
               </button>
             </>
           )}
@@ -308,7 +339,7 @@ export function ScreenFrame({ png, mime }: { png: string; mime?: string }) {
     <div className="flex animate-rise-in justify-start">
       <img
         src={`data:${safeMime};base64,${png}`}
-        alt="Agent screen"
+        alt={t("live.agentScreen")}
         className="max-w-[82%] rounded-xl border sm:max-w-[68%]"
       />
     </div>
@@ -334,11 +365,11 @@ export function LiveBrowser({ botId, frame }: { botId: string; frame: { png: str
       <div className="max-w-[82%] overflow-hidden rounded-xl border sm:max-w-[68%]">
         <div className="flex items-center gap-1.5 border-b px-2.5 py-1.5 text-small text-muted-foreground">
           <span className={cn("size-1.5 rounded-full bg-success", inView && "motion-safe:animate-pulse")} />
-          Live browser. Click or type to help.
+          {t("live.browserHelp")}
         </div>
         <img
           src={`data:${safeMime};base64,${frame.png}`}
-          alt="The agent's browser"
+          alt={t("live.theAgentsBrowser")}
           className="block w-full cursor-pointer"
           onClick={(e) => {
             const box = e.currentTarget.getBoundingClientRect();
@@ -356,8 +387,8 @@ export function LiveBrowser({ botId, frame }: { botId: string; frame: { png: str
           <input
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Type here, Enter to send"
-            aria-label="Type into the agent's browser"
+            placeholder={t("live.typeHereEnterToSend")}
+            aria-label={t("live.typeIntoTheAgentsBrowser")}
             className="w-full bg-transparent px-2.5 py-1.5 text-body outline-none placeholder:text-muted-foreground"
           />
         </form>
