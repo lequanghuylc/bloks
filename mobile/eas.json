@@ -1,0 +1,15 @@
+{
+  "cli": {
+    "version": ">= 19.1.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "adhoc": {
+      "distribution": "internal",
+      "channel": "main",
+      "ios": {
+        "resourceClass": "default"
+      }
+    }
+  }
+}
