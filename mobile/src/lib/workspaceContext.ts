@@ -15,7 +15,7 @@ const watchers = new Map<string, Set<() => void>>();
 export function usePublishWorkspace(instanceId: string): Workspace {
   const { clientFor } = useInstances();
   const client = useMemo(() => clientFor(instanceId), [clientFor, instanceId]);
-  const workspace = useWorkspace(client);
+  const workspace = useWorkspace(client, instanceId);
   live.set(instanceId, workspace);
   useEffect(() => {
     for (const notify of watchers.get(instanceId) ?? []) notify();

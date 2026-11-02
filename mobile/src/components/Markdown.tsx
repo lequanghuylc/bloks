@@ -100,6 +100,8 @@ function BlockView({ block, ink, ui, streaming, host }: { block: Block; ink: str
       return <View style={[styles.quote, { borderLeftColor: colors.border }]}><InlineText text={block.text} color={colors.muted} /></View>;
     case "rule":
       return <View style={[styles.rule, { backgroundColor: colors.border }]} />;
+    case "lostCall":
+      return streaming ? null : <Text style={{ color: colors.muted, fontSize: 14 }}>Tried to run a command, but wrote it as text, so it did not run.</Text>;
     case "code":
       return <CodeView lang={block.lang} code={block.code} />;
     case "table":

@@ -33,6 +33,15 @@ export interface Message {
   png?: string;
   mime?: string;
   queued?: boolean;
+  queuedAt?: number;
+  deliveredAt?: number;
+  unsent?: boolean;
+  waitsFor?: "restart" | "pause";
+  waitsUntil?: number;
+  delivery?: { route?: string; line?: string };
+  reactions?: Record<string, string[]>;
+  replyTo?: { id?: string; author: string; excerpt: string };
+  editedAt?: number;
   deleted?: boolean;
   quiet?: boolean;
   pending?: boolean;
@@ -87,6 +96,8 @@ export interface Lane {
   title: string;
   state?: "working" | "needs-you" | "idle";
   unread?: boolean;
+  /** Set on the lane an agent works in for a room. */
+  room?: string;
   usage?: { input: number; output: number; turns: number };
   context?: LaneContext;
 }
@@ -184,7 +195,7 @@ export function lineOf(message: Message | undefined): string {
 /** A list row reads the words around an answer drawn as interface, never its
  * source, which is for the agent and not the person. */
 export function withoutGenerated(text: string): string {
-  return text.replace(/(?:```|~~~)openui(?:-lang)?\b[\s\S]*?(?:```|~~~|$)/g, " ");
+  return text.replace(/(?:```|~~~)openui(?:-lang)?\b[\s\S]*?(?:```|~~~|$)/g, " ").replace(/^[ \t]*<tool_call>\s*<function=[\s\S]*?(?:<\/tool_call>|(?![\s\S]))/gm, " ");
 }
 
 export function previewOf(messages: Message[] | undefined): string {
@@ -210,6 +221,29 @@ export function upsert(list: Message[], message: Message, moved = false): Messag
   const next = without.slice();
   next[index] = message;
   return next;
+}
+
+/**
+ * The server's latest page laid over what is on screen. The page is right about
+ * everything from its first message on, so anything it no longer has is gone.
+ * What is older stays if it joins up with the page; if it does not, messages
+ * were missed in between, so it is dropped and read again on the way back up.
+ */
+export function mergeLatest(list: readonly Message[], page: readonly Message[], olderOnServer: number | undefined, olderLeft: boolean): { messages: Message[]; olderLeft: boolean } {
+  const unsettled = list.filter((item) => item.pending && !page.some((said) => said.role === "user" && said.text === item.text));
+  const first = page[0];
+  const joins = first ? list.findIndex((item) => item.id === first.id) : -1;
+  const older = joins > 0 ? list.slice(0, joins).filter((item) => !item.pending) : [];
+  return {
+    messages: [...older, ...page, ...unsettled],
+    olderLeft: older.length ? olderLeft : (olderOnServer ?? 1) > 0,
+  };
+}
+
+/** What a device keeps of a conversation: the newest of what was settled. */
+export function forCache(list: readonly Message[], olderLeft: boolean, limit = 200): { messages: Message[]; olderLeft: boolean } {
+  const settled = list.filter((item) => !item.pending);
+  return { messages: settled.slice(-limit), olderLeft: olderLeft || settled.length > limit };
 }
 
 /** Whether streamed text is an engine's progress note rather than the reply

@@ -1,19 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as ImagePicker from "expo-image-picker";
 
 import { Avatar } from "./Avatar";
 import { Markdown } from "./Markdown";
+import { ActionSheet, EditSheet, ForwardSheet, ReplyChip } from "./MessageActions";
+import { FileViewer, PickedPhoto, type OpenFile } from "./FileViewer";
 import { RowView, type RowContext } from "./MessageRow";
 import { ModelSheet } from "./ModelSheet";
 import { UsageSheet } from "./UsageSheet";
+import { WaitingCard } from "./WaitingCard";
+import { WorkingLine } from "./WorkingLine";
+import { excerptOf, splitWaiting, type ActionKey, type ReplyDraft } from "../lib/chatMeta.ts";
 import { Unpaired } from "../lib/client.ts";
 import { contextPercent, effortName, clampEffort, effortLevels, measuredContext, selectionLabel, type Engine } from "../lib/engines.ts";
 import { useInstances } from "../lib/instances";
 import { READING_WIDTH, useIsWide } from "../lib/layout";
-import { cardAnswerRequest, composeOutgoing, isProgressText, upsert, type Lane, type Message, type OptionCard } from "../lib/messages.ts";
+import { chatKey, draftKey, peek, put, read, remove } from "../lib/localStore";
+import { cardAnswerRequest, composeOutgoing, forCache, isProgressText, mergeLatest, upsert, type Lane, type Message, type OptionCard } from "../lib/messages.ts";
 import { useColors } from "../lib/theme";
 import { rowsOf } from "../lib/turnFold.ts";
 import { E2E, e2e } from "../lib/e2e";
@@ -51,12 +57,62 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [streaming, setStreaming] = useState("");
   const [working, setWorking] = useState(false);
-  const [text, setText] = useState("");
+  const [text, showText] = useState("");
   const [picked, setPicked] = useState<Picked | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  const [acting, setActing] = useState<Message | null>(null);
+  const [viewing, setViewing] = useState<OpenFile | null>(null);
+  const [forwarding, setForwarding] = useState<{ message: Message; author: string } | null>(null);
+  const [editing, setEditing] = useState<Message | null>(null);
+  const inputRef = useRef<TextInput>(null);
   const threadRef = useRef(thread);
   threadRef.current = thread;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const olderLeftRef = useRef(olderLeft);
+  olderLeftRef.current = olderLeft;
+  // Which conversation `messages` is, once it is known to belong to one, so an
+  // empty list on the way between two is never saved over the second.
+  const shownThread = useRef<string | undefined>(undefined);
+
+  // What is typed and not yet sent is kept per conversation until it is sent.
+  const textRef = useRef(text);
+  textRef.current = text;
+  const draftThread = useRef<string | undefined>(undefined);
+  const keepDraft = useCallback((words: string) => {
+    if (!draftThread.current) return;
+    const key = draftKey(instanceId, draftThread.current);
+    if (words) put(key, words);
+    else remove(key);
+  }, [instanceId]);
+  const setText = useCallback((words: string) => {
+    showText(words);
+    keepDraft(words);
+  }, [keepDraft]);
+
+  useEffect(() => {
+    if (!thread) return;
+    let current = true;
+    const came = draftThread.current;
+    draftThread.current = thread;
+    // Words typed before the first conversation was known belong to it; moving
+    // from one conversation to another leaves them behind in the first.
+    if (came) showText("");
+    else if (textRef.current) keepDraft(textRef.current);
+    const key = draftKey(instanceId, thread);
+    const held = peek<string>(key);
+    if (held) showText(held);
+    else {
+      void read<string>(key).then((saved) => {
+        if (current && saved) showText((typed) => typed || saved);
+      });
+    }
+    return () => {
+      current = false;
+    };
+  }, [instanceId, thread, keepDraft]);
 
   const [engines, setEngines] = useState<Engine[]>([]);
   const [sheet, setSheet] = useState<"model" | "usage" | null>(null);
@@ -93,22 +149,59 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
         : `/api/bots/${id}/messages?thread=${encodeURIComponent(thread)}`;
       const page = await client.request<{ messages?: Message[]; olderMessages?: number }>(path);
       if (threadRef.current !== thread) return;
-      setMessages(page.messages ?? []);
-      setOlderLeft((page.olderMessages ?? 1) > 0);
+      const said = page.messages ?? [];
+      setOlderLeft(mergeLatest(messagesRef.current, said, page.olderMessages, olderLeftRef.current).olderLeft);
+      setMessages((list) => mergeLatest(list, said, page.olderMessages, olderLeftRef.current).messages);
+      shownThread.current = thread;
       setError("");
     } catch (err) {
-      speak(err);
+      if (threadRef.current === thread && !(err instanceof Unpaired) && messagesRef.current.length) {
+        setError("Showing saved messages. This computer could not be reached.");
+      } else speak(err);
     } finally {
       setLoading(false);
     }
   }, [client, kind, id, thread, speak]);
 
   useEffect(() => {
-    setLoading(true);
+    let current = true;
     setStreaming("");
-    void load();
+    // a quote is of a message in the conversation it was picked in
+    setReplyTo(null);
+    shownThread.current = undefined;
+    type Kept = { messages: Message[]; olderLeft: boolean };
+    const show = (kept: Kept | null) => {
+      if (kept) {
+        // anything the stream brought while this was being read is newer
+        setMessages((list) => list.reduce((all, item) => upsert(all, item), kept.messages));
+        setOlderLeft(kept.olderLeft);
+        setLoading(false);
+      }
+      if (thread) shownThread.current = thread;
+    };
+    const key = thread ? chatKey(instanceId, thread) : null;
+    const held = key ? peek<Kept>(key) : undefined;
+    setMessages([]);
+    if (held) show(held);
+    else setLoading(true);
+    void (async () => {
+      if (key && !held) {
+        const kept = await read<Kept>(key);
+        if (!current) return;
+        // only a kept conversation counts as shown: an empty one waits for the server
+        if (kept) show(kept);
+      }
+      await load();
+    })();
     if (kind === "bot" && !E2E) void client?.request(`/api/bots/${id}`, { method: "PATCH", body: { unread: false } }).catch(() => {});
-  }, [load, kind, id, client]);
+    return () => {
+      current = false;
+    };
+  }, [load, kind, id, client, instanceId, thread]);
+
+  useEffect(() => {
+    if (thread && shownThread.current === thread) put(chatKey(instanceId, thread), forCache(messages, olderLeft));
+  }, [instanceId, thread, messages, olderLeft]);
 
   useEffect(() => {
     if (!workspace || !thread) return;
@@ -164,9 +257,10 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
     const words = text.trim();
     if (!client || (!words && !picked) || sending) return;
     const image = picked;
+    const quote = replyTo ?? undefined;
     setSending(true);
     setError("");
-    const local: Message = { id: `local-${Date.now()}`, role: "user", kind: "text", text: words || "[attachment]", pending: true };
+    const local: Message = { id: `local-${Date.now()}`, role: "user", kind: "text", text: words || "[attachment]", pending: true, replyTo: quote };
     try {
       let outgoing = words;
       if (image) outgoing = composeOutgoing(words, [await client.uploadImage(bytesOf(image.base64), image.mime)]);
@@ -174,15 +268,17 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
       setMessages((list) => [...list, local]);
       setText("");
       setPicked(null);
+      setReplyTo(null);
       if (kind === "room") {
-        await client.request(`/api/bloks/${id}/messages`, { method: "POST", body: { text: outgoing } });
+        await client.request(`/api/bloks/${id}/messages`, { method: "POST", body: { text: outgoing, replyTo: quote } });
       } else {
-        await client.request(`/api/bots/${id}/messages`, { method: "POST", body: { text: outgoing, ...(thread ? { taskId: thread } : {}) } });
+        await client.request(`/api/bots/${id}/messages`, { method: "POST", body: { text: outgoing, replyTo: quote, ...(thread ? { taskId: thread } : {}) } });
       }
     } catch (err) {
       setMessages((list) => list.filter((item) => item.id !== local.id));
       setText(words);
       setPicked(image);
+      setReplyTo(quote ?? null);
       speak(err);
     } finally {
       setSending(false);
@@ -254,6 +350,81 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
     });
   };
 
+  // On the server a message's thread is the lane it is in, or the room.
+  const messageThread = thread ?? "";
+  const authorOf = useCallback((message: Message) => {
+    if (message.role === "user") return message.author || message.telegramPerson?.name || message.telegramDelegate?.name || "You";
+    return (message.from && workspace?.bots.find((item) => item.id === message.from)?.name) || name;
+    // only the names matter, and they change with the agents
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace?.bots, name]);
+
+  const react = useCallback((message: Message, emoji: string) => {
+    client?.request(`/api/threads/${messageThread}/messages/${message.id}/react`, { method: "POST", body: { emoji } }).catch(() => {});
+  }, [client, messageThread]);
+
+  const failed = (what: string) => (err: unknown) => Alert.alert(what, err instanceof Error ? err.message : String(err));
+
+  const act = (key: ActionKey, message: Message) => {
+    setActing(null);
+    const path = `/api/threads/${messageThread}/messages/${message.id}`;
+    // iOS will not show anything new while the sheet is still leaving
+    const next = (run: () => void) => setTimeout(run, 350);
+    switch (key) {
+      case "reply":
+        setReplyTo({ id: message.id, author: authorOf(message), excerpt: excerptOf(message) });
+        next(() => inputRef.current?.focus());
+        break;
+      case "forward":
+        next(() => setForwarding({ message, author: authorOf(message) }));
+        break;
+      case "edit":
+        next(() => setEditing(message));
+        break;
+      case "rewind":
+        next(() => Alert.alert("Rewind to before this message?", "It and everything after are removed, and file changes since then are undone. Your message returns to the box.", [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Rewind",
+            style: "destructive",
+            onPress: () => {
+              client?.request<{ text?: string }>(`/api/threads/${messageThread}/rewind`, { method: "POST", body: { messageId: message.id } })
+                .then((result) => {
+                  setText(result.text ?? "");
+                  return load();
+                })
+                .catch(failed("Not rewound"));
+            },
+          },
+        ]));
+        break;
+      case "delete":
+        next(() => Alert.alert("Delete this message?", "This can't be undone.", [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => void client?.request(path, { method: "DELETE" }).catch(failed("Not deleted")) },
+        ]));
+        break;
+    }
+  };
+
+  const forwardTo = (to: { kind: "bot" | "room"; id: string }, words: string) => {
+    if (!client) return Promise.reject(new Error("Not connected"));
+    const path = to.kind === "room" ? `/api/bloks/${to.id}/messages` : `/api/bots/${to.id}/messages`;
+    return client.request(path, { method: "POST", body: { text: words } });
+  };
+
+  const sendNow = () => {
+    client?.request(`/api/bots/${id}/queued/now`, { method: "POST", body: { taskId: thread } }).catch(failed("Not sent"));
+  };
+
+  // Sent again as what it says now, and the one that never went is cleared
+  // once the new one is in.
+  const sendAgain = (message: Message) => {
+    client?.request(`/api/bots/${id}/messages`, { method: "POST", body: { text: message.text, taskId: thread } })
+      .then(() => client.request(`/api/threads/${messageThread}/messages/${message.id}`, { method: "DELETE" }))
+      .catch(failed("Not sent"));
+  };
+
   const botsNow = workspace?.bots;
   const context = useMemo<RowContext>(() => ({
     client,
@@ -262,11 +433,21 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
     nameOf: (botId) => botsNow?.find((item) => item.id === botId)?.name,
     colorOf: (botId) => botsNow?.find((item) => item.id === botId)?.color,
     onAnswer: answer,
-  }), [client, kind, botsNow, answer]);
+    onActions: setActing,
+    onReact: react,
+    agentId: kind === "bot" ? id : undefined,
+    onOpenFile: setViewing,
+  }), [client, kind, id, botsNow, answer, react]);
 
-  const running = working || Boolean(lanes.find((item) => item.id === thread)?.state === "working") || (lanes.length === 0 && Boolean(bot?.busy));
+  const roomWorkers = useMemo(
+    () => (kind === "room" ? (botsNow ?? []).filter((item) => item.tasks?.some((task) => task.room === id)).map((item) => item.name) : []),
+    [kind, botsNow, id],
+  );
+  const running = kind === "room"
+    ? roomWorkers.length > 0
+    : working || Boolean(lanes.find((item) => item.id === thread)?.state === "working") || (lanes.length === 0 && Boolean(bot?.busy));
   const rows = useMemo(() => rowsOf(messages, { running, room: kind === "room" }).reverse().slice(E2E ? e2e.skip : 0), [messages, running, kind]);
-  const waiting = useMemo(() => messages.filter((message) => message.queued && !message.deleted), [messages]);
+  const { said, waiting } = useMemo(() => splitWaiting(messages), [messages]);
   const canSend = (text.trim().length > 0 || picked) && !sending;
   const lane = lanes.find((item) => item.id === thread);
   const fill = measuredContext(lane?.context);
@@ -289,7 +470,8 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
             {lanes.map((lane) => {
               const on = lane.id === thread;
               return (
-                <Pressable key={lane.id} accessibilityRole="button" onPress={() => setLaneId(lane.id)} style={[styles.lane, { backgroundColor: on ? colors.accent : colors.surface }]}>
+                <Pressable key={lane.id} accessibilityRole="button" accessibilityLabel={lane.state === "working" ? `${lane.title || "Conversation"}, working` : undefined} onPress={() => setLaneId(lane.id)} style={[styles.lane, { backgroundColor: on ? colors.accent : colors.surface }]}>
+                  {lane.state === "working" && <ActivityIndicator size="small" color={on ? colors.onAccent : colors.accent} style={styles.laneSpinner} />}
                   <Text numberOfLines={1} style={{ color: on ? colors.onAccent : lane.state === "needs-you" ? colors.warning : colors.text, fontSize: 13, maxWidth: 160 }}>
                     {lane.unread && !on ? "• " : ""}{lane.title || "Conversation"}
                   </Text>
@@ -302,7 +484,7 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
           </ScrollView>
         </View>
       )}
-      {loading ? (
+      {loading && !messages.length ? (
         <View style={styles.center}><ActivityIndicator /></View>
       ) : (
         <FlatList
@@ -313,7 +495,19 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
           keyboardShouldPersistTaps="handled"
           onEndReached={loadOlder}
           onEndReachedThreshold={0.3}
-          ListHeaderComponent={streaming ? <View style={[styles.streaming, measure]}><Markdown text={streaming} streaming /></View> : null}
+          ListHeaderComponent={(
+            <View style={measure}>
+              {!!streaming && <View style={styles.streaming}><Markdown text={streaming} streaming /></View>}
+              <WorkingLine
+                threadKey={`${kind}:${id}:${thread}`}
+                working={running}
+                streaming={streaming}
+                said={said}
+                label={kind === "room" && roomWorkers.length ? `${roomWorkers.join(", ")} ${roomWorkers.length === 1 ? "is" : "are"} working` : undefined}
+                onStop={kind === "bot" ? stop : undefined}
+              />
+            </View>
+          )}
           ListFooterComponent={loadingOlder ? <ActivityIndicator style={styles.older} /> : null}
           ListEmptyComponent={<Text style={[styles.empty, { color: colors.muted, transform: [{ scaleY: -1 }] }]}>Nothing said here yet.</Text>}
           renderItem={({ item }) => (
@@ -323,25 +517,30 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
           )}
         />
       )}
-      {waiting.length > 0 && (
-        <Text numberOfLines={2} style={[styles.waiting, measure, { color: colors.muted }]}>Waiting to send: {waiting.map((item) => item.text).join(" · ")}</Text>
-      )}
+      <WaitingCard
+        waiting={waiting}
+        threadId={messageThread}
+        client={client}
+        working={running}
+        onSendNow={kind === "bot" ? sendNow : undefined}
+        onSendAgain={kind === "bot" ? sendAgain : undefined}
+        style={measure}
+      />
       {!!error && <Text style={[styles.waiting, measure, { color: colors.danger }]}>{error}</Text>}
-      {picked && (
-        <Pressable accessibilityRole="button" onPress={() => setPicked(null)} style={[styles.chip, measure]}>
-          <Text style={{ color: colors.muted, fontSize: 13 }}>Photo attached. Tap to remove.</Text>
-        </Pressable>
-      )}
+      {replyTo && <ReplyChip draft={replyTo} onClear={() => setReplyTo(null)} style={measure} />}
       <View style={[styles.composerWrap, { paddingBottom: bot ? 0 : Math.max(insets.bottom, 8) }]}>
-        <View style={[styles.composer, measure, styles.composerBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
+        <View style={[measure, styles.composerBox, { borderColor: colors.border, backgroundColor: colors.card }]}>
+          {picked && <PickedPhoto uri={picked.uri} sending={sending} onOpen={() => setViewing({ name: "Attached photo", source: { uri: picked.uri }, picture: true })} onRemove={() => setPicked(null)} />}
+          <View style={styles.composer}>
           <Pressable accessibilityRole="button" accessibilityLabel="Attach a photo" onPress={pick} style={styles.icon}>
             <Text style={{ color: colors.muted, fontSize: 24, lineHeight: 28 }}>+</Text>
           </Pressable>
           <TextInput
+            ref={inputRef}
             value={text}
             onChangeText={setText}
             multiline
-            placeholder={`Message ${name}`}
+            placeholder={replyTo ? `Reply to ${replyTo.author}` : running && kind === "bot" ? `Add to what ${name} is doing` : `Message ${name}`}
             placeholderTextColor={colors.muted}
             style={[styles.input, { color: colors.text }]}
           />
@@ -354,6 +553,7 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
               {sending ? <ActivityIndicator /> : <Text style={{ color: canSend ? colors.onAccent : colors.muted, fontSize: 18, fontWeight: "600", lineHeight: 22 }}>↑</Text>}
             </Pressable>
           )}
+          </View>
         </View>
       </View>
       {bot && (
@@ -370,6 +570,24 @@ export function ChatPane({ instanceId, kind, id, name, onUnpaired }: { instanceI
           </Pressable>
         </View>
       )}
+      <FileViewer file={viewing} onClose={() => setViewing(null)} />
+      <ActionSheet message={acting} author={acting ? authorOf(acting) : ""} room={kind === "room"} onClose={() => setActing(null)} onReact={react} onAction={act} />
+      <ForwardSheet target={forwarding} bots={botsNow ?? []} rooms={workspace?.rooms ?? []} onClose={() => setForwarding(null)} onSend={forwardTo} />
+      <EditSheet
+        message={editing}
+        threadId={messageThread}
+        client={client}
+        agent={name}
+        onClose={() => setEditing(null)}
+        onRedone={(result, words) => {
+          setEditing(null);
+          if (result.sent === false) {
+            setText(result.text ?? words);
+            setError(result.error ?? "Rewound, but your message wasn't sent.");
+          }
+          void load();
+        }}
+      />
       {bot && (
         <>
           <ModelSheet
@@ -402,9 +620,9 @@ const styles = StyleSheet.create({
   older: { padding: 12 },
   streaming: { paddingHorizontal: 16, paddingVertical: 6 },
   lanes: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
-  lane: { minHeight: 32, paddingHorizontal: 12, borderRadius: 16, justifyContent: "center" },
+  lane: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 32, paddingHorizontal: 12, borderRadius: 16 },
+  laneSpinner: { transform: [{ scale: 0.7 }], width: 16, height: 16 },
   waiting: { fontSize: 13, paddingHorizontal: 16, paddingVertical: 4 },
-  chip: { paddingHorizontal: 16, paddingVertical: 6 },
   composer: { flexDirection: "row", alignItems: "flex-end", gap: 4 },
   icon: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   input: { flex: 1, minHeight: 36, maxHeight: 140, paddingHorizontal: 6, paddingTop: 8, paddingBottom: 8, fontSize: 16 },

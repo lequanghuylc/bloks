@@ -13,6 +13,8 @@ export type Block =
   | { kind: "paragraph"; text: string }
   | { kind: "quote"; text: string }
   | { kind: "rule" }
+  /** A tool call the model wrote as words, so nothing ran (server/leaked-tool-call.ts). */
+  | { kind: "lostCall" }
   | { kind: "code"; lang: string; code: string }
   | { kind: "ui"; fence: number | null; source: string; closed: boolean }
   | { kind: "table"; head: string[]; align: Array<"left" | "right" | "center">; rows: string[][] }
@@ -86,14 +88,32 @@ function readList(lines: string[], from: number): { block: Extract<Block, { kind
   return { block: { kind: "list", ordered, start: ordered ? parseInt(marker, 10) : 1, items }, next: i };
 }
 
+/** The last line of a tool call written as words starting here, or -1. Keep in
+ * step with server/leaked-tool-call.ts. */
+function leakedCallEnd(lines: readonly string[], at: number): number {
+  const line = lines[at];
+  const wrapped = /^\s*<tool_call>\s*$/.test(line);
+  if (!wrapped && !/^\s*<function=[\w.-]*>?/.test(line)) return -1;
+  if (wrapped) {
+    let next = at + 1;
+    while (next < lines.length && !lines[next].trim()) next++;
+    if (next < lines.length && !/^\s*<function=/.test(lines[next])) return -1;
+  }
+  const close = wrapped ? "</tool_call>" : "</function>";
+  for (let j = at; j < lines.length; j++) {
+    if (lines[j].includes(close)) return !wrapped && lines[j + 1]?.trim() === "</tool_call>" ? j + 1 : j;
+  }
+  return lines.length - 1;
+}
+
 /**
  * A reply as blocks. A fence is counted the way the server counts it, so each
  * openui block finds its entry in message.ui (server/genui-library.ts). A
- * fence glued onto the end of a sentence is not one to the server, so it has
- * no entry (fence null), and is cut away from the words rather than shown.
+ * fence glued onto the end of a sentence is moved to its own line, as the
+ * server does (unglueOpenUi).
  */
 export function parseBlocks(input: string): Block[] {
-  const text = input.replace(/\r\n/g, "\n").replace(/([^\n`~])(```|~~~)(openui(?:-lang)?)(?=\s*\n)/g, "$1\n\u0000$2$3");
+  const text = input.replace(/\r\n/g, "\n").replace(/([^\s`~][ \t]*)(```|~~~)([ \t]*openui(?:-lang)?[ \t]*(?:\n|$))/gi, "$1\n$2$3");
   const lines = text.split("\n");
   const blocks: Block[] = [];
   let paragraph: string[] = [];
@@ -103,8 +123,7 @@ export function parseBlocks(input: string): Block[] {
     paragraph = [];
   };
   for (let i = 0; i < lines.length; i++) {
-    const glued = lines[i].startsWith("\u0000");
-    const line = glued ? lines[i].slice(1) : lines[i];
+    const line = lines[i];
     const fence = FENCE.exec(line);
     if (fence) {
       flush();
@@ -120,8 +139,8 @@ export function parseBlocks(input: string): Block[] {
         body.push(lines[j]);
       }
       if (isOpenUi(fence[2])) {
-        blocks.push({ kind: "ui", fence: glued ? null : fences, source: body.join("\n"), closed });
-        if (!glued) fences++;
+        blocks.push({ kind: "ui", fence: fences, source: body.join("\n"), closed });
+        fences++;
       } else {
         blocks.push({ kind: "code", lang: fence[2], code: body.join("\n") });
       }
@@ -130,6 +149,13 @@ export function parseBlocks(input: string): Block[] {
     }
     if (!line.trim()) {
       flush();
+      continue;
+    }
+    const lost = leakedCallEnd(lines, i);
+    if (lost >= 0) {
+      flush();
+      blocks.push({ kind: "lostCall" });
+      i = lost;
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && DIVIDER.test(lines[i + 1]) && lines[i + 1].includes("-")) {

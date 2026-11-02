@@ -2,13 +2,16 @@
 import { memo, useState, type ReactNode } from "react";
 import { Image, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { artifactPath, opensAsPicture, stamp } from "../lib/chatMeta.ts";
 import type { Client } from "../lib/client.ts";
 import { answersElsewhere, baseName, cardIsOpen, isApproval, lineOf, readSent, type Message, type OptionCard } from "../lib/messages.ts";
 import { useColors } from "../lib/theme";
 import { foldLine, toolSummary, plainRows, type Row, type TurnFold } from "../lib/turnFold.ts";
 import { Avatar } from "./Avatar";
+import type { OpenFile } from "./FileViewer";
 import type { GenUiHost } from "./GenUI";
 import { Markdown } from "./Markdown";
+import { MessageMeta, Reactions, ReplyContext } from "./MessageActions";
 
 export type RowContext = {
   client: Client | null;
@@ -18,14 +21,20 @@ export type RowContext = {
   colorOf: (id: string) => string | undefined;
   room: boolean;
   onAnswer: (message: Message, card: OptionCard, answer: string) => void;
+  /** Opens the verbs on a message, and toggles a reaction on it. */
+  onActions: (message: Message) => void;
+  onReact: (message: Message, emoji: string) => void;
+  /** The agent this chat is with, for a file that does not say whose it is. */
+  agentId?: string;
+  onOpenFile?: (file: OpenFile) => void;
 };
 
-function stamp(at: number | undefined): string {
-  if (!at) return "";
-  const date = new Date(at);
-  const now = new Date();
-  const time = `${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
-  return date.toDateString() === now.toDateString() ? time : `${date.getDate()}/${date.getMonth() + 1}`;
+/** When a card, a file or a list of changes was said; they have no verbs. */
+function Said({ at }: { at?: number }) {
+  const colors = useColors();
+  const when = stamp(at);
+  if (!when) return null;
+  return <Text style={[styles.said, { color: colors.muted }]}>{when}</Text>;
 }
 
 function ToolLines({ tools }: { tools: Message[] }) {
@@ -191,12 +200,20 @@ function ChangesRow({ message }: { message: Message }) {
   );
 }
 
-function MineRow({ message, client }: { message: Message; client: Client | null }) {
+function MineRow({ message, client, onOpenFile }: { message: Message; client: Client | null; onOpenFile?: (file: OpenFile) => void }) {
   const colors = useColors();
   const sent = readSent(message.text ?? "");
   return (
     <View style={styles.mineWrap}>
-      {sent.images.map((path) => (client ? <Image key={path} accessibilityLabel={baseName(path)} source={client.source(`/api/attachments/${encodeURIComponent(baseName(path))}`)} resizeMode="cover" style={styles.sentImage} /> : null))}
+      {sent.images.map((path) => {
+        if (!client) return null;
+        const source = client.source(`/api/attachments/${encodeURIComponent(baseName(path))}`);
+        return (
+          <Pressable key={path} accessibilityRole="button" accessibilityLabel={`Open ${baseName(path)}`} onPress={() => onOpenFile?.({ name: path, source, picture: true })}>
+            <Image source={source} resizeMode="cover" style={styles.sentImage} />
+          </Pressable>
+        );
+      })}
       {(sent.words || sent.files.length > 0 || sent.pastes > 0) && (
         <View style={[styles.mine, { backgroundColor: colors.mine, opacity: message.pending ? 0.6 : 1 }]}>
           {(sent.files.length > 0 || sent.pastes > 0) && (
@@ -205,6 +222,7 @@ function MineRow({ message, client }: { message: Message; client: Client | null 
               {sent.pastes > 0 && <Text style={[styles.sentChip, { color: colors.onMine, backgroundColor: colors.surface }]}>Pasted text</Text>}
             </View>
           )}
+          {!!message.replyTo && <ReplyContext replyTo={message.replyTo} />}
           {!!sent.words && <Markdown text={sent.words} color={colors.onMine} />}
         </View>
       )}
@@ -232,24 +250,52 @@ function Wide({ children }: { children: ReactNode }) {
   return <View style={styles.pad}>{children}</View>;
 }
 
+/** A file an agent shared: a picture shows itself, and either opens on a tap. */
+function ArtifactRow({ message, context }: { message: Message; context: RowContext }) {
+  const colors = useColors();
+  const artifact = message.artifact;
+  const owner = message.from ?? context.agentId;
+  const source = artifact && owner && context.client ? context.client.source(artifactPath(owner, artifact.name)) : null;
+  const picture = !!artifact && opensAsPicture(artifact.mime, artifact.name);
+  const open = source && artifact && context.onOpenFile ? () => context.onOpenFile?.({ name: artifact.name, source, picture }) : undefined;
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${artifact?.name ?? "file"}`} disabled={!open} onPress={open} style={[styles.artifactCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {picture && source && <Image accessibilityIgnoresInvertColors source={source} resizeMode="cover" style={styles.artifactPicture} />}
+      <View style={styles.artifact}>
+        <Text numberOfLines={1} style={{ color: colors.text, fontSize: 14, fontWeight: "500", flex: 1 }}>{artifact?.name}</Text>
+        {!!artifact?.size && <Text style={{ color: colors.muted, fontSize: 13 }}>{Math.max(1, Math.round(artifact.size / 1024))} KB</Text>}
+        {open && <Text style={{ color: colors.accent, fontSize: 14, fontWeight: "500" }}>View</Text>}
+      </View>
+    </Pressable>
+  );
+}
+
 function SaidRow({ message, afterAgent, context }: { message: Message; afterAgent?: { peerName: string }; context: RowContext }) {
   const colors = useColors();
   switch (message.kind) {
     case "options":
-      return message.card ? <CardRow card={message.card} onAnswer={(card, answer) => context.onAnswer(message, card, answer)} /> : null;
+      return message.card ? (
+        <View>
+          <CardRow card={message.card} onAnswer={(card, answer) => context.onAnswer(message, card, answer)} />
+          <Said at={message.at} />
+        </View>
+      ) : null;
     case "screen":
       return message.png ? <Image source={{ uri: `data:${message.mime ?? "image/png"};base64,${message.png}` }} resizeMode="contain" style={styles.screen} accessibilityLabel="The agent's screen" /> : null;
     case "notice":
       return <NoticeRow message={message} />;
     case "changes":
-      return <ChangesRow message={message} />;
+      return (
+        <View>
+          <ChangesRow message={message} />
+          <Said at={message.at} />
+        </View>
+      );
     case "artifact":
       return (
         <Wide>
-          <View style={[styles.artifact, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text numberOfLines={1} style={{ color: colors.text, fontSize: 14, fontWeight: "500", flex: 1 }}>{message.artifact?.name}</Text>
-            {!!message.artifact?.size && <Text style={{ color: colors.muted, fontSize: 13 }}>{Math.max(1, Math.round(message.artifact.size / 1024))} KB</Text>}
-          </View>
+          <ArtifactRow message={message} context={context} />
+          {!!stamp(message.at) && <Text style={[styles.small, { color: colors.muted, paddingTop: 4 }]}>{stamp(message.at)}</Text>}
         </Wide>
       );
     case "connector":
@@ -262,14 +308,26 @@ function SaidRow({ message, afterAgent, context }: { message: Message; afterAgen
     return (
       <View>
         {!!from && <Text style={[styles.small, styles.mineName, { color: colors.muted }]}>{from}</Text>}
-        <MineRow message={message} client={context.client} />
+        <MineRow message={message} client={context.client} onOpenFile={context.onOpenFile} />
+        <View style={styles.mineMeta}>
+          <Reactions reactions={message.reactions} onToggle={(emoji) => context.onReact(message, emoji)} />
+          {!!message.deliveredAt && message.via !== "goal" && message.via !== "incident" && (
+            <Text style={[styles.small, { color: colors.muted, fontSize: 12 }]}>Queued {stamp(message.queuedAt ?? message.at)}, sent {stamp(message.deliveredAt)}</Text>
+          )}
+          <MessageMeta message={message} room={context.room} align="end" onOpen={() => context.onActions(message)} />
+        </View>
         <Recalled message={message} />
       </View>
     );
   }
   const speaker = context.room && message.from ? context.nameOf(message.from) : undefined;
   if (!message.text) return null;
-  const words = <Markdown text={message.text} ui={message.ui} streaming={false} host={context.host} />;
+  const words = (
+    <>
+      {!!message.replyTo && <ReplyContext replyTo={message.replyTo} />}
+      <Markdown text={message.text} ui={message.ui} streaming={false} host={context.host} />
+    </>
+  );
   return (
     <View style={styles.theirs}>
       {!!afterAgent && <Text style={[styles.small, { color: colors.muted }]}>↳ After a message from {afterAgent.peerName}</Text>}
@@ -282,6 +340,8 @@ function SaidRow({ message, afterAgent, context }: { message: Message; afterAgen
           </View>
         </View>
       ) : words}
+      <Reactions reactions={message.reactions} onToggle={(emoji) => context.onReact(message, emoji)} />
+      <MessageMeta message={message} room={context.room} align="start" onOpen={() => context.onActions(message)} />
     </View>
   );
 }
@@ -306,6 +366,8 @@ export const RowView = memo(function RowView({ row, context }: { row: Row; conte
 
 const styles = StyleSheet.create({
   small: { fontSize: 13, lineHeight: 18 },
+  said: { fontSize: 12, paddingHorizontal: 16, paddingBottom: 4 },
+  mineMeta: { alignItems: "flex-end", paddingHorizontal: 16, gap: 2 },
   pad: { paddingHorizontal: 16, paddingVertical: 4, alignItems: "flex-start" },
   chip: { paddingHorizontal: 6, paddingVertical: 5, minHeight: 30, justifyContent: "center" },
   recalled: { alignItems: "flex-end", paddingHorizontal: 16, gap: 2 },
@@ -318,7 +380,9 @@ const styles = StyleSheet.create({
   changes: { width: "100%", maxWidth: 520, borderWidth: StyleSheet.hairlineWidth, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 4 },
   changesHead: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 40 },
   changesFile: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 3 },
-  artifact: { flexDirection: "row", alignItems: "center", gap: 10, maxWidth: 420, width: "100%", borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+  artifactCard: { maxWidth: 420, width: "100%", borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: "hidden" },
+  artifactPicture: { width: "100%", height: 200 },
+  artifact: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
   mineWrap: { alignItems: "flex-end", paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4, gap: 6 },
   mineName: { textAlign: "right", paddingHorizontal: 16 },
   mine: { maxWidth: "85%", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18 },

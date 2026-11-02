@@ -210,7 +210,7 @@ export function plainRows(messages: Message[], named: ReadonlySet<string> = new 
 
 /** The transcript as drawn. What waits to be sent sits above the composer. */
 export function rowsOf(messages: Message[], o: { running: boolean; room: boolean }): Row[] {
-  const all = messages.filter((m) => !m.queued);
+  const all = messages.filter((m) => !m.queued && !m.unsent);
   const { folds, named } = o.room ? foldsOfRoom(all) : foldsOfChat(all, o.running);
   const under = new Set<number>();
   const at = new Map<number, TurnFold[]>();

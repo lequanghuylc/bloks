@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Pressable, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 
 import { previewOf, type Bot, type Message, type Room } from "../lib/messages.ts";
 import { useColors } from "../lib/theme";
@@ -46,7 +46,9 @@ export function ConversationList({ workspace, selected, onOpen }: { workspace: R
         const entry = item.kind === "bot" ? item.bot : item.room;
         const bot = item.kind === "bot" ? item.bot : null;
         const needsYou = bot?.tasks?.some((task) => task.state === "needs-you");
-        const working = bot?.busy || bot?.tasks?.some((task) => task.state === "working");
+        const working = bot
+          ? bot.busy || bot.tasks?.some((task) => task.state === "working")
+          : workspace.bots.some((member) => member.tasks?.some((task) => task.room === entry.id));
         const name = entry.name || "Untitled";
         const on = selected?.kind === item.kind && selected.id === entry.id;
         return (
@@ -67,7 +69,12 @@ export function ConversationList({ workspace, selected, onOpen }: { workspace: R
                 {needsYou
                   ? <Text style={{ color: colors.warning, fontSize: 12, fontWeight: "600" }}>Needs you</Text>
                   : working
-                    ? <Text style={{ color: colors.muted, fontSize: 12 }}>Working</Text>
+                    ? (
+                      <View style={styles.working} accessibilityLabel="Working">
+                        <ActivityIndicator size="small" color={colors.accent} style={styles.spinner} />
+                        <Text style={{ color: colors.ink, fontSize: 12, fontWeight: "500" }}>Working</Text>
+                      </View>
+                    )
                     : bot?.unread
                       ? <View style={[styles.unread, { backgroundColor: colors.accent }]} accessibilityLabel="Unread" />
                       : null}
@@ -88,5 +95,7 @@ const styles = StyleSheet.create({
   rowBody: { flex: 1, gap: 2 },
   rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
   name: { fontSize: 16, flex: 1 },
+  working: { flexDirection: "row", alignItems: "center", gap: 4 },
+  spinner: { transform: [{ scale: 0.7 }], width: 16, height: 16 },
   unread: { width: 10, height: 10, borderRadius: 5 },
 });

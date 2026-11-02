@@ -135,6 +135,14 @@ iOS asks once for Local Network access for Expo Go. Allow it, or LAN addresses
 will not answer. If it was declined, turn it on in the iOS Settings app under
 Expo Go.
 
+## What this device keeps
+
+Each conversation's newest 200 messages, what you typed and have not sent, and
+the list of agents and rooms. A chat opens from these at once, with the server's
+answer merged in when it comes, and they can still be read with the computer
+off. They sit unencrypted in the app's private storage, unlike tokens, which stay
+in the keychain, and go when the instance is removed.
+
 ## What is native
 
 Instances and their status, agents and rooms, conversations and lanes, live
@@ -149,10 +157,16 @@ engines, agent settings, new agents, behaviour, devices and about.
 Replies are drawn as the web draws them: markdown with tables, generated
 answers from `message.ui` (every shape in `docs/GENERATIVE_UI.md`, including
 charts and forms), finished turns folded to "Worked 42 sec · 3 commands", and
-messages between agents as compact rows. Not here yet: the turn Timeline,
-message actions such as copy and react, Undo on changed files, the older
-` ```bloks ` gallery cards, agent mascots (an initial stands in), and opening a
-saved file.
+messages between agents as compact rows. Each message shows when it was said,
+and its ⋯ opens copy, reply, react, forward and delete, with edit, redo and
+rewind on your own. What waits to be sent sits above the message box, and a
+spinner marks an agent at work in the list, its conversation tab and the chat.
+Not here yet: the turn Timeline, Undo on changed files, the older ` ```bloks `
+gallery cards, and agent mascots (an initial stands in). A saved file opens in
+the app, and a picture shows in its card; downloading one is not here yet.
+
+Copy uses React Native's core `Clipboard`, deprecated but built into every
+existing install. Moving to `expo-clipboard` will need a new build.
 
 Approval modes can be read but not changed here: the web asks for Touch ID
 before giving an agent more freedom, and that belongs at the computer.

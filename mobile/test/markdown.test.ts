@@ -27,13 +27,20 @@ test("openui fences are counted as the server counts them", () => {
   assert.deepEqual(blocks.filter((block) => block.kind === "ui").map((block) => block.kind === "ui" && block.fence), [0, 1]);
 });
 
-test("a fence glued to a sentence is no fence to the server, and no source shows", () => {
+test("a fence glued to a sentence counts as the server counts it, and no source shows", () => {
   const blocks = parseBlocks('Let me look.```openui\nroot = Card([h])\nh = CardHeader("Hanoi weather")\n```');
   assert.equal(blocks[0].kind, "paragraph");
   assert.equal(blocks[0].kind === "paragraph" && blocks[0].text, "Let me look.");
   assert.ok(blocks[1].kind === "ui");
-  assert.equal(blocks[1].fence, null);
+  assert.equal(blocks[1].fence, 0);
   assert.equal(readableWords(blocks[1].source), "Hanoi weather");
+});
+
+test("a tool call written as words becomes a note, and one in a fence stays", () => {
+  const blocks = parseBlocks("Deploying:\n\n<tool_call>\n<function=bash><parameter>\n\n</function>\n</tool_call>");
+  assert.deepEqual(blocks.map((b) => b.kind), ["paragraph", "lostCall"]);
+  assert.deepEqual(parseBlocks("```xml\n<tool_call>\n<function=bash>\n</function>\n</tool_call>\n```").map((b) => b.kind), ["code"]);
+  assert.deepEqual(parseBlocks("The <tool_call> tag, in a sentence.").map((b) => b.kind), ["paragraph"]);
 });
 
 test("an unclosed fence runs to the end", () => {

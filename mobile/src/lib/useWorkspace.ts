@@ -5,13 +5,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 
 import { Unpaired, type Client } from "./client.ts";
+import { peek, put, read, workspaceKey } from "./localStore";
 import { upsert, type Bot, type Room } from "./messages.ts";
 
 export type FrameListener = (frame: any) => void;
 
-export function useWorkspace(client: Client | null) {
-  const [bots, setBots] = useState<Bot[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
+type Saved = { bots: Bot[]; rooms: Room[] };
+// a list row reads only its last few; the chat keeps its own
+const LIST_MESSAGES = 3;
+const slim = <T extends { messages?: unknown[] }>(item: T): T => (item.messages ? { ...item, messages: item.messages.slice(-LIST_MESSAGES) } : item);
+
+export function useWorkspace(client: Client | null, instanceId: string) {
+  const key = workspaceKey(instanceId);
+  const [bots, setBots] = useState<Bot[]>(() => peek<Saved>(key)?.bots ?? []);
+  const [rooms, setRooms] = useState<Room[]>(() => peek<Saved>(key)?.rooms ?? []);
+  // Whether the server has answered: until it has there is nothing new to keep,
+  // and what was kept must not land on top of what it said.
+  const fresh = useRef(false);
   // True until a connection really fails: iOS can hold a small first event back
   // until more arrive, so a quiet instance must not read as a lost one.
   const [connected, setConnected] = useState(true);
@@ -31,6 +41,7 @@ export function useWorkspace(client: Client | null) {
       const [botBody, roomBody] = await Promise.all([api.request("/api/bots?messages=20"), api.request("/api/bloks?messages=20")]);
       setBots(botBody.bots ?? []);
       setRooms(roomBody.bloks ?? []);
+      fresh.current = true;
       setError("");
       setUnpaired(false);
     } catch (err) {
@@ -108,6 +119,18 @@ export function useWorkspace(client: Client | null) {
       control?.abort();
     };
   }, [origin, applyFrame, reload]);
+
+  useEffect(() => {
+    void read<Saved>(key).then((saved) => {
+      if (!saved || fresh.current) return;
+      setBots(saved.bots);
+      setRooms(saved.rooms);
+    });
+  }, [key]);
+
+  useEffect(() => {
+    if (fresh.current) put(key, { bots: bots.map(slim), rooms: rooms.map(slim) });
+  }, [key, bots, rooms]);
 
   const subscribe = useCallback((listener: FrameListener) => {
     listeners.current.add(listener);

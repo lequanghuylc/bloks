@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
+import { forgetInstance } from "./localStore";
 
 import { Client } from "./client.ts";
 import { fetcher } from "./net";
@@ -84,6 +85,7 @@ export function InstancesProvider({ children }: { children: ReactNode }) {
     remove: async (id) => {
       await putToken(id, null);
       await save(instances.filter((item) => item.id !== id));
+      await forgetInstance(id).catch(() => {});
     },
     clientFor: (id) => {
       const item = instances.find((entry) => entry.id === id);
