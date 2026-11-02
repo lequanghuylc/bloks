@@ -646,6 +646,15 @@ export function isOpenUiLang(lang: string): boolean {
 const FENCE_OPEN = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/;
 
 /**
+ * Put an OpenUI fence glued onto the end of a sentence on its own line, where
+ * a fence has to start. Replies saved before the ACP driver kept what was said
+ * either side of a tool call apart still have it glued.
+ */
+export function unglueOpenUi(text: string): string {
+  return text.replace(/([^\s`~][ \t]*)(```|~~~)([ \t]*openui(?:-lang)?[ \t]*(?:\r?\n|$))/gi, "$1\n$2$3");
+}
+
+/**
  * The OpenUI fences in a message, in order.
  *
  * Read exactly the way the chat reads code fences (splitBlocks in
@@ -655,7 +664,7 @@ const FENCE_OPEN = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/;
  * stored tree to the place in the text the desktop draws it.
  */
 export function openUiFences(text: string): Array<{ code: string; closed: boolean }> {
-  const lines = text.split("\n");
+  const lines = unglueOpenUi(text).split("\n");
   const found: Array<{ code: string; closed: boolean }> = [];
   for (let i = 0; i < lines.length; i++) {
     const open = lines[i].match(FENCE_OPEN);

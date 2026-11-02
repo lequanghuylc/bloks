@@ -32,6 +32,14 @@ export interface LinesBlock {
   offset: number;
 }
 
+import { unglueOpenUi } from "../../server/genui-library.ts";
+import { leakedCallEnd } from "../../server/leaked-tool-call.ts";
+
+/** A tool call the model wrote as words, so nothing ran (server/leaked-tool-call.ts). */
+export interface LostCallBlock {
+  kind: "lostCall";
+}
+
 export interface CodeBlock {
   kind: "code";
   /** Whatever followed the opening fence, if anything ("ts", "sh"). */
@@ -39,7 +47,7 @@ export interface CodeBlock {
   code: string;
 }
 
-export type Block = TableBlock | LinesBlock | CodeBlock;
+export type Block = TableBlock | LinesBlock | CodeBlock | LostCallBlock;
 
 const FENCE_OPEN = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/;
 
@@ -93,7 +101,7 @@ const looksLikeRow = (line: string) => /(^|[^\\])\|/.test(line);
  * should still get a table.
  */
 export function splitBlocks(text: string): Block[] {
-  const lines = text.split("\n");
+  const lines = unglueOpenUi(text).split("\n");
   const blocks: Block[] = [];
   let pending: string[] = [];
   let pendingAt = 0;
@@ -115,6 +123,14 @@ export function splitBlocks(text: string): Block[] {
       blocks.push({ kind: "code", lang: fence[2], code: body.join("\n") });
       i = j;
       pendingAt = j + 1;
+      continue;
+    }
+    const lost = leakedCallEnd(lines, i);
+    if (lost >= 0) {
+      flush();
+      blocks.push({ kind: "lostCall" });
+      i = lost;
+      pendingAt = lost + 1;
       continue;
     }
     const aligns = i + 1 < lines.length ? alignmentsOf(lines[i + 1]) : null;

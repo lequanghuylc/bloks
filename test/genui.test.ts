@@ -13,6 +13,7 @@ import {
   genuiShapes,
   openUiFences,
   openUiSource,
+  unglueOpenUi,
 } from "../server/genui-library.ts";
 import {
   extractUi,
@@ -196,6 +197,23 @@ describe("openUiSource", () => {
 });
 
 describe("finding fences", () => {
+  test("a fence glued to the sentence before it is still a fence, everywhere a reply is read", () => {
+    const text = 'Let me look up the weather.```openui\nroot = Card([TextContent("Hot")])\n```';
+    assert.equal(openUiFences(text).length, 1);
+    assert.equal(openUiFences(text)[0].closed, true);
+    assert.equal(extractUi(text)?.length, 1);
+    const blocks = splitBlocks(text);
+    assert.equal(blocks.length, 2);
+    assert.equal(blocks[1].kind === "code" && blocks[1].lang, "openui");
+    assert.equal(withoutInterface(text).trim(), "Let me look up the weather.");
+    assert.equal(withoutUi(text), "Let me look up the weather.");
+  });
+
+  test("a fence that is not interface stays where it was written", () => {
+    assert.equal(unglueOpenUi("see ```ts\nx\n```"), "see ```ts\nx\n```");
+    assert.equal(unglueOpenUi("the ```openui fence, in a sentence"), "the ```openui fence, in a sentence");
+  });
+
   test("agrees with how the chat splits a reply, so a fence's index means the same on both", () => {
     const text = [
       "Words.",

@@ -601,6 +601,7 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
           live: false,
           banner: null as string | null,
           tools: 0,
+          afterTool: false,
           commands: null as Set<string> | null,
           commandsHeard: null as (() => void) | null,
           compacting: false,
@@ -795,8 +796,12 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
               const text = update.content?.type === "text" ? String(update.content.text ?? "") : "";
               if (!text) break;
               if (spec.statusText?.test(text.trim())) break;
-              state.text += text;
-              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: text });
+              // What it says after a tool call is a new thought, and may open
+              // with a fence, which only counts at the start of a line.
+              const delta = state.afterTool && state.text.trim() && !/\n\s*$/.test(state.text) && !text.startsWith("\n") ? `\n\n${text}` : text;
+              state.afterTool = false;
+              state.text += delta;
+              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta });
               break;
             }
             case "agent_thought_chunk":
@@ -804,6 +809,7 @@ export function acpDriver(spec: AcpSpec): ProviderDriver<AcpConfig> {
               break;
             case "tool_call": {
               state.tools++;
+              state.afterTool = true;
               const paths = writesOf(update);
               const signature = acpSignature(update);
               emit({

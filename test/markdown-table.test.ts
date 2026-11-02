@@ -2,7 +2,29 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
+import { withoutLeakedCalls } from "../server/leaked-tool-call.ts";
 import { splitBlocks, splitRow, hasTable, type TableBlock } from "../src/lib/markdownTable.ts";
+
+describe("a tool call written as words", () => {
+  const call = '<tool_call>\n<function=write>\n<parameter=path>\na.ts\n</parameter>\n</function>\n</tool_call>';
+
+  test("becomes one block, closed or still being written", () => {
+    assert.deepEqual(splitBlocks(`Writing it:\n\n${call}\n\nDone.`).map((b) => b.kind), ["lines", "lostCall", "lines"]);
+    assert.deepEqual(splitBlocks("Writing it:\n<tool_call>\n<function=wri").map((b) => b.kind), ["lines", "lostCall"]);
+    assert.deepEqual(splitBlocks("<function=bash>\nls\n</function>\n</tool_call>").map((b) => b.kind), ["lostCall"]);
+  });
+
+  test("stays when it is shown on purpose", () => {
+    assert.deepEqual(splitBlocks("```xml\n" + call + "\n```").map((b) => b.kind), ["code"]);
+    assert.deepEqual(splitBlocks("The <tool_call> tag\n<tool_call>\nis this one").map((b) => b.kind), ["lines"]);
+    assert.equal(withoutLeakedCalls("```xml\n" + call + "\n```"), "```xml\n" + call + "\n```");
+  });
+
+  test("leaves only the words for a preview", () => {
+    assert.equal(withoutLeakedCalls(`Deploying:\n\n${call}`), "Deploying:");
+    assert.equal(withoutLeakedCalls("Nothing here."), "Nothing here.");
+  });
+});
 
 const tableIn = (text: string) => splitBlocks(text).find((b) => b.kind === "table") as TableBlock;
 

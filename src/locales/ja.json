@@ -1258,6 +1258,7 @@
   "charts.other": "その他",
   "charts.partNumbered": "パート {number}",
   "charts.seriesNumbered": "シリーズ {number}",
+  "chat.lostToolCall": "コマンドを実行しようとしましたが、テキストとして書いたため実行されませんでした。",
   "chatSection.aLongStringFromThe": "Bot のページにある長い文字列です。",
   "chatSection.aPermanentTokenFromA": "システムユーザーの永続トークンです。",
   "chatSection.accessToken": "アクセストークン",

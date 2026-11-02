@@ -533,6 +533,9 @@ function MarkdownishBlocks({ text, highlight = "", mentions, streaming }: Markdo
       {splitBlocks(text).flatMap((block, b) =>
         block.kind === "table" ? (
           [<MarkdownTable key={`t${b}`} block={block} highlight={highlight} />]
+        ) : block.kind === "lostCall" ? (
+          // still being written, it may yet be anything
+          streaming ? [] : [<p key={`l${b}`} className="text-sm text-muted-foreground">{t("chat.lostToolCall")}</p>]
         ) : block.kind === "code" && isOpenUiLang(block.lang) && !nested ? (
           // An answer drawn as interface (src/components/genui). The
           // gap above it is the one every block keeps.

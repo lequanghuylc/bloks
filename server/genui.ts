@@ -33,8 +33,10 @@ import {
   genuiShapes,
   openUiFences,
   openUiSource,
+  unglueOpenUi,
   type GenUiShapeName,
 } from "./genui-library.ts";
+import { withoutLeakedCalls } from "./leaked-tool-call.ts";
 
 // lang-core can report usage to its makers, opt in, when a variable
 // says so. Bloks never asks it to, and a variable left in someone's
@@ -389,7 +391,8 @@ export function extractUi(text: string): UiEntry[] | undefined {
  * Says so when the interface was the whole of it.
  */
 export function withoutUi(text: string): string {
-  const lines = text.split("\n");
+  text = withoutLeakedCalls(text);
+  const lines = unglueOpenUi(text).split("\n");
   const out: string[] = [];
   let had = false;
   for (let i = 0; i < lines.length; i++) {

@@ -1314,6 +1314,7 @@
   "charts.other": "Outros",
   "charts.partNumbered": "Parte {number}",
   "charts.seriesNumbered": "Série {number}",
+  "chat.lostToolCall": "Tentou executar um comando, mas o escreveu como texto, então ele não foi executado.",
   "chatSection.aLongStringFromThe": "Uma string longa da página do Bot.",
   "chatSection.aPermanentTokenFromA": "Um token permanente de um usuário do sistema.",
   "chatSection.accessToken": "Token de acesso",

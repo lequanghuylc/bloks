@@ -1258,6 +1258,7 @@
   "charts.other": "其他",
   "charts.partNumbered": "第 {number} 部分",
   "charts.seriesNumbered": "系列 {number}",
+  "chat.lostToolCall": "尝试运行命令，但将其写成了文本，因此没有运行。",
   "chatSection.aLongStringFromThe": "来自 Bot 页面的一长串字符。",
   "chatSection.aPermanentTokenFromA": "来自系统用户的永久令牌。",
   "chatSection.accessToken": "访问令牌",

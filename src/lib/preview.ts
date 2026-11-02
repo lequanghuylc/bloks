@@ -12,6 +12,8 @@
 import type { Message } from "@/state/reducer";
 import { toolLabel } from "./tool-summary.ts";
 import { t } from "./i18n.ts";
+import { unglueOpenUi } from "../../server/genui-library.ts";
+import { withoutLeakedCalls } from "../../server/leaked-tool-call.ts";
 
 /** The newest message that is in the conversation, for the row's line
  * and time. One still waiting to reach the agent, or one that never
@@ -104,7 +106,7 @@ export function previewLine(last: Message | undefined): string {
 /** A reply's words without the interface drawn in it, which as text is
  * code (src/components/genui). A fence still open runs to the end. */
 export function withoutInterface(text: string): string {
-  return text.replace(/^[ \t]*```[ \t]*openui(?:-lang)?[ \t]*$[\s\S]*?(?:^[ \t]*```[ \t]*$|(?![\s\S]))/gim, "");
+  return withoutLeakedCalls(unglueOpenUi(text)).replace(/^[ \t]*```[ \t]*openui(?:-lang)?[ \t]*$[\s\S]*?(?:^[ \t]*```[ \t]*$|(?![\s\S]))/gim, "");
 }
 
 /** "Changed 3 files", for a list row. A turn that ran beside other
